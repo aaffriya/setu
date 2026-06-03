@@ -1,0 +1,31 @@
+# Setu configuration.
+#
+# Behaviour lives in code; this file supplies only instance data. See the README
+# ("Config reference") for full details.
+
+# Listener address:
+#   ":8080"                  TCP on all interfaces (bind to a trusted network!)
+#   "127.0.0.1:8080"         TCP on loopback only (use with an SSH tunnel)
+#   "unix:/run/setu.sock"    Unix socket, zero open ports (tunnel-only)
+listen: ":8080"
+
+auth:
+  # Bearer token required on /api and /ws. CHANGE THIS before any real use.
+  token: "CHANGE_ME"
+
+# How often to re-read device state (Go duration string, e.g. 5s, 500ms, 1m).
+poll_interval: 5s
+
+# Configured devices. Empty for now — real devices are added later, by brand and
+# model. MAC is the PRIMARY, stable identity; IP is an optional hint/fallback
+# that Setu resolves from the MAC at runtime.
+devices: []
+  # Example of a future entry (the device package must be registered in
+  # cmd/setu/main.go and the matching brand/model implemented):
+  #
+  # - id: living_light
+  #   brand: example
+  #   model: bulb
+  #   name: "Living Room"
+  #   mac: "a8:bb:50:11:22:33"   # primary identity (stable across DHCP leases)
+  #   ip: 192.168.1.50           # optional hint/fallback only

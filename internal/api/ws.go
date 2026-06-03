@@ -1,0 +1,67 @@
+package api
+
+import (
+	"net/http"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+
+	"setu/internal/device"
+)
+
+// wsMessage is what the server pushes to WebSocket clients. "snapshot" is sent
+// once on connect for each device; "state_changed" is sent on every change.
+type wsMessage struct {
+	Type     string       `json:"type"`
+	DeviceID string       `json:"device_id"`
+	State    device.State `json:"state"`
+}
+
+// handleWS upgrades to a WebSocket and streams state events to the client. Each
+// connection gets its own subscription to the event bus (the bus is the fan-out
+// mechanism, so no central client registry is needed). The connection is
+// read-only from the server's side: commands go over the JSON API; events come
+// back here.
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		// The app is same-origin and token-protected; accept any Origin so
+		// access via LAN IP, hostname, or tunnel all work.
+		OriginPatterns: []string{"*"},
+	})
+	if err != nil {
+		s.log.Debug("ws accept failed", "err", err)
+		return
+	}
+	defer c.CloseNow()
+
+	// CloseRead discards any client→server frames and returns a context that is
+	// cancelled when the client disconnects.
+	ctx := c.CloseRead(r.Context())
+
+	sub, unsubscribe := s.bus.Subscribe()
+	defer unsubscribe()
+
+	// Send an initial snapshot so a freshly-connected client is immediately
+	// consistent without waiting for the next change.
+	for _, view := range s.mgr.Snapshot() {
+		msg := wsMessage{Type: "snapshot", DeviceID: view.ID, State: view.State}
+		if err := wsjson.Write(ctx, c, msg); err != nil {
+			return
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-sub:
+			if !ok {
+				return
+			}
+			msg := wsMessage{Type: string(ev.Type), DeviceID: ev.DeviceID, State: ev.State}
+			if err := wsjson.Write(ctx, c, msg); err != nil {
+				return
+			}
+		}
+	}
+}

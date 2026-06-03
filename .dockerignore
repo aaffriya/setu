@@ -1,0 +1,10 @@
+.git
+.gitignore
+bin/
+web/node_modules/
+web/dist/
+*.sock
+run/
+.claude/
+README.md
+*.md
