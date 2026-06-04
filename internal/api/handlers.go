@@ -107,6 +107,75 @@ func (s *Server) dispatch(dev device.Device, req commandRequest) error {
 		}
 		return d.SetColor(c)
 
+	case "set_color_temp":
+		d, ok := dev.(device.ColorTempControl)
+		if !ok {
+			return badRequest("device does not support color temperature")
+		}
+		var kelvin int
+		if err := json.Unmarshal(req.Value, &kelvin); err != nil {
+			return badRequest("set_color_temp requires a Kelvin integer (e.g. 2700)")
+		}
+		return d.SetColorTemp(kelvin)
+
+	case "set_scene":
+		d, ok := dev.(device.SceneControl)
+		if !ok {
+			return badRequest("device does not support scenes")
+		}
+		var id int
+		if err := json.Unmarshal(req.Value, &id); err != nil {
+			return badRequest("set_scene requires a scene id integer")
+		}
+		return d.SetScene(id)
+
+	case "set_scene_speed":
+		d, ok := dev.(device.SceneControl)
+		if !ok {
+			return badRequest("device does not support scenes")
+		}
+		var speed int
+		if err := json.Unmarshal(req.Value, &speed); err != nil {
+			return badRequest("set_scene_speed requires an integer (10–200)")
+		}
+		return d.SetSceneSpeed(speed)
+
+	case "volume_up", "volume_down", "mute":
+		v, ok := dev.(device.Volume)
+		if !ok {
+			return badRequest("device does not support volume")
+		}
+		switch req.Action {
+		case "volume_up":
+			return v.VolumeUp()
+		case "volume_down":
+			return v.VolumeDown()
+		default:
+			return v.ToggleMute()
+		}
+
+	case "key":
+		kc, ok := dev.(device.KeyControl)
+		if !ok {
+			return badRequest("device does not support remote keys")
+		}
+		var key string
+		if err := json.Unmarshal(req.Value, &key); err != nil {
+			return badRequest(`key requires a string value like "KEY_HOME"`)
+		}
+		return kc.SendKey(key)
+
+	case "launch_app":
+		ac, ok := dev.(device.AppControl)
+		if !ok {
+			return badRequest("device does not support apps")
+		}
+		var id string
+		if err := json.Unmarshal(req.Value, &id); err != nil {
+			return badRequest(`launch_app requires an app id string`)
+		}
+		return ac.LaunchApp(id)
+
 	default:
 		return badRequest("unknown action: " + req.Action)
 	}

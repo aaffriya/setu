@@ -79,12 +79,12 @@
       </div>
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">Setu</h1>
-        <p class="text-xs text-white/45">सेतु · your device bridge</p>
+        <p class="text-xs text-ink/45">सेतु · your device bridge</p>
       </div>
     </div>
 
     <div class="flex items-center gap-2">
-      <div class="flex items-center gap-2 rounded-full bg-white/5 px-3 py-1.5 text-xs text-white/70">
+      <div class="flex items-center gap-2 rounded-full bg-ink/5 px-3 py-1.5 text-xs text-ink/70">
         <span class="relative flex h-2 w-2">
           {#if $connection === 'connecting' || $connection === 'online'}
             <span class="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 {statusDot[$connection]}"></span>
@@ -98,7 +98,7 @@
           tokenDraft = token
           showSettings = true
         }}
-        class="grid h-9 w-9 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
+        class="grid h-9 w-9 place-items-center rounded-full bg-ink/5 text-ink/70 transition hover:bg-ink/10 hover:text-ink"
         aria-label="Settings"
       >
         <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
@@ -110,17 +110,17 @@
   </header>
 
   {#if needsToken}
-    <div in:fade={{ duration: 200 }} class="mx-auto mt-12 w-full max-w-sm rounded-3xl border border-white/10 bg-white/[0.06] p-6 text-center backdrop-blur-xl">
-      <div class="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-white/10">
-        <svg class="h-6 w-6 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+    <div in:fade={{ duration: 200 }} class="mx-auto mt-12 w-full max-w-sm rounded-3xl border border-ink/10 bg-ink/[0.06] p-6 text-center backdrop-blur-xl">
+      <div class="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-ink/10">
+        <svg class="h-6 w-6 text-ink/80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
           <rect x="4" y="11" width="16" height="9" rx="2" />
           <path d="M8 11V7a4 4 0 118 0v4" />
         </svg>
       </div>
       <h2 class="text-lg font-semibold">Connect to Setu</h2>
-      <p class="mt-1 text-sm text-white/50">Enter the access token from your <code class="rounded bg-black/30 px-1">config.yaml</code>.</p>
+      <p class="mt-1 text-sm text-ink/50">Enter the access token from your <code class="rounded bg-ink/10 px-1">config.yaml</code>.</p>
       <input
-        class="mt-4 w-full rounded-xl border border-white/10 bg-black/20 px-4 py-2.5 text-center outline-none ring-indigo-400/50 focus:ring-2"
+        class="mt-4 w-full rounded-xl border border-ink/10 bg-ink/5 px-4 py-2.5 text-center outline-none ring-indigo-400/50 focus:ring-2"
         type="password"
         placeholder="access token"
         bind:value={tokenDraft}
@@ -128,23 +128,23 @@
       />
       <button
         onclick={saveToken}
-        class="mt-3 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2.5 font-medium shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
+        class="mt-3 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2.5 font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
       >
         Connect
       </button>
     </div>
   {:else if $devices.length === 0}
     <div in:fade={{ duration: 200 }} class="flex flex-1 flex-col items-center justify-center py-20 text-center">
-      <div class="grid h-20 w-20 place-items-center rounded-3xl bg-white/5 ring-1 ring-white/10">
-        <svg class="h-10 w-10 text-white/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+      <div class="grid h-20 w-20 place-items-center rounded-3xl bg-ink/5 ring-1 ring-ink/10">
+        <svg class="h-10 w-10 text-ink/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
           <path d="M3 16h18" />
           <path d="M5 16a7 7 0 0114 0" />
           <path d="M12 9v7M8 12.5V16M16 12.5V16" />
         </svg>
       </div>
       <h2 class="mt-5 text-xl font-semibold">No devices yet</h2>
-      <p class="mt-2 max-w-xs text-sm leading-relaxed text-white/50">
-        Add one in <code class="rounded bg-black/30 px-1">config.yaml</code> by its brand, model and MAC — then restart Setu.
+      <p class="mt-2 max-w-xs text-sm leading-relaxed text-ink/50">
+        Add one in <code class="rounded bg-ink/10 px-1">config.yaml</code> by its brand, model and MAC — then restart Setu.
       </p>
     </div>
   {:else}
@@ -162,7 +162,7 @@
   <div
     in:fly={{ y: 20, duration: 200 }}
     out:fade
-    class="fixed inset-x-0 bottom-6 z-20 mx-auto w-fit max-w-[90vw] rounded-full border border-rose-400/30 bg-rose-500/20 px-4 py-2 text-sm text-rose-100 backdrop-blur-md"
+    class="fixed inset-x-0 bottom-6 z-20 mx-auto w-fit max-w-[90vw] rounded-full border border-rose-500/30 bg-rose-500/15 px-4 py-2 text-sm text-rose-700 backdrop-blur-md dark:border-rose-400/30 dark:bg-rose-500/20 dark:text-rose-100"
   >
     {$lastError}
   </div>
@@ -177,16 +177,16 @@
     onclick={(e) => e.target === e.currentTarget && (showSettings = false)}
   >
     <div
-      class="w-full max-w-sm rounded-3xl border border-white/10 bg-[#11162a] p-6 shadow-2xl"
+      class="w-full max-w-sm rounded-3xl border border-ink/10 bg-panel p-6 shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
     >
       <h2 class="text-lg font-semibold">Settings</h2>
-      <label class="mt-4 block text-sm text-white/60" for="token-input">Access token</label>
+      <label class="mt-4 block text-sm text-ink/60" for="token-input">Access token</label>
       <input
         id="token-input"
-        class="mt-1.5 w-full rounded-xl border border-white/10 bg-black/20 px-4 py-2.5 outline-none ring-indigo-400/50 focus:ring-2"
+        class="mt-1.5 w-full rounded-xl border border-ink/10 bg-ink/5 px-4 py-2.5 outline-none ring-indigo-400/50 focus:ring-2"
         type="password"
         placeholder="access token"
         bind:value={tokenDraft}
@@ -195,13 +195,13 @@
       <div class="mt-5 flex gap-2">
         <button
           onclick={() => (showSettings = false)}
-          class="flex-1 rounded-xl bg-white/5 py-2.5 font-medium text-white/70 transition hover:bg-white/10"
+          class="flex-1 rounded-xl bg-ink/5 py-2.5 font-medium text-ink/70 transition hover:bg-ink/10"
         >
           Cancel
         </button>
         <button
           onclick={saveToken}
-          class="flex-1 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2.5 font-medium shadow-lg shadow-indigo-500/30 transition hover:opacity-95"
+          class="flex-1 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2.5 font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95"
         >
           Save
         </button>

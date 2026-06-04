@@ -3,8 +3,23 @@
 @tailwind utilities;
 
 @layer base {
+  /* Light is the default; the dark block below flips the same tokens. Following
+     the OS is pure CSS (prefers-color-scheme) — no JS, no flash, no toggle. */
   :root {
-    color-scheme: dark;
+    color-scheme: light dark;
+    --ink: 15 23 42; /* slate-900 — text, fills, borders (used with opacity) */
+    --panel: 255 255 255; /* solid surface (modal) */
+    --page: 247 248 252; /* page base behind the gradient */
+    --card-shadow: 0 12px 30px -16px rgba(2, 6, 23, 0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: 255 255 255;
+      --panel: 17 22 42; /* #11162a */
+      --page: 11 16 32; /* #0b1020 */
+      --card-shadow: 0 12px 30px -16px rgba(0, 0, 0, 0.6);
+    }
   }
 
   html {
@@ -12,22 +27,42 @@
   }
 
   body {
-    @apply min-h-[100dvh] text-slate-100 antialiased;
+    @apply min-h-[100dvh] antialiased;
+    color: rgb(var(--ink));
     background:
-      radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, 0.25), transparent 60%),
-      radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.22), transparent 55%),
-      #0b1020;
+      radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, 0.18), transparent 60%),
+      radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.14), transparent 55%),
+      rgb(var(--page));
     background-attachment: fixed;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    body {
+      background:
+        radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, 0.25), transparent 60%),
+        radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.22), transparent 55%),
+        rgb(var(--page));
+    }
   }
 }
 
-/* Range slider — plain CSS (outside @layer) so Tailwind never purges it. */
+@layer components {
+  /* Shared control-button style for the TV remote (volume + D-pad). */
+  .setu-key {
+    @apply grid place-items-center rounded-xl bg-ink/5 text-ink/80 transition;
+    @apply hover:bg-ink/10 active:scale-95;
+    @apply disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink/5;
+  }
+}
+
+/* Range slider — plain CSS (outside @layer) so Tailwind never purges it. The
+   track flips with the theme; the white knob reads on both (iOS-style). */
 .setu-range {
   -webkit-appearance: none;
   appearance: none;
   height: 8px;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgb(var(--ink) / 0.15);
   outline: none;
 }
 .setu-range::-webkit-slider-thumb {
@@ -37,6 +72,7 @@
   width: 20px;
   border-radius: 9999px;
   background: #ffffff;
+  border: 1px solid rgb(var(--ink) / 0.12);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   cursor: pointer;
   transition: transform 0.15s ease;
@@ -47,7 +83,7 @@
 .setu-range::-moz-range-thumb {
   height: 20px;
   width: 20px;
-  border: 0;
+  border: 1px solid rgb(var(--ink) / 0.12);
   border-radius: 9999px;
   background: #ffffff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -55,4 +91,9 @@
 }
 .setu-range:disabled {
   opacity: 0.4;
+}
+
+/* Warm→cool track for the color-temperature slider (overrides the flat track). */
+.setu-temp {
+  background: linear-gradient(to right, #ff9d3c, #ffd9a0, #ffffff, #cfe3ff, #9cc4ff);
 }

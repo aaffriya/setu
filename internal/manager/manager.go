@@ -97,18 +97,20 @@ func (m *Manager) Devices() []device.Device {
 
 // DeviceView is the API/JSON projection of a device: static metadata plus state.
 type DeviceView struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Brand        string       `json:"brand"`
-	Model        string       `json:"model"`
-	MAC          string       `json:"mac"`
-	Capabilities []string     `json:"capabilities"`
-	State        device.State `json:"state"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Brand        string         `json:"brand"`
+	Model        string         `json:"model"`
+	MAC          string         `json:"mac"`
+	Capabilities []string       `json:"capabilities"`
+	Scenes       []device.Scene `json:"scenes,omitempty"` // present only for SceneControl devices
+	Apps         []device.App   `json:"apps,omitempty"`   // present only for AppControl devices
+	State        device.State   `json:"state"`
 }
 
 // metaView projects a device's static metadata (everything but State).
 func metaView(d device.Device) DeviceView {
-	return DeviceView{
+	v := DeviceView{
 		ID:           d.ID(),
 		Name:         d.Name(),
 		Brand:        d.Brand(),
@@ -116,6 +118,13 @@ func metaView(d device.Device) DeviceView {
 		MAC:          d.MAC(),
 		Capabilities: d.Capabilities(),
 	}
+	if sc, ok := d.(device.SceneControl); ok {
+		v.Scenes = sc.Scenes()
+	}
+	if ac, ok := d.(device.AppControl); ok {
+		v.Apps = ac.Apps()
+	}
+	return v
 }
 
 // ViewOf builds a view for a single device using its own live State (used to

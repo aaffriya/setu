@@ -1,0 +1,26 @@
+# samsung — Samsung Tizen TVs
+
+`import "setu/internal/devices/samsung"` · REST + WebSocket/TLS + Wake-on-LAN.
+
+## Protocol
+- Full native reference: **`docs/devices/samsung.md`**.
+
+## Files
+- `samsung.go` — `base` (REST reachability, WS `sendKey` + token persistence, Wake-on-LAN) + `TV` model.
+
+## Capabilities → transport
+- `switch` on → **Wake-on-LAN** (UDP 9); off → WS `KEY_POWER`.
+- `volume` → WS `KEY_VOLUP` / `KEY_VOLDOWN` / `KEY_MUTE`.
+- `key` → WS arbitrary key, validated `^KEY_[A-Z0-9_]+$` (`KEY_FACTORY` refused). Source/input via `KEY_SOURCE` / `KEY_HDMI`.
+- `app` → REST `POST /api/v2/applications/<id>` for a fixed catalog (YouTube / Netflix / Prime Video); `LaunchApp` only accepts a catalog id.
+- `Poll` → REST `/api/v2/` reachability as a **power** proxy: online whenever the address resolves (off ≠ offline, so the power toggle stays usable to wake it); reachability only forces `On` off. Can't read volume.
+
+## Token
+- Captured from the `ms.channel.connect` event after the on-screen **Allow**.
+- Cached at `$SETU_STATE_DIR/setu-samsung-<id>.token` (defaults to OS temp; set `SETU_STATE_DIR` to persist across reboots), mode `0600`.
+
+## Status / caveats
+- **Verified live (2026-06-04, UA50AU7700KLXL):** WoL woke the TV from off; token pairing + volume/mute keys work. First pairing ~8 s (waits for on-screen Allow); cached-token keys ~1 s.
+- WoL sprays the magic packet at each interface's **directed broadcast** (e.g. 192.168.0.255) + the limited broadcast, ports 9 & 7 — needed to wake this unit. WoL over Wi-Fi can still fail on a TV with network-standby disabled.
+- One WS connection per key press (latency for rapid taps) — a known tradeoff, not a bug.
+- The TV's 8002 cert is self-signed → `InsecureSkipVerify` (target is a MAC-resolved LAN device).

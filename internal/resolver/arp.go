@@ -30,7 +30,7 @@ func NewARPResolver() *ARPResolver { return &ARPResolver{} }
 
 // Lookup scans the ARP table for mac and returns the matching IP.
 func (r *ARPResolver) Lookup(mac string) (net.IP, error) {
-	want, err := normalizeMAC(mac)
+	want, err := NormalizeMAC(mac)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func (r *ARPResolver) Lookup(mac string) (net.IP, error) {
 		if len(fields) < 4 {
 			continue
 		}
-		got, err := normalizeMAC(fields[3])
+		got, err := NormalizeMAC(fields[3])
 		if err != nil || got != want {
 			continue
 		}
@@ -68,12 +68,25 @@ func (r *ARPResolver) Lookup(mac string) (net.IP, error) {
 	return nil, fmt.Errorf("resolver: mac %s not found in arp table", want)
 }
 
-// normalizeMAC parses and re-formats a MAC into a canonical lowercase,
-// colon-separated form so addresses from different sources compare equal.
-func normalizeMAC(mac string) (string, error) {
-	hw, err := net.ParseMAC(strings.TrimSpace(mac))
-	if err != nil {
-		return "", fmt.Errorf("resolver: invalid mac %q: %w", mac, err)
+// NormalizeMAC reduces a 48-bit MAC to a canonical lowercase, separator-free
+// hex string so addresses from different sources compare equal. It accepts the
+// usual separated forms ("d8:a0:11:ff:5e:f0", "d8-a0-...", "d8a0.11ff.5ef0")
+// and the bare 12-hex-digit form some devices report (e.g. WiZ: "d8a011ff5ef0").
+func NormalizeMAC(mac string) (string, error) {
+	var sb strings.Builder
+	sb.Grow(12)
+	for _, r := range strings.ToLower(strings.TrimSpace(mac)) {
+		switch {
+		case (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f'):
+			sb.WriteRune(r)
+		case r == ':' || r == '-' || r == '.':
+			// separator — skip
+		default:
+			return "", fmt.Errorf("resolver: invalid mac %q", mac)
+		}
 	}
-	return hw.String(), nil
+	if sb.Len() != 12 {
+		return "", fmt.Errorf("resolver: invalid mac %q (want 48 bits)", mac)
+	}
+	return sb.String(), nil
 }

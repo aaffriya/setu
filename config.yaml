@@ -16,16 +16,21 @@ auth:
 # How often to re-read device state (Go duration string, e.g. 5s, 500ms, 1m).
 poll_interval: 5s
 
-# Configured devices. Empty for now — real devices are added later, by brand and
-# model. MAC is the PRIMARY, stable identity; IP is an optional hint/fallback
-# that Setu resolves from the MAC at runtime.
-devices: []
-  # Example of a future entry (the device package must be registered in
-  # cmd/setu/main.go and the matching brand/model implemented):
-  #
-  # - id: living_light
-  #   brand: example
-  #   model: bulb
-  #   name: "Living Room"
-  #   mac: "a8:bb:50:11:22:33"   # primary identity (stable across DHCP leases)
-  #   ip: 192.168.1.50           # optional hint/fallback only
+# Configured devices. MAC is the PRIMARY, stable identity; IP is an optional
+# hint/fallback that Setu resolves from the MAC at runtime (ARP / brand discovery).
+devices:
+  - id: bedroom_light
+    brand: WiZ
+    model: color_bulb
+    name: "Bedroom Light"
+    mac: "d8:a0:11:ff:5e:f0" # WiZ bulb (from getPilot result.mac)
+    ip: 192.168.0.140         # hint; WiZ broadcast discovery also finds it by MAC
+
+  - id: living_tv
+    brand: Samsung
+    model: tizen
+    name: "Living Room TV"
+    mac: "a0:d7:f3:9e:74:b2" # used for Wake-on-LAN + IP resolution
+    ip: 192.168.0.100         # hint/fallback
+    # First control attempt: the TV shows an "Allow" prompt — accept it once;
+    # the pairing token is then cached (see README → Samsung TV).

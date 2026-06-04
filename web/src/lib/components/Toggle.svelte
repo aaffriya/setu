@@ -22,7 +22,7 @@
   {disabled}
   onclick={() => onToggle?.(!checked)}
   class="relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition-colors duration-300 disabled:cursor-not-allowed disabled:opacity-40
-         {checked ? 'bg-emerald-400/90' : 'bg-white/15'}"
+         {checked ? 'bg-emerald-400/90' : 'bg-ink/15'}"
 >
   <span
     class="inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition-transform duration-300

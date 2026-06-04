@@ -76,7 +76,7 @@ export async function refresh(): Promise<void> {
 export async function command(
   id: string,
   action: CommandAction,
-  value?: number | Color,
+  value?: number | Color | string,
 ): Promise<void> {
   const prev = get(devices)
   devices.update((list) =>
@@ -91,7 +91,11 @@ export async function command(
   }
 }
 
-function applyOptimistic(state: DeviceState, action: CommandAction, value?: number | Color): DeviceState {
+function applyOptimistic(
+  state: DeviceState,
+  action: CommandAction,
+  value?: number | Color | string,
+): DeviceState {
   const next = { ...state }
   switch (action) {
     case 'on':
@@ -106,9 +110,97 @@ function applyOptimistic(state: DeviceState, action: CommandAction, value?: numb
       break
     case 'set_color':
       next.color = value as Color
+      next.color_temp = 0
+      next.scene = 0
       break
+    case 'set_color_temp':
+      next.color_temp = value as number
+      next.scene = 0
+      next.on = true
+      break
+    case 'set_scene':
+      next.scene = value as number
+      next.on = true
+      break
+    case 'set_scene_speed':
+      next.scene_speed = value as number
+      break
+    // volume_up / volume_down / mute / key have no locally-visible state to
+    // predict — they're sent through as-is.
   }
   return next
+}
+
+// --- favourites (client-side presets, saved per device) ----------------------
+// Favourites are a UI convenience, so they live in localStorage — no backend
+// state files, keeping the server lightweight. They're per-browser.
+
+export type Favorite = {
+  id: string
+  kind: 'color' | 'color_temp' | 'scene'
+  value: Color | number
+  label: string
+}
+
+const FAV_KEY = 'setu.favorites'
+
+export const favorites = writable<Record<string, Favorite[]>>(loadFavorites())
+
+favorites.subscribe((all) => {
+  try {
+    localStorage.setItem(FAV_KEY, JSON.stringify(all))
+  } catch {
+    // storage disabled — non-fatal
+  }
+})
+
+function loadFavorites(): Record<string, Favorite[]> {
+  try {
+    return JSON.parse(localStorage.getItem(FAV_KEY) ?? '{}') as Record<string, Favorite[]>
+  } catch {
+    return {}
+  }
+}
+
+function favId(): string {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `f${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+}
+
+export function addFavorite(deviceId: string, fav: Omit<Favorite, 'id'>): void {
+  favorites.update((all) => {
+    const list = all[deviceId] ?? []
+    const dup = list.some(
+      (f) => f.kind === fav.kind && JSON.stringify(f.value) === JSON.stringify(fav.value),
+    )
+    if (dup) return all
+    return { ...all, [deviceId]: [...list, { ...fav, id: favId() }] }
+  })
+}
+
+export function removeFavorite(deviceId: string, id: string): void {
+  favorites.update((all) => ({
+    ...all,
+    [deviceId]: (all[deviceId] ?? []).filter((f) => f.id !== id),
+  }))
+}
+
+// applyFavorite re-sends a saved preset as the appropriate command.
+export function applyFavorite(deviceId: string, fav: Favorite): void {
+  switch (fav.kind) {
+    case 'color':
+      void command(deviceId, 'set_color', fav.value as Color)
+      break
+    case 'color_temp':
+      void command(deviceId, 'set_color_temp', fav.value as number)
+      break
+    case 'scene':
+      void command(deviceId, 'set_scene', fav.value as number)
+      break
+  }
 }
 
 // --- WebSocket: live updates with auto-reconnect -----------------------------

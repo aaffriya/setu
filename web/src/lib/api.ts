@@ -3,11 +3,18 @@
 
 export type Color = { r: number; g: number; b: number }
 
+export type Scene = { id: number; name: string; dynamic: boolean }
+
+export type App = { id: string; name: string }
+
 export type DeviceState = {
   online: boolean
   on: boolean
   brightness: number
   color: Color
+  color_temp: number
+  scene: number
+  scene_speed: number
 }
 
 export type Device = {
@@ -17,10 +24,24 @@ export type Device = {
   model: string
   mac: string
   capabilities: string[]
+  scenes?: Scene[]
+  apps?: App[]
   state: DeviceState
 }
 
-export type CommandAction = 'on' | 'off' | 'set_brightness' | 'set_color'
+export type CommandAction =
+  | 'on'
+  | 'off'
+  | 'set_brightness'
+  | 'set_color'
+  | 'set_color_temp'
+  | 'set_scene'
+  | 'set_scene_speed'
+  | 'volume_up'
+  | 'volume_down'
+  | 'mute'
+  | 'key'
+  | 'launch_app'
 
 const TOKEN_KEY = 'setu.token'
 
@@ -78,7 +99,7 @@ export function listDevices(): Promise<Device[]> {
 export function sendCommand(
   id: string,
   action: CommandAction,
-  value?: number | Color,
+  value?: number | Color | string,
 ): Promise<Device> {
   return request<Device>(`/api/devices/${encodeURIComponent(id)}/command`, {
     method: 'POST',

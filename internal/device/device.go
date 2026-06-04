@@ -18,6 +18,11 @@ const (
 	CapSwitch     = "switch"
 	CapBrightness = "brightness"
 	CapColor      = "color"
+	CapColorTemp  = "color_temp"
+	CapScene      = "scene"
+	CapVolume     = "volume"
+	CapKey        = "key"
+	CapApp        = "app"
 )
 
 // Color is a 24-bit RGB color; each channel is 0–255.
@@ -40,6 +45,15 @@ type State struct {
 	Brightness int `json:"brightness"`
 	// Color is the current RGB color (meaningful for ColorControl devices).
 	Color Color `json:"color"`
+	// ColorTemp is the white color temperature in Kelvin (meaningful for
+	// ColorTempControl devices); 0 when the device isn't in white mode.
+	ColorTemp int `json:"color_temp"`
+	// Scene is the active preset id (meaningful for SceneControl devices); 0
+	// when no scene is active.
+	Scene int `json:"scene"`
+	// SceneSpeed is the animation speed of a dynamic scene (meaningful for
+	// SceneControl devices); 0 when not reported.
+	SceneSpeed int `json:"scene_speed"`
 }
 
 // Device is the minimal contract every device implementation must satisfy. It
@@ -70,6 +84,66 @@ type Dimmable interface {
 // ColorControl is implemented by devices with an adjustable RGB color.
 type ColorControl interface {
 	SetColor(c Color) error
+}
+
+// ColorTempControl is implemented by tunable-white devices: set the white color
+// temperature in Kelvin (e.g. ~2200 warm … 6500 cool). On many bulbs RGB color
+// and white temperature are mutually exclusive modes.
+type ColorTempControl interface {
+	SetColorTemp(kelvin int) error
+}
+
+// Scene is a named preset a device can activate. Dynamic marks animated scenes
+// whose animation speed can be adjusted (SetSceneSpeed); static scenes ignore
+// speed, and the UI only shows a speed control for dynamic ones.
+type Scene struct {
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	Dynamic bool   `json:"dynamic"`
+}
+
+// SceneControl is implemented by devices with named built-in scenes. Scenes
+// lists what's available (so the UI can render a picker); SetScene activates one
+// by id; SetSceneSpeed adjusts the animation speed of dynamic scenes (devices
+// without an adjustable speed may no-op it).
+type SceneControl interface {
+	Scenes() []Scene
+	SetScene(id int) error
+	SetSceneSpeed(speed int) error
+}
+
+// Volume is implemented by devices with relative volume control (e.g. a TV,
+// where the protocol exposes step-up/step-down/mute rather than an absolute
+// level). Setu doesn't track an absolute volume value for these.
+type Volume interface {
+	VolumeUp() error
+	VolumeDown() error
+	ToggleMute() error
+}
+
+// KeyControl is implemented by devices that accept named remote-control keys
+// (e.g. a TV's "KEY_HOME", "KEY_UP"). It is the generic seam for D-pad,
+// navigation, and media keys without inventing one capability per button.
+type KeyControl interface {
+	SendKey(key string) error
+}
+
+// App is a launchable application on a device (e.g. a TV streaming app). ID is
+// the platform's launch identifier; Name is the human-friendly label the UI
+// shows on the shortcut button.
+type App struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// AppControl is implemented by devices that can launch named applications (e.g.
+// a smart TV's streaming apps) over the platform's app-launch transport. This
+// is distinct from KeyControl: apps are launched by id, not pressed as a key.
+// Apps lists the launchable set (so the UI can render shortcut buttons);
+// LaunchApp opens one by id.
+type AppControl interface {
+	Apps() []App
+	LaunchApp(id string) error
 }
 
 // Pollable is implemented by devices whose current state can be re-read from

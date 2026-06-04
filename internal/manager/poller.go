@@ -43,6 +43,7 @@ func (p *Poller) Run(ctx context.Context) {
 		p.log.Info("state poller disabled (poll_interval <= 0)")
 		return
 	}
+	p.pollOnce() // prime device state immediately so the UI isn't blank on startup
 	t := time.NewTicker(p.interval)
 	defer t.Stop()
 	for {

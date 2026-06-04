@@ -22,6 +22,8 @@ import (
 	"setu/internal/api"
 	"setu/internal/config"
 	"setu/internal/devices/example"
+	"setu/internal/devices/samsung"
+	"setu/internal/devices/wiz"
 	"setu/internal/events"
 	"setu/internal/manager"
 	"setu/internal/resolver"
@@ -55,8 +57,9 @@ func run() error {
 
 	// Register device types. Adding a brand is ONE line here.
 	factory := config.NewFactory()
-	example.Register(factory)
-	// wiz.Register(factory)   // ← future real devices
+	example.Register(factory) // template / blueprint (no real protocol)
+	wiz.Register(factory)     // Philips WiZ bulbs (UDP)
+	samsung.Register(factory) // Samsung Tizen TVs (REST + WebSocket + WoL)
 
 	devices, err := factory.BuildAll(cfg.Devices, config.Deps{Resolver: res, Bus: bus})
 	if err != nil {

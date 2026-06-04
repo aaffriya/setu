@@ -41,13 +41,13 @@
       onclick={() => onPick?.(preset)}
       aria-label={`Set color ${toHex(preset)}`}
       class="h-7 w-7 rounded-full ring-2 transition hover:scale-110 disabled:opacity-40
-             {sameColor(preset, color) ? 'ring-white' : 'ring-white/15'}"
+             {sameColor(preset, color) ? 'ring-ink' : 'ring-ink/15'}"
       style={`background: rgb(${preset.r} ${preset.g} ${preset.b})`}
     ></button>
   {/each}
 
   <label
-    class="relative h-7 w-7 cursor-pointer overflow-hidden rounded-full ring-2 ring-white/15"
+    class="relative h-7 w-7 cursor-pointer overflow-hidden rounded-full ring-2 ring-ink/15"
     style="background: conic-gradient(from 0deg, #f87171, #fbbf24, #34d399, #60a5fa, #a78bfa, #f472b6, #f87171)"
     aria-label="Custom color"
   >

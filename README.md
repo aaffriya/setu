@@ -11,10 +11,10 @@ It is a **single static Go binary**. That one binary serves the embedded web app
 API, and a WebSocket for live updates. No NGINX, no separate web server, no process
 supervisor.
 
-> **Status — Phase 1 (scaffold).** Every architectural seam is in place and the app runs,
-> but no real device protocols are implemented yet. Devices are added one at a time, by
-> brand and model, following the documented `example` template. See
-> [Adding a device](#adding-a-device).
+> **Status.** The full architecture is in place, plus two real device integrations —
+> **Philips WiZ** bulbs and **Samsung Tizen** TVs (see [Supported devices](#supported-devices)).
+> Add more one at a time, by brand and model, following the `example` template and the two
+> real packages. See [Adding a device](#adding-a-device).
 
 ---
 
@@ -147,11 +147,18 @@ All endpoints require `Authorization: Bearer <token>` (the WebSocket also accept
 | `POST /api/devices/{id}/command` | `{"action":"on"}` / `{"action":"off"}` | updated `DeviceView` |
 | | `{"action":"set_brightness","value":70}` | (0–100) |
 | | `{"action":"set_color","value":{"r":255,"g":120,"b":0}}` | |
+| | `{"action":"set_color_temp","value":2700}` | white temperature (Kelvin) |
+| | `{"action":"set_scene","value":11}` | preset scene id (see device `scenes`) |
+| | `{"action":"set_scene_speed","value":120}` | dynamic-scene speed (10–200) |
+| | `{"action":"volume_up"}` / `{"action":"volume_down"}` / `{"action":"mute"}` | relative volume |
+| | `{"action":"key","value":"KEY_HOME"}` | named remote key |
 | `GET /ws` | — | WebSocket; pushes `{type,device_id,state}` (`snapshot` on connect, then `state_changed`) |
 
 The command body is **uniform and device-agnostic**. The API checks capability support with
 type assertions and returns `400` if a device doesn't support an action (e.g. brightness on a
-plain switch), `404` for an unknown device, `502` for a device/IO failure.
+plain switch), `404` for an unknown device, `502` for a device/IO failure. Capabilities reported
+today: `switch`, `brightness`, `color`, `color_temp`, `scene`, `volume`, `key`. A device that
+has `scene` also lists its presets in the `scenes` field of `GET /api/devices`.
 
 ---
 
@@ -208,10 +215,48 @@ the browser blocks PWA features. No proxy is needed — Go does TLS natively
 
 ---
 
+## Supported devices
+
+| Brand · model (`brand`/`model`) | Capabilities | Transport |
+| --- | --- | --- |
+| Philips WiZ — `WiZ`/`color_bulb` | switch, brightness, color, color_temp, scene | UDP :38899 (local, no cloud) |
+| Samsung Tizen TV — `Samsung`/`tizen` | switch (power), volume, key | REST :8001 + WebSocket/TLS :8002 + Wake-on-LAN |
+
+### Philips WiZ (`WiZ`/`color_bulb`)
+
+- Pure local control over UDP — no cloud, login, or key. On/off, brightness (10–100; the WiZ
+  hardware floor is 10%, so lower values clamp), RGB color, **white temperature** (2200–6500 K),
+  and the **32 predefined scenes** (color / white-temp / scene are exclusive modes on the bulb).
+- IP resolution chain: ARP table → **WiZ UDP broadcast discovery** (matches the bulb by MAC) →
+  the `ip` hint. Discovery means a DHCP IP change is handled automatically — this is the
+  per-brand discovery the `Resolver` seam anticipates (`internal/devices/wiz/discovery.go`).
+- Tunable-white-only WiZ bulbs ignore RGB; add a `tunable_white` model (switch + brightness +
+  color temperature) the same way if you have one.
+
+### Samsung Tizen TV (`Samsung`/`tizen`)
+
+- **Power on** = Wake-on-LAN (sprayed at each interface's directed broadcast + the limited
+  broadcast, ports 9 & 7). ✅ Verified to wake a UA50AU7700KLXL from off. ⚠️ WoL over Wi-Fi can
+  still fail if the TV's network-standby ("Power On with Mobile") is off — that's a Samsung/Wi-Fi
+  limit, not Setu. **Power off**, volume, and navigation keys (over the WebSocket) work when the
+  TV is on.
+- **First-use pairing:** the first power-off/key/volume command makes the TV show an **Allow**
+  prompt — accept it once. Setu captures the returned token and caches it. Set the TV's *General →
+  External Device Manager → Device Connection Manager → Access Notification* to "First Time Only".
+- **Token cache:** `$SETU_STATE_DIR/setu-samsung-<id>.token` (defaults to the OS temp dir). Point
+  `SETU_STATE_DIR` at a persistent path so the token survives reboots.
+- **Same L2 segment required:** Samsung blocks the remote WebSocket across subnets/VLANs — keep
+  Setu and the TV on the same segment.
+- The TV serves its WebSocket/HTTPS with a self-signed cert, which Setu trusts (a known LAN device
+  resolved from its MAC). Remote keys are validated against `KEY_[A-Z0-9_]+`; `KEY_FACTORY`
+  (service menu) is refused.
+
 ## Adding a device
 
 This is the core next step, and the whole architecture is built around making it small and
-local. Each device lives in its own package, organised **by brand → model**. Use
+local. Two real packages show the pattern applied to hardware: `internal/devices/wiz` (a compact
+UDP device) and `internal/devices/samsung` (REST + WebSocket + Wake-on-LAN, and how new
+capabilities like `volume`/`key` light up matching UI controls). Each device lives in its own package, organised **by brand → model**. Use
 [`internal/devices/example`](internal/devices/example/example.go) as the blueprint — it is a
 fully-commented, compiling template (a brand `base` with the transport, an embedded model type,
 capability methods, resolver usage, and factory registration).
@@ -234,7 +279,7 @@ capability methods, resolver usage, and factory registration).
    ```yaml
    devices:
      - id: living_light
-       brand: wiz
+       brand: WiZ   # case-insensitive (wiz / WiZ both work)
        model: color_bulb
        name: "Living Room"
        mac: "a8:bb:50:11:22:33"   # primary identity
@@ -244,12 +289,13 @@ capability methods, resolver usage, and factory registration).
 The frontend needs **no changes** — `DeviceCard` renders the right controls from the device's
 reported `capabilities`.
 
-### Not in this phase (by design)
+### Not yet (by design)
 
-- No real device protocols yet (the `example` package is a stub template).
 - No automation/rules engine — only the event-bus seam it will subscribe to.
 - No HomeKit — but the front-end-protocol seam (the `api` package over the manager/bus) keeps it
   addable later without touching device code.
+- Setu doesn't read a TV's volume level (the protocol is relative up/down), and treats REST
+  reachability as a power proxy — so a TV in network-standby may read as "on".
 
 ---
 
@@ -268,6 +314,16 @@ small procd/init script pointing at `/etc/setu/config.yaml`, and (future) read l
 no libc dependency.
 
 ---
+
+## Documentation
+
+Beyond this file, docs are kept **point-to-point** for humans and AI assistants:
+
+- **Native device protocols:** [`docs/devices/wiz.md`](docs/devices/wiz.md),
+  [`docs/devices/samsung.md`](docs/devices/samsung.md) — how to call each device on the wire.
+- **Per-module context:** every package has its own `README.md`
+  (`internal/*/README.md`, `cmd/setu/`, `web/`) — purpose, key types, flow, gotchas, how to extend.
+- **Index:** [`docs/README.md`](docs/README.md).
 
 ## Why these dependencies?
 

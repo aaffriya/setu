@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"setu/internal/device"
 	"setu/internal/events"
@@ -33,7 +34,12 @@ func NewFactory() *Factory {
 	return &Factory{constructors: make(map[string]Constructor)}
 }
 
-func key(brand, model string) string { return brand + "/" + model }
+// key normalizes (brand, model) to a case-insensitive lookup key, so config may
+// write "WiZ", "wiz", or "WIZ" and still match the registered constructor. The
+// brand's display name (Device.Brand) is kept as registered.
+func key(brand, model string) string {
+	return strings.ToLower(brand) + "/" + strings.ToLower(model)
+}
 
 // Register associates a (brand, model) pair with its Constructor. It panics on a
 // duplicate, since that is always a programming error in the composition root
