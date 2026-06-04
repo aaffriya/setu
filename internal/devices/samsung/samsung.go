@@ -51,6 +51,7 @@ const (
 	defaultTimeout = 4 * time.Second
 	pairTimeout    = 15 * time.Second       // first connect: time for the user to tap "Allow"
 	flushDelay     = 500 * time.Millisecond // let a key frame flush before closing the socket
+	powerGrace     = 10 * time.Second       // trust an explicit On/Off over REST during the TV's power transition
 )
 
 // keyPattern restricts remote keys to the documented KEY_* form, so arbitrary
@@ -64,6 +65,7 @@ var tvApps = []device.App{
 	{ID: "111299001912", Name: "YouTube"},
 	{ID: "3201907018807", Name: "Netflix"},
 	{ID: "3201512006785", Name: "Prime Video"},
+	{ID: "3201606009684", Name: "Spotify"},
 }
 
 // base is the shared Samsung brand foundation: identity, IP resolution, the
@@ -76,10 +78,12 @@ type base struct {
 	timeout               time.Duration
 	tokenPath             string
 
-	mu    sync.Mutex
-	ip    net.IP
-	token string
-	state device.State
+	mu      sync.Mutex
+	ip      net.IP
+	token   string
+	state   device.State
+	powerAt time.Time // when On/Off was last commanded (start of the grace window)
+	powerOn bool      // the power state that command intended
 }
 
 func (b *base) ID() string    { return b.id }
@@ -134,6 +138,29 @@ func (b *base) updateState(mutate func(*device.State)) {
 	b.mu.Lock()
 	mutate(&b.state)
 	b.mu.Unlock()
+}
+
+// markPower records an explicit On/Off so Poll trusts it over REST reachability
+// for a short window. The TV keeps answering REST for a few seconds while it
+// powers off (and takes time to answer after a WoL wake), so without this the
+// polled power state would briefly flicker against the command just issued.
+func (b *base) markPower(on bool) {
+	b.mu.Lock()
+	b.powerAt = time.Now()
+	b.powerOn = on
+	b.mu.Unlock()
+}
+
+// intendedPower returns the last commanded power state while it's still inside
+// the grace window; fresh is false once the window has elapsed (then Poll lets
+// live reachability drive the state, so out-of-band power changes are detected).
+func (b *base) intendedPower() (on, fresh bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.powerAt.IsZero() || time.Since(b.powerAt) >= powerGrace {
+		return false, false
+	}
+	return b.powerOn, true
 }
 
 // --- token persistence -----------------------------------------------------
@@ -385,6 +412,7 @@ func (t *TV) On() error {
 	if err := t.wakeOnLAN(); err != nil {
 		return err
 	}
+	t.markPower(true)
 	t.applyState(func(s *device.State) { s.Online = true; s.On = true })
 	return nil
 }
@@ -396,6 +424,7 @@ func (t *TV) Off() error {
 	if err := t.sendKeyNow("KEY_POWER"); err != nil {
 		return err
 	}
+	t.markPower(false)
 	t.applyState(func(s *device.State) { s.Online = true; s.On = false })
 	return nil
 }
@@ -460,13 +489,16 @@ func (t *TV) LaunchApp(id string) error {
 	return nil
 }
 
-// Poll reflects the TV's power state. REST reachability is a *power* proxy, not
-// a presence proxy: an off TV stops answering REST, but it can still be woken by
-// Wake-on-LAN, so reporting it "offline" would only hide the power control
-// needed to wake it. We therefore treat the TV as Online whenever its address
-// resolves (config hint / ARP — WoL works by MAC regardless), and use
-// reachability only to force the On state off; the on state otherwise follows
-// the last command. (We can't read the TV's volume.)
+// Poll reflects the TV's real power state, like the WiZ bulb's getPilot poll: it
+// reads REST reachability as the live power signal, so turning the TV on/off
+// out-of-band (e.g. with the physical remote) shows up in the UI on the next
+// tick. REST reachability is a *power* proxy, not a presence proxy — an off TV
+// stops answering REST but can still be woken by Wake-on-LAN — so the TV is
+// reported Online whenever its address resolves (config hint / ARP; WoL works by
+// MAC regardless). That keeps off ≠ offline, so the power control stays usable to
+// wake it. Right after an explicit On/Off we trust the command for a short grace
+// window (see markPower): the TV keeps answering REST for a few seconds while it
+// powers down, which would otherwise flicker the state. (We can't read volume.)
 func (t *TV) Poll() (device.State, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
 	defer cancel()
@@ -474,10 +506,13 @@ func (t *TV) Poll() (device.State, error) {
 	_, err := t.resolveIP()
 	known := err == nil
 	reachable := known && t.reachable(ctx)
+	intended, fresh := t.intendedPower()
 	t.updateState(func(s *device.State) {
 		s.Online = known
-		if !reachable {
-			s.On = false // not answering REST ⇒ off (a command sets it back on)
+		if fresh {
+			s.On = intended // just commanded — hold it through the power transition
+		} else {
+			s.On = reachable // live signal: reachable ⇒ on, unreachable ⇒ off
 		}
 	})
 	return t.State(), nil

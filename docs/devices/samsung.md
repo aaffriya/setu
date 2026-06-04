@@ -171,17 +171,22 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
 - One WebSocket per command (connect → capture token → send → flush → close).
 - **Token cache:** `$SETU_STATE_DIR/setu-samsung-<id>.token` (defaults to OS temp;
   set `SETU_STATE_DIR` to a persistent dir to survive reboots), mode `0600`.
-- **App shortcuts** (`LaunchApp`): a fixed catalog (YouTube / Netflix / Prime Video)
-  launched over DIAL REST; `LaunchApp` only accepts an id from that catalog. The UI
+- **App shortcuts** (`LaunchApp`): a fixed catalog (YouTube / Netflix / Prime Video /
+  Spotify) launched over DIAL REST; `LaunchApp` only accepts an id from that catalog. The UI
   shows the buttons from `Apps()`. Source/input selection (e.g. HDMI) is *not* an app
   — it's the `KEY_SOURCE` / `KEY_HDMI` remote key (`key` capability).
-- **`Poll` / online vs. on:** for a TV, REST reachability is a *power* proxy, not a
-  presence proxy. An off TV stops answering REST but can still be woken by WoL, so it
-  is reported **online whenever its address resolves** (off ≠ offline — otherwise the
-  UI would hide the power control needed to wake it). Reachability only forces `On`
-  off; the on state otherwise follows the last command. `Poll` can't read volume. (A
-  TV in network-standby that keeps answering REST is left in its last commanded on
-  state rather than flipped back on.)
+- **`Poll` / online vs. on:** `Poll` reads REST reachability as the **live power
+  signal** (reachable ⇒ on, unreachable ⇒ off), like the WiZ bulb's `getPilot` poll —
+  so powering the TV on/off out-of-band (e.g. the physical remote) is reflected on the
+  next tick. Reachability is a *power* proxy, not a presence proxy: an off TV stops
+  answering REST but can still be woken by WoL, so the TV is reported **online whenever
+  its address resolves** (config hint / ARP). That keeps off ≠ offline, so the UI never
+  hides the power control needed to wake it. Right after an explicit `On`/`Off` the
+  command is trusted for a short **grace window** (~10 s): the TV keeps answering REST
+  for a few seconds while it powers down, which would otherwise flicker the polled
+  state. `Poll` can't read volume. (Caveat: a TV with network-standby that keeps
+  answering REST while "off" will read as on once the grace window passes — REST alone
+  can't distinguish standby from on.)
 
 **Known tradeoffs (not bugs):** a fresh WS per key press adds latency for rapid
 volume taps (a persistent connection could be added later); `On` returns success

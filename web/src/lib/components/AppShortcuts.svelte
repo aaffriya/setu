@@ -16,11 +16,10 @@
 </script>
 
 {#if apps.length}
-  <div class="flex flex-wrap gap-1.5">
+  <div class="grid grid-cols-2 gap-1.5">
     {#each apps as app (app.id)}
       <button
-        class="setu-key h-9 flex-1 whitespace-nowrap px-2 text-xs font-medium"
-        style="min-width: 5rem"
+        class="setu-key h-9 truncate px-2 text-xs font-medium"
         {disabled}
         onclick={() => onLaunch?.(app.id)}
       >

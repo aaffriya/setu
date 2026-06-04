@@ -1,6 +1,8 @@
 <script lang="ts">
-  // A compact remote: a D-pad (arrows + OK) plus Back / Home / Menu. Each button
-  // sends a Samsung-style key via onKey; the parent maps that to a "key" command.
+  // A TV remote: D-pad, media transport, channels, navigation, and input/source.
+  // Every button sends a Samsung-style key via onKey; the parent maps that to a
+  // "key" command. Driven purely by the `key` capability — any key-capable device
+  // shows the same remote, no per-device markup.
   let {
     disabled = false,
     onKey,
@@ -28,16 +30,33 @@
     <span></span>
   </div>
 
-  <!-- Back / Home / Menu -->
+  <!-- Media transport -->
+  <div class="grid grid-cols-4 gap-1.5 text-sm">
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_REWIND')} aria-label="Rewind">⏪</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_PLAY')} aria-label="Play">▶</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_PAUSE')} aria-label="Pause">⏸</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_FF')} aria-label="Fast forward">⏩</button>
+  </div>
+
+  <!-- Channels -->
   <div class="grid grid-cols-3 gap-1.5 text-xs">
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_CHDOWN')} aria-label="Channel down">CH −</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_CH_LIST')}>List</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_CHUP')} aria-label="Channel up">CH +</button>
+  </div>
+
+  <!-- Back / Home / Menu / Exit -->
+  <div class="grid grid-cols-4 gap-1.5 text-xs">
     <button class="setu-key h-9" {disabled} onclick={press('KEY_RETURN')}>Back</button>
     <button class="setu-key h-9" {disabled} onclick={press('KEY_HOME')}>Home</button>
     <button class="setu-key h-9" {disabled} onclick={press('KEY_MENU')}>Menu</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_EXIT')}>Exit</button>
   </div>
 
   <!-- Source / inputs -->
-  <div class="grid grid-cols-2 gap-1.5 text-xs">
+  <div class="grid grid-cols-3 gap-1.5 text-xs">
     <button class="setu-key h-9" {disabled} onclick={press('KEY_SOURCE')}>Source</button>
     <button class="setu-key h-9" {disabled} onclick={press('KEY_HDMI')}>HDMI</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_TV')}>TV</button>
   </div>
 </div>

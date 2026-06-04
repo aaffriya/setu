@@ -58,11 +58,21 @@
   }
 
   let tint = $derived(tintFor(device.state, caps))
-  let glow = $derived(
-    on && tint
-      ? `0 14px 40px -12px rgba(${tint.r}, ${tint.g}, ${tint.b}, 0.55)`
-      : 'var(--card-shadow)',
-  )
+
+  // The glow behind the card mirrors what the device is doing:
+  //  • a lit bulb glows in its own colour (warm/cool white in temperature mode);
+  //  • a powered-on TV casts a cool, wide screen-light halo — two soft layers
+  //    (blue spill + indigo ambient) so it reads as a panel spilling light, not
+  //    a point source;
+  //  • off / idle rests on the neutral card shadow.
+  const TV_GLOW =
+    '0 18px 52px -14px rgba(96, 165, 250, 0.5), 0 6px 26px -10px rgba(99, 102, 241, 0.34)'
+  let glow = $derived.by(() => {
+    if (!on) return 'var(--card-shadow)'
+    if (tint) return `0 14px 40px -12px rgba(${tint.r}, ${tint.g}, ${tint.b}, 0.55)`
+    if (caps.has('volume') || caps.has('key') || caps.has('app')) return TV_GLOW
+    return 'var(--card-shadow)'
+  })
 
   const toggle = (v: boolean) => command(device.id, v ? 'on' : 'off')
   const setBrightness = (v: number) => command(device.id, 'set_brightness', v)

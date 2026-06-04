@@ -12,8 +12,8 @@
 - `switch` on → **Wake-on-LAN** (UDP 9); off → WS `KEY_POWER`.
 - `volume` → WS `KEY_VOLUP` / `KEY_VOLDOWN` / `KEY_MUTE`.
 - `key` → WS arbitrary key, validated `^KEY_[A-Z0-9_]+$` (`KEY_FACTORY` refused). Source/input via `KEY_SOURCE` / `KEY_HDMI`.
-- `app` → REST `POST /api/v2/applications/<id>` for a fixed catalog (YouTube / Netflix / Prime Video); `LaunchApp` only accepts a catalog id.
-- `Poll` → REST `/api/v2/` reachability as a **power** proxy: online whenever the address resolves (off ≠ offline, so the power toggle stays usable to wake it); reachability only forces `On` off. Can't read volume.
+- `app` → REST `POST /api/v2/applications/<id>` for a fixed catalog (YouTube / Netflix / Prime Video / Spotify); `LaunchApp` only accepts a catalog id.
+- `Poll` → REST `/api/v2/` reachability as the **live power signal** (reachable ⇒ on), like the bulb's `getPilot` poll, so out-of-band on/off (physical remote) shows up next tick. Online whenever the address resolves (off ≠ offline, so the power toggle stays usable to wake it). A short grace window after an explicit On/Off avoids flicker while the TV powers down. Can't read volume.
 
 ## Token
 - Captured from the `ms.channel.connect` event after the on-screen **Allow**.
