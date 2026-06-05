@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { haptics } from '../haptics'
+
   // Brightness control (0–100). While dragging we show a local override so the
   // label tracks the thumb instantly; the command is debounced so we don't flood
   // the device. Once sent, we drop the override and follow the server value again
@@ -20,6 +22,7 @@
   function handle(event: Event) {
     const v = Number((event.target as HTMLInputElement).value)
     dragging = v
+    haptics.slide()
     clearTimeout(debounce)
     debounce = setTimeout(() => {
       onChange?.(v)

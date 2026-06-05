@@ -39,12 +39,13 @@ type AuthConfig struct {
 // DeviceSpec is one device entry from config: pure instance data. The Factory
 // maps (Brand, Model) to the Go type that implements it.
 type DeviceSpec struct {
-	ID    string `yaml:"id"`    // stable, unique instance id
-	Brand string `yaml:"brand"` // selects the device package, e.g. "wiz"
-	Model string `yaml:"model"` // selects the model within the brand
-	Name  string `yaml:"name"`  // human-friendly label
-	MAC   string `yaml:"mac"`   // PRIMARY identity (stable across DHCP leases)
-	IP    string `yaml:"ip"`    // optional hint/fallback only
+	ID     string `yaml:"id"`     // stable, unique instance id
+	Brand  string `yaml:"brand"`  // selects the device package, e.g. "wiz"
+	Model  string `yaml:"model"`  // selects the model within the brand
+	Series string `yaml:"series"` // optional friendly product/series name shown in the UI (e.g. "AU7700")
+	Name   string `yaml:"name"`   // human-friendly label
+	MAC    string `yaml:"mac"`    // PRIMARY identity (stable across DHCP leases)
+	IP     string `yaml:"ip"`     // optional hint/fallback only
 }
 
 const (

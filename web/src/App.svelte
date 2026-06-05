@@ -79,7 +79,7 @@
       </div>
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">Setu</h1>
-        <p class="text-xs text-ink/45">सेतु · your device bridge</p>
+        <p class="text-xs text-ink/45">सेतु</p>
       </div>
     </div>
 

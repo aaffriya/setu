@@ -54,6 +54,10 @@ type State struct {
 	// SceneSpeed is the animation speed of a dynamic scene (meaningful for
 	// SceneControl devices); 0 when not reported.
 	SceneSpeed int `json:"scene_speed"`
+	// Volume is 0–100 (meaningful for VolumeSetter devices). For a TV this is a
+	// tracked estimate — the remote channel can't read the real level — kept
+	// accurate by re-calibrating whenever the slider is taken fully to 0 or 100.
+	Volume int `json:"volume"`
 }
 
 // Device is the minimal contract every device implementation must satisfy. It
@@ -68,6 +72,14 @@ type Device interface {
 	MAC() string            // primary identity; IP is resolved at runtime
 	Capabilities() []string // e.g. ["switch","brightness","color"]
 	State() State           // cheap, cached snapshot (must not do I/O)
+}
+
+// Described is optional presentation metadata: a human-friendly product or
+// series name (e.g. "AU7700") distinct from the Model driver key. A device opts
+// in by implementing it (like the capability interfaces); the API omits the
+// field when absent, so the UI simply falls back to the model.
+type Described interface {
+	Series() string
 }
 
 // Switchable is implemented by devices that can be powered on and off.
@@ -119,6 +131,14 @@ type Volume interface {
 	VolumeUp() error
 	VolumeDown() error
 	ToggleMute() error
+}
+
+// VolumeSetter is implemented by Volume devices that also accept an absolute
+// level (0–100), so the UI can show a position slider. A TV has no absolute
+// volume on its remote channel, so the implementation tracks a level and steps
+// to the target with up/down keys (State.Volume reflects the tracked level).
+type VolumeSetter interface {
+	SetVolume(pct int) error
 }
 
 // KeyControl is implemented by devices that accept named remote-control keys

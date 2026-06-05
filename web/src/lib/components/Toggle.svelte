@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { haptics } from '../haptics'
+
   // An iOS-style on/off switch. Stateless: it renders `checked` and reports
   // intent via `onToggle`; the parent owns the state (optimistic update).
   let {
@@ -20,7 +22,10 @@
   aria-checked={checked}
   aria-label={label}
   {disabled}
-  onclick={() => onToggle?.(!checked)}
+  onclick={() => {
+    haptics.toggle(!checked)
+    onToggle?.(!checked)
+  }}
   class="relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition-colors duration-300 disabled:cursor-not-allowed disabled:opacity-40
          {checked ? 'bg-emerald-400/90' : 'bg-ink/15'}"
 >

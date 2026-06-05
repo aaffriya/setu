@@ -135,7 +135,7 @@ devices: []              # empty for now; see "Adding a device"
 | `listen` | `":8080"` (TCP, all interfaces), `"127.0.0.1:8080"` (loopback only), or `"unix:/run/setu.sock"` |
 | `auth.token` | Bearer token for `/api` and `/ws`. The server refuses to start with an empty token and warns if it's still `CHANGE_ME`. |
 | `poll_interval` | Duration like `5s`, `500ms`, `1m`. `0` disables polling. |
-| `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `ip` (optional hint). |
+| `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `ip` (optional hint), `series` (optional friendly product/series name shown in the UI, e.g. `AU7700`). |
 
 ### HTTP / WebSocket API
 
@@ -143,7 +143,7 @@ All endpoints require `Authorization: Bearer <token>` (the WebSocket also accept
 
 | Method & path | Body | Result |
 | --- | --- | --- |
-| `GET /api/devices` | — | `[]DeviceView` (id, name, brand, model, mac, capabilities, state) — `[]` when none |
+| `GET /api/devices` | — | `[]DeviceView` (id, name, brand, model, `series` (optional), mac, capabilities, state) — `[]` when none |
 | `POST /api/devices/{id}/command` | `{"action":"on"}` / `{"action":"off"}` | updated `DeviceView` |
 | | `{"action":"set_brightness","value":70}` | (0–100) |
 | | `{"action":"set_color","value":{"r":255,"g":120,"b":0}}` | |

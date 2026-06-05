@@ -15,6 +15,7 @@ export type DeviceState = {
   color_temp: number
   scene: number
   scene_speed: number
+  volume: number
 }
 
 export type Device = {
@@ -22,6 +23,7 @@ export type Device = {
   name: string
   brand: string
   model: string
+  series?: string // optional friendly product/series name (falls back to model)
   mac: string
   capabilities: string[]
   scenes?: Scene[]
@@ -39,6 +41,7 @@ export type CommandAction =
   | 'set_scene_speed'
   | 'volume_up'
   | 'volume_down'
+  | 'set_volume'
   | 'mute'
   | 'key'
   | 'launch_app'

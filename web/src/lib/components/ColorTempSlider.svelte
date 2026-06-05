@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { haptics } from '../haptics'
+
   // White color-temperature control (Kelvin). Warm (left) → cool (right). Same
   // drag-override + debounce pattern as BrightnessSlider.
   const MIN = 2200
@@ -22,6 +24,7 @@
   function handle(event: Event) {
     const v = Number((event.target as HTMLInputElement).value)
     dragging = v
+    haptics.slide()
     clearTimeout(debounce)
     debounce = setTimeout(() => {
       onChange?.(v)

@@ -101,6 +101,7 @@ type DeviceView struct {
 	Name         string         `json:"name"`
 	Brand        string         `json:"brand"`
 	Model        string         `json:"model"`
+	Series       string         `json:"series,omitempty"` // friendly product/series name, when the device provides one
 	MAC          string         `json:"mac"`
 	Capabilities []string       `json:"capabilities"`
 	Scenes       []device.Scene `json:"scenes,omitempty"` // present only for SceneControl devices
@@ -117,6 +118,9 @@ func metaView(d device.Device) DeviceView {
 		Model:        d.Model(),
 		MAC:          d.MAC(),
 		Capabilities: d.Capabilities(),
+	}
+	if ds, ok := d.(device.Described); ok {
+		v.Series = ds.Series()
 	}
 	if sc, ok := d.(device.SceneControl); ok {
 		v.Scenes = sc.Scenes()

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Color } from '../api'
+  import { haptics } from '../haptics'
 
   // A row of preset swatches plus a native color input for anything custom.
   let {
@@ -38,7 +39,10 @@
     <button
       type="button"
       {disabled}
-      onclick={() => onPick?.(preset)}
+      onclick={() => {
+        haptics.tap()
+        onPick?.(preset)
+      }}
       aria-label={`Set color ${toHex(preset)}`}
       class="h-7 w-7 rounded-full ring-2 transition hover:scale-110 disabled:opacity-40
              {sameColor(preset, color) ? 'ring-ink' : 'ring-ink/15'}"
@@ -55,7 +59,10 @@
       type="color"
       value={toHex(color)}
       {disabled}
-      oninput={(e) => onPick?.(fromHex((e.target as HTMLInputElement).value))}
+      oninput={(e) => {
+        haptics.slide()
+        onPick?.(fromHex((e.target as HTMLInputElement).value))
+      }}
       class="absolute -inset-2 h-12 w-12 cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-0"
     />
   </label>

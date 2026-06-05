@@ -57,21 +57,22 @@ type pilotResponse struct {
 // base is the shared WiZ brand foundation: identity, the resolution strategy,
 // and the UDP transport. Models embed it.
 type base struct {
-	id, name, mac, ipHint string
-	arp                   resolver.Resolver // injected fallback (ARP table)
-	discoverer            *Discoverer       // brand-specific UDP discovery
-	bus                   *events.Bus
-	timeout               time.Duration
+	id, name, series, mac, ipHint string
+	arp                           resolver.Resolver // injected fallback (ARP table)
+	discoverer                    *Discoverer       // brand-specific UDP discovery
+	bus                           *events.Bus
+	timeout                       time.Duration
 
 	mu    sync.Mutex
 	ip    net.IP // cached resolved IP (nil until resolved)
 	state device.State
 }
 
-func (b *base) ID() string    { return b.id }
-func (b *base) Name() string  { return b.name }
-func (b *base) Brand() string { return Brand }
-func (b *base) MAC() string   { return b.mac }
+func (b *base) ID() string     { return b.id }
+func (b *base) Name() string   { return b.name }
+func (b *base) Brand() string  { return Brand }
+func (b *base) MAC() string    { return b.mac }
+func (b *base) Series() string { return b.series }
 
 func (b *base) State() device.State {
 	b.mu.Lock()
@@ -378,6 +379,7 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	return &ColorBulb{base: base{
 		id:         spec.ID,
 		name:       spec.Name,
+		series:     spec.Series,
 		mac:        spec.MAC,
 		ipHint:     spec.IP,
 		arp:        deps.Resolver,

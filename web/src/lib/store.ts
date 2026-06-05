@@ -125,6 +125,9 @@ function applyOptimistic(
     case 'set_scene_speed':
       next.scene_speed = value as number
       break
+    case 'set_volume':
+      next.volume = value as number
+      break
     // volume_up / volume_down / mute / key have no locally-visible state to
     // predict — they're sent through as-is.
   }
@@ -201,6 +204,35 @@ export function applyFavorite(deviceId: string, fav: Favorite): void {
       void command(deviceId, 'set_scene', fav.value as number)
       break
   }
+}
+
+// --- card expand/collapse (UI-only, persisted) -------------------------------
+// Cards start collapsed (name + power + an expand button) and open on demand.
+// Whether a card is expanded is a UI preference, so — like favourites — it lives
+// in localStorage rather than the backend, and survives a mobile tab reload.
+
+const EXPAND_KEY = 'setu.expanded'
+
+export const expanded = writable<Record<string, boolean>>(loadExpanded())
+
+expanded.subscribe((map) => {
+  try {
+    localStorage.setItem(EXPAND_KEY, JSON.stringify(map))
+  } catch {
+    // storage disabled — non-fatal
+  }
+})
+
+function loadExpanded(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(EXPAND_KEY) ?? '{}') as Record<string, boolean>
+  } catch {
+    return {}
+  }
+}
+
+export function toggleExpanded(id: string): void {
+  expanded.update((map) => ({ ...map, [id]: !map[id] }))
 }
 
 // --- WebSocket: live updates with auto-reconnect -----------------------------

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { haptics } from '../haptics'
+
   // Animation speed for dynamic scenes (slow → fast). WiZ range is 10–200.
   const MIN = 10
   const MAX = 200
@@ -20,6 +22,7 @@
   function handle(event: Event) {
     const v = Number((event.target as HTMLInputElement).value)
     dragging = v
+    haptics.slide()
     clearTimeout(debounce)
     debounce = setTimeout(() => {
       onChange?.(v)

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { haptics } from '../haptics'
+
   // A TV remote: D-pad, media transport, channels, navigation, and input/source.
   // Every button sends a Samsung-style key via onKey; the parent maps that to a
   // "key" command. Driven purely by the `key` capability — any key-capable device
@@ -11,7 +13,10 @@
     onKey?: (key: string) => void
   } = $props()
 
-  const press = (key: string) => () => onKey?.(key)
+  const press = (key: string) => () => {
+    haptics.tap()
+    onKey?.(key)
+  }
 </script>
 
 <div class="space-y-3">
@@ -47,16 +52,27 @@
 
   <!-- Back / Home / Menu / Exit -->
   <div class="grid grid-cols-4 gap-1.5 text-xs">
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_RETURN')}>Back</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_HOME')}>Home</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_MENU')}>Menu</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_RETURN')} aria-label="Back">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-4" />
+      </svg>
+    </button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_HOME')} aria-label="Home">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 11.5 12 5l8 6.5" /><path d="M6 10.5V20h12v-9.5" />
+      </svg>
+    </button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_MENU')} aria-label="Menu">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+        <path d="M4 7h16M4 12h16M4 17h16" />
+      </svg>
+    </button>
     <button class="setu-key h-9" {disabled} onclick={press('KEY_EXIT')}>Exit</button>
   </div>
 
-  <!-- Source / inputs -->
-  <div class="grid grid-cols-3 gap-1.5 text-xs">
+  <!-- Source / inputs (HDMI lives in the app/shortcut grid above) -->
+  <div class="grid grid-cols-2 gap-1.5 text-xs">
     <button class="setu-key h-9" {disabled} onclick={press('KEY_SOURCE')}>Source</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_HDMI')}>HDMI</button>
     <button class="setu-key h-9" {disabled} onclick={press('KEY_TV')}>TV</button>
   </div>
 </div>

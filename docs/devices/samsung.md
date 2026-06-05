@@ -133,9 +133,16 @@ IDs change per release; pull the live list with `ed.installedApp.get` if one fai
 |---|---|---|
 | YouTube | `111299001912` | — |
 | Netflix | `11101200001` / `3201907018807` | `org.tizen.netflix-app` |
-| Prime Video | `3201512006785` | `org.tizen.ignition` |
+| Prime Video | `3201910019365` (confirmed) · `3201512006785` (older) | `org.tizen.ignition` |
+| Skypro | `3202410037378` (confirmed) | — |
 | Spotify | `3201606009684` | — |
+| Apple Music | `3201908019041` (verify) | — |
 | Browser | — | `org.tizen.browser` |
+
+> App ids vary by firmware/region. If a launch 404s, Setu self-heals by matching
+> the app name against `ed.installedApp.get` (§3.3); you can also confirm an id with
+> `GET /api/v2/applications/<id>` (installed/running). "(confirmed)" = seen live on a
+> UA50AU7700 in 2026-06.
 
 ---
 
@@ -163,18 +170,32 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
 |---|---|---|
 | `switch` on | `On` | Wake-on-LAN (§4) |
 | `switch` off | `Off` | WS `KEY_POWER` (§3.3) |
-| `volume` | `VolumeUp/Down/ToggleMute` | WS `KEY_VOLUP/VOLDOWN/MUTE` |
+| `volume` | `VolumeUp/Down/ToggleMute` · `SetVolume(pct)` | WS `KEY_VOLUP/VOLDOWN/MUTE` |
 | `key` | `SendKey("KEY_…")` | WS, validated `^KEY_[A-Z0-9_]+$` |
 | `app` | `Apps` / `LaunchApp(id)` | REST `POST /api/v2/applications/<id>` (§2, §6) |
 | (internal) | `Poll` | REST `/api/v2/` reachability (§2) |
 
-- One WebSocket per command (connect → capture token → send → flush → close).
+- **Reused WebSocket:** the remote-control socket is opened once (capture token) and
+  reused for subsequent keys, then idle-closed after ~45 s. A stale socket (the TV
+  drops idle ones) is detected on the next write and redialed once, so reliability
+  matches a one-shot dial while avoiding a TLS dial + ~500 ms flush per press. Writes
+  are serialized; a drain reader keeps control frames handled and refreshes the token.
+- **Absolute volume (tracked):** the remote channel has no "set volume" — only
+  step up/down/mute, and the TV **debounces rapid identical keys** (a fast burst lands
+  as one step). So `SetVolume(pct)` tracks the level and steps to the target with
+  presses **paced ~120 ms apart** (tunable: `volumePace`). The ramp runs in the
+  background (the UI reflects the target immediately) and a newer `set_volume`
+  supersedes an in-flight one. Sliding fully to **0 or 100 overshoots to the rail**,
+  re-calibrating the tracked level if it drifted (e.g. the physical remote). `State.Volume`
+  is the tracked estimate — it can't be read back from this channel.
 - **Token cache:** `$SETU_STATE_DIR/setu-samsung-<id>.token` (defaults to OS temp;
   set `SETU_STATE_DIR` to a persistent dir to survive reboots), mode `0600`.
 - **App shortcuts** (`LaunchApp`): a fixed catalog (YouTube / Netflix / Prime Video /
-  Spotify) launched over DIAL REST; `LaunchApp` only accepts an id from that catalog. The UI
-  shows the buttons from `Apps()`. Source/input selection (e.g. HDMI) is *not* an app
-  — it's the `KEY_SOURCE` / `KEY_HDMI` remote key (`key` capability).
+  Skypro / Apple Music) launched over DIAL REST; `LaunchApp` only accepts an id from that catalog.
+  Each app tries its known ids in order; **if all 404, it self-heals** by querying the
+  TV's real installed apps (`ed.installedApp.get`, §3.3), matching by name, launching
+  that id, and caching it. The UI shows the buttons from `Apps()` (icon-only). HDMI rides
+  in the same shortcut grid but is a `KEY_HDMI` remote key, not an app.
 - **`Poll` / online vs. on:** `Poll` reads REST reachability as the **live power
   signal** (reachable ⇒ on, unreachable ⇒ off), like the WiZ bulb's `getPilot` poll —
   so powering the TV on/off out-of-band (e.g. the physical remote) is reflected on the
@@ -188,7 +209,7 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
   answering REST while "off" will read as on once the grace window passes — REST alone
   can't distinguish standby from on.)
 
-**Known tradeoffs (not bugs):** a fresh WS per key press adds latency for rapid
-volume taps (a persistent connection could be added later); `On` returns success
-once the WoL packet is sent (it can't confirm the TV woke — the next poll
-reconciles).
+**Known tradeoffs (not bugs):** `On` returns success once the WoL packet is sent
+(it can't confirm the TV woke — the next poll reconciles); the volume slider's thumb
+is indicative, not the TV's true level (the protocol has no absolute volume — an
+absolute slider would need UPnP/SmartThings).

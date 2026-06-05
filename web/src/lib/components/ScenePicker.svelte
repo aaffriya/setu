@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Scene } from '../api'
+  import { haptics } from '../haptics'
 
   // Predefined-scene selector. A native <select> is the compact, accessible
   // choice for a long brand-defined list (WiZ has 32). Scenes come from the
@@ -18,7 +19,10 @@
 
   function handle(event: Event) {
     const id = Number((event.target as HTMLSelectElement).value)
-    if (id) onPick?.(id)
+    if (id) {
+      haptics.tap()
+      onPick?.(id)
+    }
   }
 </script>
 

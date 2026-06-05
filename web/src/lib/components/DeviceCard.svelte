@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Device, Color, DeviceState } from '../api'
-  import { command } from '../store'
+  import { slide } from 'svelte/transition'
+  import { command, expanded, toggleExpanded } from '../store'
+  import { haptics } from '../haptics'
   import Toggle from './Toggle.svelte'
   import BrightnessSlider from './BrightnessSlider.svelte'
   import ColorPicker from './ColorPicker.svelte'
@@ -21,6 +23,16 @@
   let offline = $derived(!device.state.online)
   let on = $derived(device.state.on)
   let color = $derived(device.state.color)
+
+  // Collapsed by default: a card shows only its name, power, and the expand
+  // chevron until opened. The open/closed state is persisted per device.
+  let isOpen = $derived($expanded[device.id] ?? false)
+  // Prefer a configured friendly series (e.g. "AU7700"); otherwise prettify the
+  // driver model key ("color_bulb" → "Color Bulb") so the subtitle reads well.
+  let modelLabel = $derived(
+    device.series?.trim() ||
+      device.model.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+  )
 
   // The colour glowing behind the card reflects the bulb's *current* look. A
   // tunable-white bulb keeps its last RGB value while in white mode, so the glow
@@ -94,6 +106,9 @@
   // stays usable while off: a TV reports online even when off (it can be woken by
   // Wake-on-LAN), so off ≠ offline and you can always turn it back on.
   let mediaDisabled = $derived(offline || !on)
+  // HDMI rides in the shortcut grid (alongside apps) as a key shortcut, since the
+  // protocol exposes it as KEY_HDMI rather than an app launch.
+  let keyShortcuts = $derived(caps.has('key') ? [{ key: 'KEY_HDMI', name: 'HDMI' }] : [])
 </script>
 
 <article
@@ -104,18 +119,45 @@
   <header class="flex items-start justify-between gap-3">
     <div class="min-w-0">
       <h2 class="truncate text-lg font-semibold leading-tight">{device.name || device.id}</h2>
-      <p class="mt-0.5 truncate text-xs text-ink/45">
-        {device.brand} · {device.model}
-        {#if offline}<span class="text-rose-500 dark:text-rose-300/80"> · offline</span>{/if}
-      </p>
+      {#if isOpen}
+        <p class="mt-0.5 truncate text-xs text-ink/45">
+          {device.brand} · {modelLabel}
+          {#if offline}<span class="text-rose-500 dark:text-rose-300/80"> · offline</span>{/if}
+        </p>
+      {/if}
     </div>
-    {#if caps.has('switch')}
-      <Toggle checked={on} disabled={offline} label={device.name || device.id} onToggle={toggle} />
-    {/if}
+    <div class="flex shrink-0 items-center gap-2">
+      {#if caps.has('switch')}
+        <Toggle checked={on} disabled={offline} label={device.name || device.id} onToggle={toggle} />
+      {/if}
+      <button
+        type="button"
+        onclick={() => {
+          haptics.tap()
+          toggleExpanded(device.id)
+        }}
+        aria-expanded={isOpen}
+        aria-label={isOpen ? `Collapse ${device.name || device.id}` : `Expand ${device.name || device.id}`}
+        class="grid h-8 w-8 place-items-center rounded-full bg-ink/5 text-ink/60 transition hover:bg-ink/10 hover:text-ink"
+      >
+        <svg
+          class="h-5 w-5 transition-transform duration-300 {isOpen ? 'rotate-180' : ''}"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+    </div>
   </header>
 
-  {#if hasLight}
-    <div class="mt-5 space-y-4">
+  {#if isOpen && hasLight}
+    <div class="mt-5 space-y-4" transition:slide={{ duration: 250 }}>
       {#if caps.has('brightness')}
         <BrightnessSlider value={device.state.brightness} disabled={offline || !on} onChange={setBrightness} />
       {/if}
@@ -135,17 +177,23 @@
     </div>
   {/if}
 
-  {#if hasMedia}
-    <div class="mt-5 space-y-4">
-      {#if caps.has('app')}
-        <AppShortcuts apps={device.apps ?? []} disabled={mediaDisabled} onLaunch={launchApp} />
+  {#if isOpen && hasMedia}
+    <div class="mt-5 space-y-4" transition:slide={{ duration: 250 }}>
+      {#if caps.has('app') || keyShortcuts.length}
+        <AppShortcuts
+          apps={caps.has('app') ? (device.apps ?? []) : []}
+          keys={keyShortcuts}
+          disabled={mediaDisabled}
+          onLaunch={launchApp}
+          onKey={sendKey}
+        />
       {/if}
       {#if caps.has('volume')}
         <VolumeControl
+          value={device.state.volume}
           disabled={mediaDisabled}
-          onVolumeDown={() => command(device.id, 'volume_down')}
+          onChange={(v) => command(device.id, 'set_volume', v)}
           onMute={() => command(device.id, 'mute')}
-          onVolumeUp={() => command(device.id, 'volume_up')}
         />
       {/if}
       {#if caps.has('key')}

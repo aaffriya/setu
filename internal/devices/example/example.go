@@ -48,6 +48,7 @@ const (
 type base struct {
 	id      string
 	name    string
+	series  string
 	mac     string
 	ipHint  string // optional config hint/fallback
 	resolve resolver.Resolver
@@ -60,10 +61,11 @@ type base struct {
 
 // --- Device metadata shared by all models via embedding ---
 
-func (b *base) ID() string    { return b.id }
-func (b *base) Name() string  { return b.name }
-func (b *base) Brand() string { return Brand }
-func (b *base) MAC() string   { return b.mac }
+func (b *base) ID() string     { return b.id }
+func (b *base) Name() string   { return b.name }
+func (b *base) Brand() string  { return Brand }
+func (b *base) MAC() string    { return b.mac }
+func (b *base) Series() string { return b.series }
 
 // State returns the cached state. It must not do I/O (the poller refreshes it).
 func (b *base) State() device.State {
@@ -258,6 +260,7 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	b := &Bulb{base: base{
 		id:      spec.ID,
 		name:    spec.Name,
+		series:  spec.Series,
 		mac:     spec.MAC,
 		ipHint:  spec.IP,
 		resolve: deps.Resolver,

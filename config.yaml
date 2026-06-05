@@ -22,6 +22,7 @@ devices:
   - id: bedroom_light
     brand: WiZ
     model: color_bulb
+    # series: "A19 Color"      # optional friendly product/series name (defaults to the model)
     name: "Bedroom Light"
     mac: "d8:a0:11:ff:5e:f0" # WiZ bulb (from getPilot result.mac)
     ip: 192.168.0.140         # hint; WiZ broadcast discovery also finds it by MAC
@@ -29,6 +30,7 @@ devices:
   - id: living_tv
     brand: Samsung
     model: tizen
+    series: "AU7700"          # friendly product/series name shown in the UI
     name: "Living Room TV"
     mac: "a0:d7:f3:9e:74:b2" # used for Wake-on-LAN + IP resolution
     ip: 192.168.0.100         # hint/fallback

@@ -154,6 +154,20 @@ func (s *Server) dispatch(dev device.Device, req commandRequest) error {
 			return v.ToggleMute()
 		}
 
+	case "set_volume":
+		vs, ok := dev.(device.VolumeSetter)
+		if !ok {
+			return badRequest("device does not support absolute volume")
+		}
+		var pct int
+		if err := json.Unmarshal(req.Value, &pct); err != nil {
+			return badRequest("set_volume requires an integer 0–100")
+		}
+		if pct < 0 || pct > 100 {
+			return badRequest("volume must be 0–100")
+		}
+		return vs.SetVolume(pct)
+
 	case "key":
 		kc, ok := dev.(device.KeyControl)
 		if !ok {
