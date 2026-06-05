@@ -21,17 +21,20 @@ poll_interval: 5s
 devices:
   - id: bedroom_light
     brand: WiZ
-    model: color_bulb
-    # series: "A19 Color"      # optional friendly product/series name (defaults to the model)
+    model: color_bulb         # driver key (Signify/WiZ A60, hw model 23110) — see docs/devices/wiz.md
+    series: "A60"             # friendly product name shown in the UI (the bulb's form factor)
     name: "Bedroom Light"
     mac: "d8:a0:11:ff:5e:f0" # WiZ bulb (from getPilot result.mac)
     ip: 192.168.0.140         # hint; WiZ broadcast discovery also finds it by MAC
 
   - id: living_tv
     brand: Samsung
-    model: tizen
+    model: tizen              # driver key (hw model UA50AU7700KLXL) — see docs/devices/samsung.md
     series: "AU7700"          # friendly product/series name shown in the UI
     name: "Living Room TV"
+    # WoL/resolution MAC (verified to wake this unit). NOTE: the TV's on-screen
+    # info shows a different MAC (1c:86:9a:05:e1:4c) — its other interface; don't
+    # swap this one, it's the one that works. See docs/devices/samsung.md.
     mac: "a0:d7:f3:9e:74:b2" # used for Wake-on-LAN + IP resolution
     ip: 192.168.0.100         # hint/fallback
     # First control attempt: the TV shows an "Allow" prompt — accept it once;

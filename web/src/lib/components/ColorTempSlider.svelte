@@ -34,9 +34,12 @@
 </script>
 
 <div class="flex items-center gap-3">
-  <svg class="h-4 w-4 shrink-0 text-ink/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-    <path d="M12 3a4 4 0 014 4v6a4 4 0 11-8 0V7a4 4 0 014-4z" />
-    <path d="M12 14v3" stroke-linecap="round" />
+  <!-- Thermometer: the conventional "temperature" glyph (distinct from the
+       brightness sun). Filled bulb + mercury column reads at 16px. -->
+  <svg class="h-4 w-4 shrink-0 text-ink/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M10 13.6V5a2 2 0 1 1 4 0v8.6a3.5 3.5 0 1 1-4 0z" />
+    <path d="M12 9v5.4" />
+    <circle cx="12" cy="16.6" r="1.7" fill="currentColor" stroke="none" />
   </svg>
   <input
     class="setu-range setu-temp w-full"

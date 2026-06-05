@@ -24,6 +24,8 @@
 
   html {
     -webkit-tap-highlight-color: transparent;
+    /* App-like touch: kill the double-tap-to-zoom delay (pinch-zoom still works). */
+    touch-action: manipulation;
   }
 
   body {
@@ -34,6 +36,17 @@
       radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.14), transparent 55%),
       rgb(var(--page));
     background-attachment: fixed;
+    /* Feel native: no long-press text selection / iOS callout on the chrome. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* …but real text fields stay selectable/editable. */
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   @media (prefers-color-scheme: dark) {

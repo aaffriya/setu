@@ -20,13 +20,23 @@
 
   function saveCurrent() {
     const s = device.state
+    // Capture the current brightness too (when the device dims and is lit), so a
+    // favourite restores the whole look. Shown in the chip label as "· NN%".
+    const bri =
+      device.capabilities.includes('brightness') && s.brightness > 0 ? s.brightness : undefined
+    const suffix = bri ? ` · ${bri}%` : ''
     if (s.scene) {
       const name = device.scenes?.find((x) => x.id === s.scene)?.name ?? `Scene ${s.scene}`
-      addFavorite(device.id, { kind: 'scene', value: s.scene, label: name })
+      addFavorite(device.id, { kind: 'scene', value: s.scene, label: name + suffix, brightness: bri })
     } else if (s.color_temp) {
-      addFavorite(device.id, { kind: 'color_temp', value: s.color_temp, label: `${s.color_temp}K` })
+      addFavorite(device.id, {
+        kind: 'color_temp',
+        value: s.color_temp,
+        label: `${s.color_temp}K${suffix}`,
+        brightness: bri,
+      })
     } else {
-      addFavorite(device.id, { kind: 'color', value: s.color, label: 'Color' })
+      addFavorite(device.id, { kind: 'color', value: s.color, label: `Color${suffix}`, brightness: bri })
     }
   }
 
@@ -81,8 +91,10 @@
     aria-label="Save current as favourite"
     class="grid h-7 w-7 place-items-center rounded-full bg-ink/5 text-ink/60 transition hover:bg-ink/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
   >
-    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+    <!-- heart + plus: "add the current look to favourites". -->
+    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M12 21s-7-4.5-9.5-8.5C1 9 2.5 6 5.5 6c1.8 0 3 1 2.5 2 .5-1 1.7-2 3.5-2 3 0 4.5 3 3 6.5C19 16.5 12 21 12 21z" />
+      <path d="M12 9.3v3.7M10.2 11.1h3.6" />
     </svg>
   </button>
 

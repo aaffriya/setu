@@ -177,3 +177,27 @@ Setu command → independent `getPilot` readback:
 | `set_brightness 60` | `dimming:60` |
 | `set_color {255,100,0}` | `r:255,g:100,b:0` (sceneId→0, color mode) |
 | `off` | `state:false` |
+
+---
+
+## 9. This unit (reference hardware)
+
+The bulb Setu's WiZ support is developed and verified against, read from the
+WiZ / Philips Smart app (**device → settings → device info**). WiZ is Signify's
+budget line, so the app brands it **Philips**. Config entry: `bedroom_light`.
+
+| Field (app) | Value | Notes |
+|---|---|---|
+| Brand | **Philips** (Signify / WiZ) | UI shows `WiZ` (the driver brand) |
+| Model name | **A60** | Bulb form factor (E27, ~60 mm) → `series: "A60"` |
+| Model | `23110` | Signify hardware model number |
+| Features | Dimmable · Adjustable white · Adjustable colors | ⇒ caps `brightness`, `color`, `color_temp`, `scene` |
+| Firmware | `1.35.0` | |
+| MAC address | `D8:A0:11:FF:5E:F0` | = config `d8:a0:11:ff:5e:f0` ✓ (= `getPilot` `result.mac`) |
+| IP address | `192.168.0.140` | current DHCP lease — config `ip:` hint only (§4) |
+| Home ID | `17181078` | WiZ cloud "home" grouping; **not** used by Setu (pure-LAN) |
+
+The driver key stays `model: color_bulb` (it selects the Go driver); the friendly
+`A60` rides in `series`. This is a full-colour + tunable-white bulb, so it
+implements every light capability (`Switchable`, `Dimmable`, `ColorControl`,
+`ColorTempControl`, `SceneControl`).

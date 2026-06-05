@@ -213,3 +213,38 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
 (it can't confirm the TV woke — the next poll reconciles); the volume slider's thumb
 is indicative, not the TV's true level (the protocol has no absolute volume — an
 absolute slider would need UPnP/SmartThings).
+
+---
+
+## 9. This unit (reference hardware)
+
+The unit Setu's Samsung support is developed and verified against. Read off the
+TV's **Menu → Settings → Support → About This TV** (and the engineering info
+overlay). Config entry: `living_tv` (`docs` ↔ `config.yaml`).
+
+| Field | Value | Meaning |
+|---|---|---|
+| `MN` | **UA50AU7700KLXL** | Model number (the "actual device model") |
+| `SN` | `0AK23PAW101353K` | Serial number |
+| `PD` | `--/--/----` | Production date (not reported by this set) |
+| `FW` | `T-KSU2EUABC-2301.1` | Firmware version |
+| `FC` | `SWU-OU_T-KSU2EUABC_2301_251112` | Firmware build / OTA code (`251112` ≈ 2025-11-12) |
+| `MI` | `T-KSU2EUABC` | Platform / micom id (the firmware family) |
+| `LS` | `ED_INDIA` | Local set / region (India) |
+| `DI` | `BDCB2NS2EP7HY` | Device id |
+| `MA` | `1C:86:9A:05:E1:4C` | MAC shown on-screen — **see the MAC note below** |
+| `SC` | `30601_AC2AD28AE60_HC220IM20JK5357912_AA81AC229AD12.9AE13.0AF0TB0BA6DA117IB6IC233` | Service/config descriptor (capability flags; not used by Setu) |
+
+**Model number `UA50AU7700KLXL` decoded** (approximate):
+`U`=UHD · `A`=Asia/India market · `50`=50″ panel · `AU7700`=2021 Crystal UHD
+7-series · `K`=variant · `LXL`=India SKU. The driver key in config stays
+`model: tizen` (it selects the Go driver, not the marketing model); the marketing
+name rides in `series: "AU7700"`.
+
+> ⚠️ **Two MACs.** The on-screen `MA` (`1C:86:9A:05:E1:4C`) is **not** the MAC in
+> `config.yaml` (`a0:d7:f3:9e:74:b2`). A Samsung TV has separate Wi-Fi and Ethernet
+> interfaces, each with its own MAC; the on-screen value reflects one interface
+> (typically the active/Ethernet NIC) while `a0:d7:f3:9e:74:b2` is the one **WoL
+> was verified against** (§4, 2026-06-04). Keep the config MAC as-is. If WoL ever
+> stops waking the TV, try the other MAC — wake the interface the TV actually
+> listens on in network-standby.

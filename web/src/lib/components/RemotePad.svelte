@@ -36,22 +36,31 @@
   </div>
 
   <!-- Media transport -->
-  <div class="grid grid-cols-4 gap-1.5 text-sm">
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_REWIND')} aria-label="Rewind">⏪</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_PLAY')} aria-label="Play">▶</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_PAUSE')} aria-label="Pause">⏸</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_FF')} aria-label="Fast forward">⏩</button>
-  </div>
-
-  <!-- Channels -->
-  <div class="grid grid-cols-3 gap-1.5 text-xs">
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_CHDOWN')} aria-label="Channel down">CH −</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_CH_LIST')}>List</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_CHUP')} aria-label="Channel up">CH +</button>
+  <div class="grid grid-cols-4 gap-1.5">
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_REWIND')} aria-label="Rewind">
+      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M11 6 4 12l7 6V6z" /><path d="M18 6l-7 6 7 6V6z" />
+      </svg>
+    </button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_PLAY')} aria-label="Play">
+      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M8 6 18 12 8 18z" />
+      </svg>
+    </button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_PAUSE')} aria-label="Pause">
+      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <rect x="7" y="6" width="3.4" height="12" rx="1" /><rect x="13.6" y="6" width="3.4" height="12" rx="1" />
+      </svg>
+    </button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_FF')} aria-label="Fast forward">
+      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M13 6l7 6-7 6V6z" /><path d="M6 6l7 6-7 6V6z" />
+      </svg>
+    </button>
   </div>
 
   <!-- Back / Home / Menu / Exit -->
-  <div class="grid grid-cols-4 gap-1.5 text-xs">
+  <div class="grid grid-cols-4 gap-1.5">
     <button class="setu-key h-9" {disabled} onclick={press('KEY_RETURN')} aria-label="Back">
       <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-4" />
@@ -67,12 +76,29 @@
         <path d="M4 7h16M4 12h16M4 17h16" />
       </svg>
     </button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_EXIT')}>Exit</button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_EXIT')} aria-label="Exit">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M13 5H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6" /><path d="M10 12h10" /><path d="M17 9l3 3-3 3" />
+      </svg>
+    </button>
   </div>
 
-  <!-- Source / inputs (HDMI lives in the app/shortcut grid above) -->
-  <div class="grid grid-cols-2 gap-1.5 text-xs">
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_SOURCE')}>Source</button>
-    <button class="setu-key h-9" {disabled} onclick={press('KEY_TV')}>TV</button>
+  <!-- Channel down / Source / Channel up (HDMI lives in the app/shortcut grid above) -->
+  <div class="grid grid-cols-3 gap-1.5">
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_CHDOWN')} aria-label="Channel down">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M7 7l5 5 5-5" /><path d="M7 13l5 5 5-5" />
+      </svg>
+    </button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_SOURCE')} aria-label="Source">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 9h13" /><path d="M14 6l3 3-3 3" /><path d="M20 15H7" /><path d="M10 12l-3 3 3 3" />
+      </svg>
+    </button>
+    <button class="setu-key h-9" {disabled} onclick={press('KEY_CHUP')} aria-label="Channel up">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M7 17l5-5 5 5" /><path d="M7 11l5-5 5 5" />
+      </svg>
+    </button>
   </div>
 </div>

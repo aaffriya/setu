@@ -16,10 +16,12 @@
     <polygon points="6,3 8.7,3 18,21 15.3,21" fill="#E50914" />
   </svg>
 {:else if name === 'Prime Video'}
+  <!-- Prime Video: brand-blue (#00A8E1) tile, white play button + the signature
+       "smile" swoosh curving up beneath it. -->
   <svg class={cls} viewBox="0 0 24 24" aria-hidden="true">
-    <rect x="2" y="4" width="20" height="16" rx="4.4" fill="#1399FF" />
-    <path d="M9.8 8 15.4 11.2 9.8 14.4z" fill="#fff" />
-    <path d="M5.4 15.6c2.9 2.4 8 2.6 11.4 0 .6-.45 1.1-1 1.5-1.7" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
+    <rect x="2" y="3.5" width="20" height="17" rx="4.5" fill="#00A8E1" />
+    <path d="M9.6 7.9 15.7 11.5 9.6 15.1z" fill="#fff" />
+    <path d="M5.2 16.1c4 2.6 9.6 2.5 13.6-.3" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" />
   </svg>
 {:else if name === 'Spotify'}
   <svg class={cls} viewBox="0 0 24 24" aria-hidden="true">

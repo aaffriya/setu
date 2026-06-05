@@ -143,6 +143,10 @@ export type Favorite = {
   kind: 'color' | 'color_temp' | 'scene'
   value: Color | number
   label: string
+  // Captured brightness (0–100) so a favourite restores the whole look — the
+  // colour/temp/scene *and* how bright it was. Optional: older saved favourites
+  // (and devices without a brightness control) simply omit it.
+  brightness?: number
 }
 
 const FAV_KEY = 'setu.favorites'
@@ -177,7 +181,10 @@ export function addFavorite(deviceId: string, fav: Omit<Favorite, 'id'>): void {
   favorites.update((all) => {
     const list = all[deviceId] ?? []
     const dup = list.some(
-      (f) => f.kind === fav.kind && JSON.stringify(f.value) === JSON.stringify(fav.value),
+      (f) =>
+        f.kind === fav.kind &&
+        JSON.stringify(f.value) === JSON.stringify(fav.value) &&
+        f.brightness === fav.brightness,
     )
     if (dup) return all
     return { ...all, [deviceId]: [...list, { ...fav, id: favId() }] }
@@ -191,7 +198,8 @@ export function removeFavorite(deviceId: string, id: string): void {
   }))
 }
 
-// applyFavorite re-sends a saved preset as the appropriate command.
+// applyFavorite re-sends a saved preset as the appropriate command, then restores
+// the captured brightness so the whole look (mode + level) comes back.
 export function applyFavorite(deviceId: string, fav: Favorite): void {
   switch (fav.kind) {
     case 'color':
@@ -203,6 +211,9 @@ export function applyFavorite(deviceId: string, fav: Favorite): void {
     case 'scene':
       void command(deviceId, 'set_scene', fav.value as number)
       break
+  }
+  if (typeof fav.brightness === 'number' && fav.brightness > 0) {
+    void command(deviceId, 'set_brightness', fav.brightness)
   }
 }
 
