@@ -3,11 +3,14 @@
 # Behaviour lives in code; this file supplies only instance data. See the README
 # ("Config reference") for full details.
 
-# Listener address:
-#   ":8080"                  TCP on all interfaces (bind to a trusted network!)
-#   "127.0.0.1:8080"         TCP on loopback only (use with an SSH tunnel)
-#   "unix:/run/setu.sock"    Unix socket, zero open ports (tunnel-only)
-listen: ":8080"
+# Listener. Defaults to port 80 on all interfaces; binding to 80 needs privilege
+# (run as root or grant CAP_NET_BIND_SERVICE). Fields (all optional):
+#   interface  bind address; blank = all interfaces. "127.0.0.1" = loopback only.
+#   socket     Unix socket path to serve on instead of TCP (tunnel-only;
+#              overrides interface/port).
+# Reach it by hostname (e.g. http://setu.lan) via your router's DNS — see README.
+listen:
+  port: 80
 
 auth:
   # Bearer token required on /api and /ws. CHANGE THIS before any real use.
@@ -25,7 +28,7 @@ devices:
     series: "A60"             # friendly product name shown in the UI (the bulb's form factor)
     name: "Bedroom Light"
     mac: "d8:a0:11:ff:5e:f0" # WiZ bulb (from getPilot result.mac)
-    ip: 192.168.0.140         # hint; WiZ broadcast discovery also finds it by MAC
+    ip: 192.168.1.196         # hint; WiZ broadcast discovery also finds it by MAC
 
   - id: living_tv
     brand: Samsung
@@ -36,6 +39,6 @@ devices:
     # info shows a different MAC (1c:86:9a:05:e1:4c) — its other interface; don't
     # swap this one, it's the one that works. See docs/devices/samsung.md.
     mac: "a0:d7:f3:9e:74:b2" # used for Wake-on-LAN + IP resolution
-    ip: 192.168.0.100         # hint/fallback
+    ip: 192.168.1.214         # hint/fallback
     # First control attempt: the TV shows an "Allow" prompt — accept it once;
     # the pairing token is then cached (see README → Samsung TV).

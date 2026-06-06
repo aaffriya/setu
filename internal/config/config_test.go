@@ -33,14 +33,61 @@ devices:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Listen != ":8080" {
-		t.Errorf("default listen = %q, want :8080", cfg.Listen)
+	if got := cfg.Listen.String(); got != ":80" {
+		t.Errorf("default listen = %q, want :80", got)
+	}
+	if cfg.Listen.Port != 80 || cfg.Listen.Interface != "" || cfg.Listen.Socket != "" {
+		t.Errorf("default listen fields = %+v, want {Interface:\"\" Port:80 Socket:\"\"}", cfg.Listen)
 	}
 	if cfg.PollInterval.Duration() != 250*time.Millisecond {
 		t.Errorf("poll = %v, want 250ms", cfg.PollInterval.Duration())
 	}
 	if len(cfg.Devices) != 1 || cfg.Devices[0].ID != "a" {
 		t.Fatalf("devices not parsed: %+v", cfg.Devices)
+	}
+}
+
+func TestListenConfig(t *testing.T) {
+	// interface set, port omitted -> defaults to 80 on that address.
+	cfg, err := Load(write(t, `
+auth: {token: x}
+listen:
+  interface: 192.168.1.10
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Listen.String(); got != "192.168.1.10:80" {
+		t.Errorf("listen = %q, want 192.168.1.10:80", got)
+	}
+
+	// explicit interface + port.
+	cfg, err = Load(write(t, `
+auth: {token: x}
+listen: {interface: 127.0.0.1, port: 8080}
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if net, addr := cfg.Listen.Network(); net != "tcp" || addr != "127.0.0.1:8080" {
+		t.Errorf("Network() = %q %q, want tcp 127.0.0.1:8080", net, addr)
+	}
+
+	// socket takes precedence over interface/port.
+	cfg, err = Load(write(t, `
+auth: {token: x}
+listen: {socket: /run/setu.sock}
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if net, addr := cfg.Listen.Network(); net != "unix" || addr != "/run/setu.sock" {
+		t.Errorf("Network() = %q %q, want unix /run/setu.sock", net, addr)
+	}
+
+	// out-of-range port is rejected.
+	if _, err := Load(write(t, "auth: {token: x}\nlisten: {port: 70000}\n")); err == nil {
+		t.Error("expected error for out-of-range port")
 	}
 }
 

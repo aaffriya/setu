@@ -7,6 +7,7 @@
 
 ## Key types
 - `Config{Listen, Auth, PollInterval, Devices}`, `DeviceSpec`, `Duration` (parses `"5s"`).
+- `ListenConfig{Interface, Port, Socket}` — TCP on `Interface:Port` (blank interface = all interfaces, port defaults to **80**), or a Unix socket when `Socket` is set. `Network()` returns the `net.Listen` args; `String()` renders it for logs.
 - `Load(path)` — apply defaults → unmarshal → `validate()`.
 - `Factory` — `Register(brand, model, Constructor)`, `Build`, `BuildAll`.
 - `Constructor func(DeviceSpec, Deps) (device.Device, error)`; `Deps{Resolver, Bus}`.

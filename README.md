@@ -90,7 +90,7 @@ docker run --rm --network host \
   setu
 ```
 
-Open `http://<host>:8080`, enter your `auth.token`, and you'll see the empty dashboard.
+Open `http://<host>` (port 80 by default), enter your `auth.token`, and you'll see the empty dashboard.
 
 ### From source
 
@@ -106,11 +106,14 @@ make run          # build + run with ./config.yaml
 ### Hot-reload development
 
 ```sh
-# terminal 1 — backend
+# terminal 1 — backend (set listen.port: 8080 in config.yaml for sudo-free dev)
 go run ./cmd/setu -config config.yaml
 # terminal 2 — frontend (Vite proxies /api and /ws to :8080)
 cd web && npm install && npm run dev
 ```
+
+> The shipped `config.yaml` defaults to port **80** (privileged). For hot-reload dev, set
+> `listen.port: 8080` so the unprivileged backend matches the Vite proxy above.
 
 > `go build ./...` works on a fresh checkout even before the frontend is built: the embed
 > contains only a `.gitkeep`, and the server serves a small built-in placeholder page until
@@ -123,7 +126,10 @@ cd web && npm install && npm run dev
 `config.yaml` is **data only** — device *behaviour* lives in code, never in config.
 
 ```yaml
-listen: ":8080"          # TCP; or "unix:/run/setu.sock" for tunnel-only access
+listen:
+  port: 80               # TCP port (default 80; binding to 80 needs privilege)
+  interface: ""          # bind address; blank = all interfaces
+  # socket: /run/setu.sock  # serve on a Unix socket instead (tunnel-only)
 auth:
   token: "CHANGE_ME"     # bearer token required on /api and /ws — CHANGE THIS
 poll_interval: 5s        # how often to re-read device state (Go duration string)
@@ -132,7 +138,9 @@ devices: []              # empty for now; see "Adding a device"
 
 | Key | Meaning |
 | --- | --- |
-| `listen` | `":8080"` (TCP, all interfaces), `"127.0.0.1:8080"` (loopback only), or `"unix:/run/setu.sock"` |
+| `listen.port` | TCP port. Defaults to `80` (binding to 80 needs privilege — run as root or grant `CAP_NET_BIND_SERVICE`). |
+| `listen.interface` | Bind address (a network interface's IP, e.g. `192.168.1.10`). **Blank = all interfaces.** Use `127.0.0.1` for loopback only. |
+| `listen.socket` | Optional Unix-domain socket path (e.g. `/run/setu.sock`) for tunnel-only, zero-open-port access. When set, it overrides `interface`/`port`. |
 | `auth.token` | Bearer token for `/api` and `/ws`. The server refuses to start with an empty token and warns if it's still `CHANGE_ME`. |
 | `poll_interval` | Duration like `5s`, `500ms`, `1m`. `0` disables polling. |
 | `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `ip` (optional hint), `series` (optional friendly product/series name shown in the UI, e.g. `AU7700`). |
@@ -190,20 +198,41 @@ type Resolver interface {
 
 ## Listener options
 
-One configurable field, `listen`:
+The `listen` block has three fields:
 
-- **TCP (default), `":8080"`** — normal browser / PWA access. **Bind to a trusted interface**
-  and secure it with a VPN (WireGuard / Tailscale) or a firewall. **Never expose Setu raw to
-  the internet.**
-- **Unix socket, `"unix:/run/setu.sock"`** — zero open ports; reach it over an SSH tunnel
-  (`ssh -L 8080:/run/setu.sock user@router`). Laptop-friendly; phones need a tunnel app.
+- **TCP (default)** — `port` (default `80`) on `interface`. **Blank `interface` = all
+  interfaces;** set it to one address (e.g. `127.0.0.1` for loopback) to **bind to a trusted
+  interface**, and secure it with a VPN (WireGuard / Tailscale) or a firewall. **Never expose
+  Setu raw to the internet.** Binding to port 80 needs privilege (run as root or grant
+  `CAP_NET_BIND_SERVICE`).
+- **Unix socket** — set `socket: /run/setu.sock` for zero open ports; reach it over an SSH
+  tunnel (`ssh -L 8080:/run/setu.sock user@router`). Laptop-friendly; phones need a tunnel app.
+  When set, it overrides `interface`/`port`.
 
 Graceful shutdown is handled on `SIGINT`/`SIGTERM`.
+
+### Reaching Setu by name (e.g. `http://setu.lan`)
+
+Setu's server answers on **any hostname** that resolves to its IP — no Setu config is
+needed for this; it's purely **DNS**. With port 80 as the default, `http://setu.lan` (no
+`:port`) just works once the name resolves. `.lan` is your router's local domain, so set it up
+there:
+
+- **Router DNS (recommended).** On most home routers / OpenWrt (dnsmasq), set the Setu host's
+  hostname to `setu` — it's then auto-served as `setu.lan`. Or add a static record, e.g.
+  dnsmasq `address=/setu.lan/192.168.0.50`. RouterOS: a static DNS entry.
+- **Per-client (no router access).** Add `192.168.0.50  setu.lan` to each device's hosts file
+  (`/etc/hosts`, or `C:\Windows\System32\drivers\etc\hosts`).
+
+> mDNS/Bonjour can give a zero-config name too, but only under **`.local`** (`setu.local`), not
+> `.lan`, and would add a dependency — so for `.lan`, router DNS is the lightweight path.
+> Note: `http://setu.lan` is still plain HTTP (not a secure context), so PWA install stays
+> blocked — see below.
 
 ### PWA & the secure-context requirement
 
 Service workers and "Add to Home Screen" (install, fullscreen, offline app shell) only work in
-a **secure context** — HTTPS **or** `localhost`. Plain `http://<lan-ip>:8080` loads fine but
+a **secure context** — HTTPS **or** `localhost`. Plain `http://<lan-ip>` loads fine but
 the browser blocks PWA features. No proxy is needed — Go does TLS natively
 (`ListenAndServeTLS`). Easiest options:
 

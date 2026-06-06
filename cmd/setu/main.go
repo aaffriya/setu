@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -98,7 +97,7 @@ func run() error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		log.Info("setu listening", "addr", cfg.Listen)
+		log.Info("setu listening", "addr", cfg.Listen.String())
 		if err := httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 		}
@@ -116,21 +115,22 @@ func run() error {
 	return httpServer.Shutdown(shutdownCtx)
 }
 
-// listen opens the configured listener: a Unix-domain socket when the address
-// has the "unix:" prefix, otherwise TCP.
-func listen(addr string) (net.Listener, error) {
-	if path, ok := strings.CutPrefix(addr, "unix:"); ok {
+// listen opens the configured listener: a Unix-domain socket when one is
+// configured, otherwise TCP on the configured interface and port.
+func listen(cfg config.ListenConfig) (net.Listener, error) {
+	network, addr := cfg.Network()
+	if network == "unix" {
 		// Remove a stale socket file left by an unclean shutdown.
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(addr); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
-		ln, err := net.Listen("unix", path)
+		ln, err := net.Listen("unix", addr)
 		if err != nil {
 			return nil, err
 		}
 		// Allow non-root clients (e.g. an SSH tunnel user) to connect.
-		_ = os.Chmod(path, 0o660)
+		_ = os.Chmod(addr, 0o660)
 		return ln, nil
 	}
-	return net.Listen("tcp", addr)
+	return net.Listen(network, addr)
 }

@@ -48,3 +48,4 @@ go.work.sum
 
 # Local agent/editor tooling (machine-specific)
 /.claude/
+.DS_Store

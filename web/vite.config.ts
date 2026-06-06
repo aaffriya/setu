@@ -3,7 +3,9 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 
 // Setu's frontend is a single static build (web/dist) embedded into the Go
 // binary. During development, `npm run dev` proxies /api and /ws to the Go
-// server on :8080 so the SPA talks to a real backend with no CORS fuss.
+// server on :8080 so the SPA talks to a real backend with no CORS fuss. The
+// shipped binary defaults to port 80; for sudo-free hot-reload dev, run the
+// backend with `listen.port: 8080` to match this proxy (see README).
 export default defineConfig({
   plugins: [svelte()],
   build: {

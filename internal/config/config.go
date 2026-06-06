@@ -9,7 +9,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -20,15 +22,46 @@ import (
 // inline comments and human-friendly durations like "5s". gopkg.in/yaml.v3 is
 // the single dependency this buys, and it is small and ubiquitous.
 type Config struct {
-	// Listen is the server address: ":8080" for TCP, or "unix:/run/setu.sock"
-	// for a Unix-domain socket (tunnel-only, zero open ports).
-	Listen string `yaml:"listen"`
+	// Listen configures the HTTP listener.
+	Listen ListenConfig `yaml:"listen"`
 	// Auth holds the bearer token required on /api and /ws.
 	Auth AuthConfig `yaml:"auth"`
 	// PollInterval is how often the state poller re-reads device state.
 	PollInterval Duration `yaml:"poll_interval"`
 	// Devices is the list of configured devices (empty until devices are added).
 	Devices []DeviceSpec `yaml:"devices"`
+}
+
+// ListenConfig describes where the server listens. By default it binds to all
+// network interfaces on port 80.
+type ListenConfig struct {
+	// Interface is the address to bind to — the IP of the network interface,
+	// e.g. "192.168.1.10". Blank means all interfaces.
+	Interface string `yaml:"interface"`
+	// Port is the TCP port to listen on. Defaults to 80.
+	Port int `yaml:"port"`
+	// Socket, when set, serves on this Unix-domain socket instead of TCP
+	// (tunnel-only, zero open ports). Takes precedence over Interface/Port.
+	Socket string `yaml:"socket"`
+}
+
+// Network returns the network and address for net.Listen: a Unix-domain socket
+// when Socket is set, otherwise a TCP "host:port" (blank host = all interfaces).
+func (l ListenConfig) Network() (network, address string) {
+	if l.Socket != "" {
+		return "unix", l.Socket
+	}
+	return "tcp", net.JoinHostPort(l.Interface, strconv.Itoa(l.Port))
+}
+
+// String renders the listener for logs, e.g. ":80", "192.168.1.10:80", or
+// "unix:/run/setu.sock".
+func (l ListenConfig) String() string {
+	network, address := l.Network()
+	if network == "unix" {
+		return "unix:" + address
+	}
+	return address
 }
 
 // AuthConfig holds authentication settings.
@@ -49,7 +82,7 @@ type DeviceSpec struct {
 }
 
 const (
-	defaultListen       = ":8080"
+	defaultPort         = 80
 	defaultPollInterval = 5 * time.Second
 )
 
@@ -57,7 +90,7 @@ const (
 // sparse file still works, then validating.
 func Load(path string) (*Config, error) {
 	c := &Config{
-		Listen:       defaultListen,
+		Listen:       ListenConfig{Port: defaultPort},
 		PollInterval: Duration(defaultPollInterval),
 	}
 
@@ -67,6 +100,10 @@ func Load(path string) (*Config, error) {
 	}
 	if err := yaml.Unmarshal(data, c); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	// A listen block that omits the port falls back to the default.
+	if c.Listen.Socket == "" && c.Listen.Port == 0 {
+		c.Listen.Port = defaultPort
 	}
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -79,6 +116,9 @@ func Load(path string) (*Config, error) {
 func (c *Config) validate() error {
 	if c.Auth.Token == "" {
 		return fmt.Errorf("config: auth.token must be set")
+	}
+	if c.Listen.Socket == "" && (c.Listen.Port < 1 || c.Listen.Port > 65535) {
+		return fmt.Errorf("config: listen.port %d out of range (1-65535)", c.Listen.Port)
 	}
 	seen := make(map[string]struct{}, len(c.Devices))
 	for i, d := range c.Devices {
