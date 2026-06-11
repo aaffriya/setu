@@ -14,11 +14,14 @@ package: it imports nothing from Setu; everything else points here.
 - `ColorControl` — `SetColor(Color)`.
 - `ColorTempControl` — `SetColorTemp(kelvin)` (tunable white).
 - `SceneControl` — `Scenes() []Scene` + `SetScene(id)` + `SetSceneSpeed(speed)` (named presets; dynamic-scene speed).
-- `Volume` — `VolumeUp` / `VolumeDown` / `ToggleMute` (relative; TVs).
-- `KeyControl` — `SendKey("KEY_…")` (remote keys).
+- `Volume` — `VolumeUp` / `VolumeDown` / `ToggleMute` (TVs; `State.Muted` reflects real mute where readable).
+- `VolumeSetter` — `SetVolume(0–100)` (absolute level; TVs over UPnP).
+- `KeyControl` — `SendKey("KEY_…")` (remote keys, tap).
+- `KeyHold` — `PressKey` / `ReleaseKey` (hold a key down; **implementations must guarantee the release** — watchdog, supersede — a stuck press can freeze the device).
+- `TextInput` — `SendText(text)` (type into the device's focused field; `State.TextActive/TextValue` mirror it).
 - `AppControl` — `Apps() []App` + `LaunchApp(id)` (launch named apps, e.g. a TV's streaming apps).
 - `Pollable` — `Poll()` re-reads hardware (internal; used by the poller, **not** a UI capability).
-- `State{Online,On,Brightness,Color,ColorTemp,Scene,SceneSpeed}`, `Color{R,G,B}`, `Scene{ID,Name,Dynamic}` (Dynamic = speed-adjustable), `App{ID,Name}`, capability constants `Cap*`.
+- `State{Online,On,Brightness,Color,ColorTemp,Scene,SceneSpeed,Volume,Muted,TextActive,TextValue}`, `Color{R,G,B}`, `Scene{ID,Name,Dynamic}` (Dynamic = speed-adjustable), `App{ID,Name}`, capability constants `Cap*`.
 
 ## Design rule
 - One interface per concern. A device implements `Device` + **only** the capabilities its hardware has.

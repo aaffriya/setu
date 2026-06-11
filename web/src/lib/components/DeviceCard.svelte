@@ -13,6 +13,7 @@
   import VolumeControl from './VolumeControl.svelte'
   import RemotePad from './RemotePad.svelte'
   import AppShortcuts from './AppShortcuts.svelte'
+  import TextEntry from './TextEntry.svelte'
 
   // Renders one device entirely from its data + capabilities — no per-device
   // markup. Adding a device type to the backend lights up the right controls
@@ -100,7 +101,9 @@
   )
   // Speed only applies to dynamic (animated) scenes; show the slider only then.
   let activeScene = $derived(device.scenes?.find((s) => s.id === device.state.scene))
-  let hasMedia = $derived(caps.has('volume') || caps.has('key') || caps.has('app'))
+  let hasMedia = $derived(
+    caps.has('volume') || caps.has('key') || caps.has('app') || caps.has('text'),
+  )
   // Media controls (volume / remote keys / app shortcuts) need the TV powered on
   // and reachable, so they're gated on online + power. The power toggle itself
   // stays usable while off: a TV reports online even when off (it can be woken by
@@ -191,13 +194,28 @@
       {#if caps.has('volume')}
         <VolumeControl
           value={device.state.volume}
+          muted={device.state.muted}
           disabled={mediaDisabled}
           onChange={(v) => command(device.id, 'set_volume', v)}
           onMute={() => command(device.id, 'mute')}
         />
       {/if}
+      {#if caps.has('text')}
+        <TextEntry
+          value={device.state.text_value}
+          active={device.state.text_active}
+          disabled={mediaDisabled}
+          onSend={(t) => command(device.id, 'send_text', t)}
+        />
+      {/if}
       {#if caps.has('key')}
-        <RemotePad disabled={mediaDisabled} onKey={sendKey} />
+        <RemotePad
+          disabled={mediaDisabled}
+          holdable={caps.has('key_hold')}
+          onKey={sendKey}
+          onKeyDown={(k) => command(device.id, 'key_down', k)}
+          onKeyUp={(k) => command(device.id, 'key_up', k)}
+        />
       {/if}
     </div>
   {/if}

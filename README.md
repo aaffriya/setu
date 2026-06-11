@@ -158,15 +158,19 @@ All endpoints require `Authorization: Bearer <token>` (the WebSocket also accept
 | | `{"action":"set_color_temp","value":2700}` | white temperature (Kelvin) |
 | | `{"action":"set_scene","value":11}` | preset scene id (see device `scenes`) |
 | | `{"action":"set_scene_speed","value":120}` | dynamic-scene speed (10–200) |
-| | `{"action":"volume_up"}` / `{"action":"volume_down"}` / `{"action":"mute"}` | relative volume |
-| | `{"action":"key","value":"KEY_HOME"}` | named remote key |
+| | `{"action":"volume_up"}` / `{"action":"volume_down"}` / `{"action":"mute"}` | relative volume / mute toggle |
+| | `{"action":"set_volume","value":35}` | absolute volume (0–100) |
+| | `{"action":"key","value":"KEY_HOME"}` | named remote key (tap) |
+| | `{"action":"key_down","value":"KEY_RIGHT"}` / `{"action":"key_up","value":"KEY_RIGHT"}` | press-and-hold a key (the device auto-releases a hold the client never ends) |
+| | `{"action":"send_text","value":"breaking bad"}` | type into the device's focused text field |
 | `GET /ws` | — | WebSocket; pushes `{type,device_id,state}` (`snapshot` on connect, then `state_changed`) |
 
 The command body is **uniform and device-agnostic**. The API checks capability support with
 type assertions and returns `400` if a device doesn't support an action (e.g. brightness on a
 plain switch), `404` for an unknown device, `502` for a device/IO failure. Capabilities reported
-today: `switch`, `brightness`, `color`, `color_temp`, `scene`, `volume`, `key`. A device that
-has `scene` also lists its presets in the `scenes` field of `GET /api/devices`.
+today: `switch`, `brightness`, `color`, `color_temp`, `scene`, `volume`, `key`, `key_hold`,
+`app`, `text`. A device that has `scene` also lists its presets in the `scenes` field of
+`GET /api/devices`.
 
 ---
 
@@ -249,7 +253,7 @@ the browser blocks PWA features. No proxy is needed — Go does TLS natively
 | Brand · model (`brand`/`model`) | Capabilities | Transport |
 | --- | --- | --- |
 | Philips WiZ — `WiZ`/`color_bulb` | switch, brightness, color, color_temp, scene | UDP :38899 (local, no cloud) |
-| Samsung Tizen TV — `Samsung`/`tizen` | switch (power), volume, key | REST :8001 + WebSocket/TLS :8002 + Wake-on-LAN |
+| Samsung Tizen TV — `Samsung`/`tizen` | switch (power), volume (absolute + mute), key, key_hold, app, text | REST :8001 + WebSocket/TLS :8002 + UPnP :9197 + Wake-on-LAN |
 
 ### Philips WiZ (`WiZ`/`color_bulb`)
 
@@ -269,6 +273,13 @@ the browser blocks PWA features. No proxy is needed — Go does TLS natively
   still fail if the TV's network-standby ("Power On with Mobile") is off — that's a Samsung/Wi-Fi
   limit, not Setu. **Power off**, volume, and navigation keys (over the WebSocket) work when the
   TV is on.
+- **Volume & mute are real state:** the slider sets an absolute level over UPnP
+  (RenderingControl) and Setu reads volume + mute back on every poll, so changes made with the
+  physical remote show up in the UI within a tick.
+- **Press-and-hold** on every remote button (`key_down`/`key_up`): a hold the client never ends
+  is auto-released by a watchdog — a stuck key would otherwise freeze the TV's remote channel.
+- **Text input:** type into whatever field is focused on the TV; the card mirrors the TV-side
+  field live (focused or not, current contents) from the TV's IME events.
 - **First-use pairing:** the first power-off/key/volume command makes the TV show an **Allow**
   prompt — accept it once. Setu captures the returned token and caches it. Set the TV's *General →
   External Device Manager → Device Connection Manager → Access Notification* to "First Time Only".
@@ -323,8 +334,8 @@ reported `capabilities`.
 - No automation/rules engine — only the event-bus seam it will subscribe to.
 - No HomeKit — but the front-end-protocol seam (the `api` package over the manager/bus) keeps it
   addable later without touching device code.
-- Setu doesn't read a TV's volume level (the protocol is relative up/down), and treats REST
-  reachability as a power proxy — so a TV in network-standby may read as "on".
+- Setu treats REST reachability as a TV's power proxy — so a TV in network-standby may read
+  as "on". (Volume/mute *are* read back for real, over UPnP.)
 
 ---
 

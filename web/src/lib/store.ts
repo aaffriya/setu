@@ -128,8 +128,11 @@ function applyOptimistic(
     case 'set_volume':
       next.volume = value as number
       break
-    // volume_up / volume_down / mute / key have no locally-visible state to
-    // predict — they're sent through as-is.
+    case 'mute':
+      next.muted = !next.muted
+      break
+    // volume_up / volume_down / key / key_down / key_up / send_text have no
+    // locally-predictable state — they're sent through as-is.
   }
   return next
 }

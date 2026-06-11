@@ -16,6 +16,11 @@ export type DeviceState = {
   scene: number
   scene_speed: number
   volume: number
+  muted: boolean
+  // Mirrors a focused text field on the device (e.g. a TV search box): whether
+  // one is focused, and its live contents as typed on the device.
+  text_active: boolean
+  text_value: string
 }
 
 export type Device = {
@@ -44,6 +49,9 @@ export type CommandAction =
   | 'set_volume'
   | 'mute'
   | 'key'
+  | 'key_down'
+  | 'key_up'
+  | 'send_text'
   | 'launch_app'
 
 const TOKEN_KEY = 'setu.token'

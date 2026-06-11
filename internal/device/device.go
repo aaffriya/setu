@@ -22,7 +22,9 @@ const (
 	CapScene      = "scene"
 	CapVolume     = "volume"
 	CapKey        = "key"
+	CapKeyHold    = "key_hold"
 	CapApp        = "app"
+	CapText       = "text"
 )
 
 // Color is a 24-bit RGB color; each channel is 0–255.
@@ -54,10 +56,17 @@ type State struct {
 	// SceneSpeed is the animation speed of a dynamic scene (meaningful for
 	// SceneControl devices); 0 when not reported.
 	SceneSpeed int `json:"scene_speed"`
-	// Volume is 0–100 (meaningful for VolumeSetter devices). For a TV this is a
-	// tracked estimate — the remote channel can't read the real level — kept
-	// accurate by re-calibrating whenever the slider is taken fully to 0 or 100.
+	// Volume is 0–100 (meaningful for VolumeSetter devices). For a TV this is
+	// the real level read back over UPnP (RenderingControl GetVolume).
 	Volume int `json:"volume"`
+	// Muted reports whether audio is muted (meaningful for Volume devices whose
+	// protocol can read it back, e.g. a TV over UPnP GetMute).
+	Muted bool `json:"muted"`
+	// TextActive reports whether a text-input field is currently focused on the
+	// device, and TextValue its live contents (meaningful for TextInput devices
+	// whose protocol reports it, e.g. a TV's IME events).
+	TextActive bool   `json:"text_active"`
+	TextValue  string `json:"text_value"`
 }
 
 // Device is the minimal contract every device implementation must satisfy. It
@@ -124,9 +133,9 @@ type SceneControl interface {
 	SetSceneSpeed(speed int) error
 }
 
-// Volume is implemented by devices with relative volume control (e.g. a TV,
-// where the protocol exposes step-up/step-down/mute rather than an absolute
-// level). Setu doesn't track an absolute volume value for these.
+// Volume is implemented by devices with relative volume control (e.g. a TV).
+// ToggleMute flips mute; implementations that can read the real mute state
+// keep State.Muted current.
 type Volume interface {
 	VolumeUp() error
 	VolumeDown() error
@@ -134,9 +143,8 @@ type Volume interface {
 }
 
 // VolumeSetter is implemented by Volume devices that also accept an absolute
-// level (0–100), so the UI can show a position slider. A TV has no absolute
-// volume on its remote channel, so the implementation tracks a level and steps
-// to the target with up/down keys (State.Volume reflects the tracked level).
+// level (0–100), so the UI can show a position slider (e.g. a TV over UPnP
+// RenderingControl SetVolume; State.Volume reflects the level read back).
 type VolumeSetter interface {
 	SetVolume(pct int) error
 }
@@ -146,6 +154,25 @@ type VolumeSetter interface {
 // navigation, and media keys without inventing one capability per button.
 type KeyControl interface {
 	SendKey(key string) error
+}
+
+// KeyHold is implemented by KeyControl devices whose protocol distinguishes
+// pressing a key from releasing it (e.g. holding a D-pad key to fast-scroll).
+// Safety contract: every press MUST eventually be released — on a Samsung TV a
+// stuck Press freezes the whole remote channel — so implementations guarantee
+// the release themselves (watchdog timer, release-before-next-key), never
+// trusting the client to send ReleaseKey.
+type KeyHold interface {
+	PressKey(key string) error
+	ReleaseKey(key string) error
+}
+
+// TextInput is implemented by devices that accept typed text into a focused
+// on-device input field (e.g. a TV search box). State.TextActive/TextValue
+// mirror the device-side field when the protocol reports it (a TV's IME
+// events), so the UI can show when the device is ready for text.
+type TextInput interface {
+	SendText(text string) error
 }
 
 // App is a launchable application on a device (e.g. a TV streaming app). ID is

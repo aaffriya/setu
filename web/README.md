@@ -9,7 +9,7 @@
 - `src/App.svelte` — shell: header, device grid, empty state, token modal, resume handling.
 - `src/lib/api.ts` — fetch wrapper + bearer token; `wsURL()`.
 - `src/lib/store.ts` — stores + `localStorage` cache + optimistic `command()` + auto-reconnecting WebSocket.
-- `src/lib/components/` — `DeviceCard`, `Toggle`, `BrightnessSlider`, `ColorPicker`, `ColorTempSlider`, `ScenePicker`, `SceneSpeedSlider`, `VolumeControl`, `RemotePad`, `Favorites`.
+- `src/lib/components/` — `DeviceCard`, `Toggle`, `BrightnessSlider`, `ColorPicker`, `ColorTempSlider`, `ScenePicker`, `SceneSpeedSlider`, `VolumeControl` (real level + true mute state), `RemotePad` (tap + press-and-hold on every button), `TextEntry` (send text; mirrors the TV's focused field live), `Favorites`.
 - `public/` — `manifest.webmanifest`, `service-worker.js`, icons. `embed.go` — `//go:embed dist`.
 
 ## Rules

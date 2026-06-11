@@ -36,6 +36,17 @@ dev: ## How to run the hot-reload dev setup (two terminals)
 	@echo "Terminal 1:  go run $(PKG) -config config.yaml"
 	@echo "Terminal 2:  cd $(WEB) && npm run dev   # Vite proxies /api,/ws -> :8080"
 
+daemon: ## Run the built binary as a background daemon (with ./config.yaml)
+	@echo "Starting $(BINARY) in the background..."
+	@touch ./tmp/$(BINARY).log
+	@nohup ./bin/$(BINARY) -config config.yaml > ./tmp/$(BINARY).log 2>&1 &
+	@echo "Daemon started. Logs are being written to ./tmp/$(BINARY).log"
+
+stop-daemon: ## Stop the background daemon (with ./config.yaml)
+	@echo "Stopping $(BINARY)..."
+	@pkill -f "$(BINARY)" || true
+	@echo "Daemon stopped."
+
 docker: ## Build the Docker image (tag: setu)
 	docker build -t $(BINARY) .
 

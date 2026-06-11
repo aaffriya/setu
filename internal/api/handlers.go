@@ -179,6 +179,34 @@ func (s *Server) dispatch(dev device.Device, req commandRequest) error {
 		}
 		return kc.SendKey(key)
 
+	case "key_down", "key_up":
+		kh, ok := dev.(device.KeyHold)
+		if !ok {
+			return badRequest("device does not support press-and-hold keys")
+		}
+		var key string
+		if err := json.Unmarshal(req.Value, &key); err != nil {
+			return badRequest(`key_down/key_up require a string value like "KEY_RIGHT"`)
+		}
+		if req.Action == "key_down" {
+			return kh.PressKey(key)
+		}
+		return kh.ReleaseKey(key)
+
+	case "send_text":
+		ti, ok := dev.(device.TextInput)
+		if !ok {
+			return badRequest("device does not support text input")
+		}
+		var text string
+		if err := json.Unmarshal(req.Value, &text); err != nil {
+			return badRequest("send_text requires a string value")
+		}
+		if text == "" {
+			return badRequest("send_text requires a non-empty string")
+		}
+		return ti.SendText(text)
+
 	case "launch_app":
 		ac, ok := dev.(device.AppControl)
 		if !ok {

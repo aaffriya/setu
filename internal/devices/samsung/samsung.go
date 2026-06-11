@@ -1,17 +1,21 @@
 // Package samsung controls Samsung Tizen Smart TVs (e.g. the AU7700 series).
 //
-// A TV spans three transports, all implemented here with the standard library
+// A TV spans four transports, all implemented here with the standard library
 // plus our existing WebSocket dependency:
 //
-//   - HTTP REST (DIAL) on :8001 — used here for reachability (Poll).
-//   - WebSocket over TLS on :8002 — remote keys (power off, volume, navigation).
-//     Token-authenticated: the TV returns a token after the user taps "Allow"
-//     once; we persist it and reuse it.
+//   - HTTP REST (DIAL) on :8001 — reachability (Poll) and app launch.
+//   - WebSocket over TLS on :8002 — remote keys (click and press/hold), text
+//     input, and TV-side events (IME focus/typing). Token-authenticated: the TV
+//     returns a token after the user taps "Allow" once; we persist and reuse it.
+//     The socket is kept open while the TV is on so its events stream in.
+//   - UPnP SOAP on :9197 (MediaRenderer RenderingControl) — absolute volume %
+//     and mute, both settable and readable back.
 //   - Wake-on-LAN (UDP) — power on (unreliable over Wi-Fi; see On).
 //
-// It implements the Switchable, Volume, KeyControl, and AppControl capabilities.
-// This is the blueprint (internal/devices/example) applied to a non-light device,
-// showing how new capabilities light up matching UI controls automatically.
+// It implements the Switchable, Volume(+Setter), KeyControl(+Hold), TextInput,
+// and AppControl capabilities. This is the blueprint (internal/devices/example)
+// applied to a non-light device, showing how new capabilities light up matching
+// UI controls automatically.
 package samsung
 
 import (
@@ -28,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -47,15 +52,22 @@ const (
 
 	restPort       = "8001"
 	wsPort         = "8002"
+	upnpPort       = "9197" // MediaRenderer (RenderingControl: absolute volume + mute)
 	appName        = "Setu" // shown in the TV's Device Connection Manager
 	defaultTimeout = 4 * time.Second
-	pairTimeout    = 15 * time.Second       // first connect: time for the user to tap "Allow"
-	powerGrace     = 10 * time.Second       // trust an explicit On/Off over REST during the TV's power transition
-	wsIdleClose    = 45 * time.Second       // close the reused remote-control socket after this much idle
-	volumePace     = 120 * time.Millisecond // gap between volume key presses; below this the TV debounces them (tune if steps drop)
+	pairTimeout    = 15 * time.Second // first connect: time for the user to tap "Allow"
+	powerGrace     = 10 * time.Second // trust an explicit On/Off over REST during the TV's power transition
+	holdMax        = 10 * time.Second // watchdog: auto-release a held key the client never released
 
-	volumeRailMargin = 4   // extra presses past 0/100 so a full slide truly hits the rail (and re-calibrates the tracked level)
-	volumeMaxSteps   = 110 // safety cap on presses per SetVolume
+	// maxTextLen mirrors the TV IME's entrylimit (seen in ms.remote.imeStart).
+	maxTextLen = 255
+)
+
+// RenderingControl SOAP endpoint (see docs/devices/samsung.md; the control URL
+// is confirmed against this unit's MediaRenderer description at :9197/dmr).
+const (
+	rcControlPath = "/upnp/control/RenderingControl1"
+	rcService     = "urn:schemas-upnp-org:service:RenderingControl:1"
 )
 
 // keyPattern restricts remote keys to the documented KEY_* form, so arbitrary
@@ -99,9 +111,12 @@ type base struct {
 	powerAt time.Time // when On/Off was last commanded (start of the grace window)
 	powerOn bool      // the power state that command intended
 
-	wsMu   sync.Mutex      // serializes the remote-control socket (dial + writes); guards wsConn/wsIdle
+	wsMu   sync.Mutex      // serializes the remote-control socket (dial + writes); guards wsConn
 	wsConn *websocket.Conn // reused remote-control socket (nil = none open)
-	wsIdle *time.Timer     // idle-closes wsConn after wsIdleClose of no keys
+
+	holdMu    sync.Mutex  // guards the held-key bookkeeping below
+	heldKey   string      // key currently held down via Press ("" = none)
+	holdTimer *time.Timer // watchdog that auto-releases heldKey after holdMax
 }
 
 func (b *base) ID() string     { return b.id }
@@ -231,40 +246,140 @@ func (b *base) reachable(ctx context.Context) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// --- WebSocket remote keys --------------------------------------------------
+// --- WebSocket remote keys & events ------------------------------------------
 //
-// The remote-control socket is opened once and reused for subsequent keys, then
-// idle-closed (wsIdleClose). This avoids a TLS dial + ~500 ms flush on every
-// press — the old fresh-socket-per-key was reliable but slow for volume / D-pad
-// bursts. A stale socket (the TV drops idle ones) is detected on the next write
-// and redialed once, so reliability matches the previous one-shot path.
+// The remote-control socket is opened once and kept open while the TV is on
+// (Poll redials it if it drops — see ensureEvents). Besides avoiding a TLS dial
+// + ~500 ms flush per key, the open socket is how TV-side events reach us: IME
+// focus/typing (ms.remote.ime*) and token refreshes stream in through drainWS.
+// A stale socket is detected on the next write and redialed once, so key sends
+// stay as reliable as the old one-shot path.
 
-// sendKey sends one "Click" key, reusing the cached socket or dialing a new one.
-func (b *base) sendKey(ctx context.Context, key string) error {
-	cmd, err := json.Marshal(map[string]any{
-		"method": "ms.remote.control",
-		"params": map[string]string{
-			"Cmd":          "Click",
-			"DataOfCmd":    key,
-			"Option":       "false",
-			"TypeOfRemote": "SendRemoteKey",
-		},
-	})
-	if err != nil {
-		return err
+// keyParams builds the ms.remote.control params for one key frame.
+// cmd is "Click" (tap), "Press" (hold down), or "Release" (let up).
+func keyParams(cmd, key string) map[string]string {
+	return map[string]string{
+		"Cmd":          cmd,
+		"DataOfCmd":    key,
+		"Option":       "false",
+		"TypeOfRemote": "SendRemoteKey",
+	}
+}
+
+// writeRemote marshals and writes ms.remote.control frames on the reused
+// socket, redialing once if the cached socket went stale. Multi-frame payloads
+// (text input) are retried from the start — resending the full text buffer is
+// idempotent on the TV.
+func (b *base) writeRemote(ctx context.Context, params ...map[string]string) error {
+	frames := make([][]byte, len(params))
+	for i, p := range params {
+		f, err := json.Marshal(map[string]any{"method": "ms.remote.control", "params": p})
+		if err != nil {
+			return err
+		}
+		frames[i] = f
 	}
 
 	b.wsMu.Lock()
 	defer b.wsMu.Unlock()
-
-	if err := b.writeFrameLocked(ctx, cmd); err != nil {
-		// The cached socket was stale/closed — drop it and try once more fresh.
+	if err := b.writeFramesLocked(ctx, frames); err != nil {
 		b.closeWSLocked()
-		if err := b.writeFrameLocked(ctx, cmd); err != nil {
-			return fmt.Errorf("samsung %s: send key %s: %w", b.id, key, err)
+		return b.writeFramesLocked(ctx, frames)
+	}
+	return nil
+}
+
+func (b *base) writeFramesLocked(ctx context.Context, frames [][]byte) error {
+	for _, f := range frames {
+		if err := b.writeFrameLocked(ctx, f); err != nil {
+			return err
 		}
 	}
-	b.armIdleLocked()
+	return nil
+}
+
+// sendKeyCmd sends one key frame with its own timeout context.
+func (b *base) sendKeyCmd(cmd, key string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), pairTimeout+b.timeout)
+	defer cancel()
+	if err := b.writeRemote(ctx, keyParams(cmd, key)); err != nil {
+		return fmt.Errorf("samsung %s: send key %s %s: %w", b.id, cmd, key, err)
+	}
+	return nil
+}
+
+// clickKey taps a key (press and release in one). Any held key is released
+// first: while a key is stuck down the TV ignores every other key.
+func (b *base) clickKey(key string) error {
+	b.releaseHeld()
+	return b.sendKeyCmd("Click", key)
+}
+
+// pressKey holds a key down. The matching Release is guaranteed without
+// trusting the caller: an explicit releaseKey, a newer press/click superseding
+// it, or the holdMax watchdog — whichever comes first.
+func (b *base) pressKey(key string) error {
+	b.releaseHeld()
+	if err := b.sendKeyCmd("Press", key); err != nil {
+		return err
+	}
+	b.holdMu.Lock()
+	b.heldKey = key
+	b.holdTimer = time.AfterFunc(holdMax, b.releaseHeld)
+	b.holdMu.Unlock()
+	return nil
+}
+
+// releaseKey lets a key up. The Release frame is always sent even if our
+// bookkeeping shows nothing held — an extra Release is harmless, a missed one
+// freezes the TV's remote channel.
+func (b *base) releaseKey(key string) error {
+	b.holdMu.Lock()
+	if b.heldKey == key {
+		b.stopHoldLocked()
+	}
+	b.holdMu.Unlock()
+	return b.sendKeyCmd("Release", key)
+}
+
+// releaseHeld releases whatever key is currently held, if any. Best-effort by
+// design: it redials if the socket dropped, since the TV's stuck-key state
+// survives reconnects and only a Release clears it.
+func (b *base) releaseHeld() {
+	b.holdMu.Lock()
+	key := b.heldKey
+	b.stopHoldLocked()
+	b.holdMu.Unlock()
+	if key != "" {
+		_ = b.sendKeyCmd("Release", key)
+	}
+}
+
+func (b *base) stopHoldLocked() {
+	b.heldKey = ""
+	if b.holdTimer != nil {
+		b.holdTimer.Stop()
+		b.holdTimer = nil
+	}
+}
+
+// sendText types into a text field focused on the TV: the base64 payload frame
+// (SendInputString) then the commit frame (SendInputEnd). The TV echoes the
+// resulting buffer back as ms.remote.imeUpdate (handled in handleEvent).
+func (b *base) sendText(text string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), pairTimeout+b.timeout)
+	defer cancel()
+	err := b.writeRemote(ctx,
+		map[string]string{
+			"Cmd":          base64.StdEncoding.EncodeToString([]byte(text)),
+			"DataOfCmd":    "base64",
+			"TypeOfRemote": "SendInputString",
+		},
+		map[string]string{"TypeOfRemote": "SendInputEnd"},
+	)
+	if err != nil {
+		return fmt.Errorf("samsung %s: send text: %w", b.id, err)
+	}
 	return nil
 }
 
@@ -320,15 +435,16 @@ func (b *base) dialWSLocked(ctx context.Context) (*websocket.Conn, error) {
 	connCtx, cancelConn := context.WithTimeout(ctx, pairTimeout)
 	defer cancelConn()
 	if _, data, err := c.Read(connCtx); err == nil {
-		b.captureToken(data)
+		b.handleEvent(data)
 	}
 	go b.drainWS(c)
 	return c, nil
 }
 
-// drainWS keeps reading so the library handles control frames and the read
-// buffer never blocks; it refreshes the token if the TV re-emits a connect
-// event, and clears the cached socket when the connection ends.
+// drainWS keeps reading so the library handles control frames (the TV PINGs
+// every ~minute and drops the socket without a PONG) and TV-side events reach
+// handleEvent. It clears the cached socket — and any stale IME state — when the
+// connection ends; Poll redials while the TV is on.
 func (b *base) drainWS(c *websocket.Conn) {
 	for {
 		_, data, err := c.Read(context.Background())
@@ -336,37 +452,36 @@ func (b *base) drainWS(c *websocket.Conn) {
 			b.wsMu.Lock()
 			if b.wsConn == c {
 				b.wsConn = nil
-				if b.wsIdle != nil {
-					b.wsIdle.Stop()
-					b.wsIdle = nil
-				}
 			}
 			b.wsMu.Unlock()
 			_ = c.Close(websocket.StatusNormalClosure, "")
+			b.clearTextInput()
 			return
 		}
-		b.captureToken(data)
+		b.handleEvent(data)
 	}
 }
 
-// armIdleLocked (re)starts the timer that idle-closes the reused socket. wsMu held.
-func (b *base) armIdleLocked() {
-	if b.wsIdle != nil {
-		b.wsIdle.Stop()
+// ensureEvents keeps the event socket connected (called from Poll while the TV
+// is reachable), so IME events arrive without a command having to open the
+// socket first. It never dials without a token: an unpaired dial pops the
+// "Allow" prompt on the TV, which a background poller must not do.
+func (b *base) ensureEvents(ctx context.Context) {
+	if b.getToken() == "" {
+		return
 	}
-	b.wsIdle = time.AfterFunc(wsIdleClose, func() {
-		b.wsMu.Lock()
-		b.closeWSLocked()
-		b.wsMu.Unlock()
-	})
+	b.wsMu.Lock()
+	defer b.wsMu.Unlock()
+	if b.wsConn != nil {
+		return
+	}
+	if c, err := b.dialWSLocked(ctx); err == nil {
+		b.wsConn = c
+	}
 }
 
 // closeWSLocked closes and clears the cached socket (also unblocks drainWS). wsMu held.
 func (b *base) closeWSLocked() {
-	if b.wsIdle != nil {
-		b.wsIdle.Stop()
-		b.wsIdle = nil
-	}
 	if b.wsConn != nil {
 		c := b.wsConn
 		b.wsConn = nil
@@ -374,24 +489,57 @@ func (b *base) closeWSLocked() {
 	}
 }
 
-// captureToken persists the pairing token from a server message, if present.
-func (b *base) captureToken(data []byte) {
+// handleEvent reacts to one server message: token capture/refresh on
+// ms.channel.connect, and the TV-side text-input lifecycle —
+//
+//	ms.remote.imeStart  → an input field gained focus (TV keyboard open)
+//	ms.remote.imeUpdate → the field's full current contents, base64
+//	ms.remote.imeEnd    → input committed/closed
+//
+// imeEnd is not guaranteed (backing out of a field emits nothing), so
+// clearTextInput is also called from the focus-leaving paths (SendKey of
+// KEY_RETURN/KEY_HOME/…, LaunchApp, Off, socket loss).
+func (b *base) handleEvent(data []byte) {
 	var ev struct {
-		Event string `json:"event"`
-		Data  struct {
-			Token string `json:"token"`
-		} `json:"data"`
+		Event string          `json:"event"`
+		Data  json.RawMessage `json:"data"`
 	}
-	if json.Unmarshal(data, &ev) == nil && ev.Data.Token != "" {
-		b.saveToken(ev.Data.Token)
+	if json.Unmarshal(data, &ev) != nil {
+		return
+	}
+	switch ev.Event {
+	case "ms.channel.connect":
+		var d struct {
+			Token string `json:"token"`
+		}
+		if json.Unmarshal(ev.Data, &d) == nil && d.Token != "" {
+			b.saveToken(d.Token)
+		}
+	case "ms.remote.imeStart":
+		b.applyState(func(s *device.State) { s.TextActive = true; s.TextValue = "" })
+	case "ms.remote.imeUpdate":
+		var enc string
+		if json.Unmarshal(ev.Data, &enc) != nil {
+			return
+		}
+		txt, err := base64.StdEncoding.DecodeString(enc)
+		if err != nil {
+			return
+		}
+		b.applyState(func(s *device.State) { s.TextActive = true; s.TextValue = string(txt) })
+	case "ms.remote.imeEnd":
+		b.clearTextInput()
 	}
 }
 
-// sendKeyNow runs sendKey with its own timeout context.
-func (b *base) sendKeyNow(key string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), pairTimeout+b.timeout)
-	defer cancel()
-	return b.sendKey(ctx, key)
+// clearTextInput drops the mirrored TV text-field state, if any.
+func (b *base) clearTextInput() {
+	b.mu.Lock()
+	stale := b.state.TextActive || b.state.TextValue != ""
+	b.mu.Unlock()
+	if stale {
+		b.applyState(func(s *device.State) { s.TextActive = false; s.TextValue = "" })
+	}
 }
 
 // installedApps asks the TV for its installed apps over a short-lived socket
@@ -416,7 +564,7 @@ func (b *base) installedApps(ctx context.Context) (map[string]string, error) {
 	// connect event carries the token
 	connCtx, cancelConn := context.WithTimeout(ctx, pairTimeout)
 	if _, data, err := c.Read(connCtx); err == nil {
-		b.captureToken(data)
+		b.handleEvent(data)
 	}
 	cancelConn()
 
@@ -463,6 +611,97 @@ func (b *base) installedApps(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return nil, fmt.Errorf("samsung %s: installed-app list timed out", b.id)
+}
+
+// --- UPnP volume & mute (RenderingControl SOAP) ------------------------------
+//
+// The remote key channel has no absolute volume and KEY_MUTE is a blind toggle.
+// The TV's MediaRenderer RenderingControl service gives both, settable AND
+// readable back (verified live on the AU7700), so the volume slider and mute
+// are built on it: one SOAP call each, real state on every Poll.
+
+var (
+	upnpVolRe  = regexp.MustCompile(`<CurrentVolume>([0-9]+)</CurrentVolume>`)
+	upnpMuteRe = regexp.MustCompile(`<CurrentMute>([01])</CurrentMute>`)
+)
+
+// soapRC performs one RenderingControl action. args is the action-specific tail
+// after the fixed InstanceID/Channel pair; the response body is returned for
+// the Get* actions to parse.
+func (b *base) soapRC(ctx context.Context, action, args string) (string, error) {
+	ip, err := b.resolveIP()
+	if err != nil {
+		return "", err
+	}
+	body := `<?xml version="1.0" encoding="utf-8"?>` +
+		`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">` +
+		`<s:Body><u:` + action + ` xmlns:u="` + rcService + `">` +
+		`<InstanceID>0</InstanceID><Channel>Master</Channel>` + args +
+		`</u:` + action + `></s:Body></s:Envelope>`
+
+	reqCtx, cancel := context.WithTimeout(ctx, b.timeout)
+	defer cancel()
+	u := fmt.Sprintf("http://%s%s", net.JoinHostPort(ip.String(), upnpPort), rcControlPath)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, u, strings.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+	req.Header.Set("SOAPACTION", `"`+rcService+`#`+action+`"`)
+
+	resp, err := b.http.Do(req)
+	if err != nil {
+		b.invalidateIP()
+		return "", fmt.Errorf("samsung %s: upnp %s: %w", b.id, action, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("samsung %s: upnp %s: status %d", b.id, action, resp.StatusCode)
+	}
+	return string(data), nil
+}
+
+func (b *base) upnpSetVolume(ctx context.Context, pct int) error {
+	_, err := b.soapRC(ctx, "SetVolume", fmt.Sprintf("<DesiredVolume>%d</DesiredVolume>", pct))
+	return err
+}
+
+func (b *base) upnpVolume(ctx context.Context) (int, error) {
+	body, err := b.soapRC(ctx, "GetVolume", "")
+	if err != nil {
+		return 0, err
+	}
+	m := upnpVolRe.FindStringSubmatch(body)
+	if m == nil {
+		return 0, fmt.Errorf("samsung %s: upnp GetVolume: no CurrentVolume in response", b.id)
+	}
+	v, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, err
+	}
+	return clampVol(v), nil
+}
+
+func (b *base) upnpSetMute(ctx context.Context, mute bool) error {
+	val := "0"
+	if mute {
+		val = "1"
+	}
+	_, err := b.soapRC(ctx, "SetMute", "<DesiredMute>"+val+"</DesiredMute>")
+	return err
+}
+
+func (b *base) upnpMute(ctx context.Context) (bool, error) {
+	body, err := b.soapRC(ctx, "GetMute", "")
+	if err != nil {
+		return false, err
+	}
+	m := upnpMuteRe.FindStringSubmatch(body)
+	if m == nil {
+		return false, fmt.Errorf("samsung %s: upnp GetMute: no CurrentMute in response", b.id)
+	}
+	return m[1] == "1", nil
 }
 
 // --- Wake-on-LAN ------------------------------------------------------------
@@ -566,10 +805,6 @@ type TV struct {
 
 	discMu     sync.Mutex
 	discovered map[string]string // catalog id → launch id learned from the TV (ed.installedApp.get)
-
-	volMu     sync.Mutex
-	vol       int                // authoritative tracked volume 0–100 (advanced as keys are sent)
-	volCancel context.CancelFunc // cancels an in-flight ramp when a newer SetVolume arrives
 }
 
 var (
@@ -578,6 +813,8 @@ var (
 	_ device.Volume       = (*TV)(nil)
 	_ device.VolumeSetter = (*TV)(nil)
 	_ device.KeyControl   = (*TV)(nil)
+	_ device.KeyHold      = (*TV)(nil)
+	_ device.TextInput    = (*TV)(nil)
 	_ device.AppControl   = (*TV)(nil)
 	_ device.Pollable     = (*TV)(nil)
 )
@@ -585,7 +822,11 @@ var (
 func (t *TV) Model() string { return ModelTizen }
 
 func (t *TV) Capabilities() []string {
-	return []string{device.CapSwitch, device.CapVolume, device.CapKey, device.CapApp}
+	return []string{
+		device.CapSwitch, device.CapVolume,
+		device.CapKey, device.CapKeyHold,
+		device.CapApp, device.CapText,
+	}
 }
 
 // On powers the TV on via Wake-on-LAN. NOTE: WoL is unreliable over Wi-Fi (this
@@ -604,93 +845,66 @@ func (t *TV) On() error {
 // The TV stays Online (off ≠ offline): an off TV no longer answers REST but can
 // still be woken by Wake-on-LAN, so we keep it controllable.
 func (t *TV) Off() error {
-	if err := t.sendKeyNow("KEY_POWER"); err != nil {
+	if err := t.clickKey("KEY_POWER"); err != nil {
 		return err
 	}
 	t.markPower(false)
+	t.clearTextInput()
 	t.applyState(func(s *device.State) { s.Online = true; s.On = false })
 	return nil
 }
 
-func (t *TV) VolumeUp() error   { return t.bumpVolume("KEY_VOLUP", +1) }
-func (t *TV) VolumeDown() error { return t.bumpVolume("KEY_VOLDOWN", -1) }
-func (t *TV) ToggleMute() error { return t.sendKeyNow("KEY_MUTE") }
+func (t *TV) VolumeUp() error   { return t.stepVolume("KEY_VOLUP", +1) }
+func (t *TV) VolumeDown() error { return t.stepVolume("KEY_VOLDOWN", -1) }
 
-// bumpVolume sends one volume key and advances the tracked level by one.
-func (t *TV) bumpVolume(key string, d int) error {
-	if err := t.sendKeyNow(key); err != nil {
+// stepVolume nudges the volume with a remote key (which shows the TV's own
+// volume OSD), then reads the real level back over UPnP. The brief pause lets
+// the TV apply the key first — an immediate read returns the pre-step level
+// (seen live). If the read fails, the last known level is advanced by one and
+// the next Poll corrects it.
+func (t *TV) stepVolume(key string, d int) error {
+	if err := t.clickKey(key); err != nil {
 		return err
 	}
-	t.volMu.Lock()
-	t.vol = clampVol(t.vol + d)
-	v := t.vol
-	t.volMu.Unlock()
+	time.Sleep(250 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
+	defer cancel()
+	v, err := t.upnpVolume(ctx)
+	if err != nil {
+		v = clampVol(t.State().Volume + d)
+	}
 	t.applyState(func(s *device.State) { s.Online = true; s.On = true; s.Volume = v })
 	return nil
 }
 
-// SetVolume drives the TV to an absolute level (0–100). The remote channel has no
-// "set volume" and debounces rapid identical keys, so it steps with paced up/down
-// presses. The ramp runs in the background (the UI reflects the target at once)
-// and a newer SetVolume supersedes an in-flight one. Sliding fully to 0 or 100
-// overshoots to the rail, re-calibrating the tracked level if it had drifted
-// (e.g. from the physical remote).
+// SetVolume sets the absolute level (0–100) in one UPnP SetVolume call — no key
+// stepping, no tracked estimate; the slider is the TV's real volume.
 func (t *TV) SetVolume(pct int) error {
 	pct = clampVol(pct)
-
-	t.volMu.Lock()
-	if t.volCancel != nil {
-		t.volCancel() // supersede an in-flight ramp
+	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
+	defer cancel()
+	if err := t.upnpSetVolume(ctx, pct); err != nil {
+		return err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.volCancel = cancel
-	cur := t.vol
-	t.volMu.Unlock()
-
-	key, dir, steps := "KEY_VOLUP", +1, pct-cur
-	if steps < 0 {
-		key, dir, steps = "KEY_VOLDOWN", -1, -steps
-	}
-	switch pct {
-	case 0:
-		key, dir, steps = "KEY_VOLDOWN", -1, cur+volumeRailMargin
-	case 100:
-		key, dir, steps = "KEY_VOLUP", +1, (100-cur)+volumeRailMargin
-	}
-	if steps > volumeMaxSteps {
-		steps = volumeMaxSteps
-	}
-
-	// Reflect the target immediately; the ramp catches up in the background.
 	t.applyState(func(s *device.State) { s.Online = true; s.On = true; s.Volume = pct })
-	go t.rampVolume(ctx, key, dir, steps, pct)
 	return nil
 }
 
-// rampVolume presses the volume key `steps` times, pacing each, until done or
-// superseded; it advances the tracked level per press and snaps it to the final
-// target on completion.
-func (t *TV) rampVolume(ctx context.Context, key string, dir, steps, target int) {
-	for i := 0; i < steps; i++ {
-		if ctx.Err() != nil {
-			return
-		}
-		if err := t.sendKeyNow(key); err != nil {
-			return
-		}
-		t.volMu.Lock()
-		t.vol = clampVol(t.vol + dir)
-		t.volMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(volumePace):
-		}
+// ToggleMute reads the real mute state and sets the opposite over UPnP.
+// (KEY_MUTE is a blind toggle — it can't tell the app whether the TV is now
+// muted; GetMute → SetMute is deterministic and keeps State.Muted truthful.)
+func (t *TV) ToggleMute() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*t.timeout)
+	defer cancel()
+	cur, err := t.upnpMute(ctx)
+	if err != nil {
+		return err
 	}
-	// Completed without being superseded: the tracked level is now exact.
-	t.volMu.Lock()
-	t.vol = target
-	t.volMu.Unlock()
+	if err := t.upnpSetMute(ctx, !cur); err != nil {
+		return err
+	}
+	t.applyState(func(s *device.State) { s.Online = true; s.On = true; s.Muted = !cur })
+	return nil
 }
 
 func clampVol(v int) int {
@@ -704,15 +918,62 @@ func clampVol(v int) int {
 	}
 }
 
-// SendKey sends an arbitrary validated remote key (e.g. KEY_HOME, KEY_UP).
-func (t *TV) SendKey(key string) error {
+// checkKey validates a remote key name (and refuses the service menu).
+func (t *TV) checkKey(key string) error {
 	if !keyPattern.MatchString(key) {
 		return fmt.Errorf("samsung %s: invalid key %q", t.id, key)
 	}
 	if key == "KEY_FACTORY" {
 		return fmt.Errorf("samsung %s: refusing service-menu key", t.id)
 	}
-	return t.sendKeyNow(key)
+	return nil
+}
+
+// focusLeavers are keys that take focus away from a TV text field without the
+// TV emitting ms.remote.imeEnd, so the mirrored text state is cleared locally.
+var focusLeavers = map[string]bool{
+	"KEY_RETURN": true, "KEY_HOME": true, "KEY_EXIT": true, "KEY_POWER": true,
+}
+
+// SendKey taps an arbitrary validated remote key (e.g. KEY_HOME, KEY_UP).
+func (t *TV) SendKey(key string) error {
+	if err := t.checkKey(key); err != nil {
+		return err
+	}
+	if err := t.clickKey(key); err != nil {
+		return err
+	}
+	if focusLeavers[key] {
+		t.clearTextInput()
+	}
+	return nil
+}
+
+// PressKey holds a remote key down (fast scroll etc.). The release is
+// guaranteed by the base: an explicit ReleaseKey, the next key superseding it,
+// or the holdMax watchdog — a stuck Press would freeze the TV's remote channel.
+func (t *TV) PressKey(key string) error {
+	if err := t.checkKey(key); err != nil {
+		return err
+	}
+	return t.pressKey(key)
+}
+
+// ReleaseKey lets a held remote key up.
+func (t *TV) ReleaseKey(key string) error {
+	if err := t.checkKey(key); err != nil {
+		return err
+	}
+	return t.releaseKey(key)
+}
+
+// SendText types into the text field currently focused on the TV (the TV
+// ignores it when no field is focused; State.TextActive reports focus live).
+func (t *TV) SendText(text string) error {
+	if len(text) > maxTextLen {
+		return fmt.Errorf("samsung %s: text exceeds %d bytes", t.id, maxTextLen)
+	}
+	return t.sendText(text)
 }
 
 // Apps lists the launchable streaming apps exposed as UI shortcuts.
@@ -759,6 +1020,7 @@ func (t *TV) LaunchApp(id string) error {
 			return fmt.Errorf("samsung %s: launch app %s: %w", t.id, app.name, err)
 		}
 		if status == http.StatusOK || status == http.StatusCreated {
+			t.clearTextInput() // launching an app takes focus from any text field
 			t.applyState(func(s *device.State) { s.Online = true; s.On = true })
 			return nil
 		}
@@ -774,6 +1036,7 @@ func (t *TV) LaunchApp(id string) error {
 			status, err := t.launchOne(ip, rid)
 			if err == nil && (status == http.StatusOK || status == http.StatusCreated) {
 				t.rememberID(app.id, rid)
+				t.clearTextInput()
 				t.applyState(func(s *device.State) { s.Online = true; s.On = true })
 				return nil
 			}
@@ -843,14 +1106,31 @@ func (t *TV) launchOne(ip net.IP, appID string) (int, error) {
 // MAC regardless). That keeps off ≠ offline, so the power control stays usable to
 // wake it. Right after an explicit On/Off we trust the command for a short grace
 // window (see markPower): the TV keeps answering REST for a few seconds while it
-// powers down, which would otherwise flicker the state. (We can't read volume.)
+// powers down, which would otherwise flicker the state.
+//
+// While the TV is reachable, Poll also reads the real volume and mute over UPnP
+// (so changes made with the physical remote land in the UI within a tick) and
+// keeps the event socket connected (so IME events stream in).
 func (t *TV) Poll() (device.State, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*t.timeout)
 	defer cancel()
 
 	_, err := t.resolveIP()
 	known := err == nil
 	reachable := known && t.reachable(ctx)
+
+	vol, haveVol := 0, false
+	muted, haveMute := false, false
+	if reachable {
+		if v, verr := t.upnpVolume(ctx); verr == nil {
+			vol, haveVol = v, true
+		}
+		if m, merr := t.upnpMute(ctx); merr == nil {
+			muted, haveMute = m, true
+		}
+		t.ensureEvents(ctx)
+	}
+
 	intended, fresh := t.intendedPower()
 	t.updateState(func(s *device.State) {
 		s.Online = known
@@ -858,6 +1138,16 @@ func (t *TV) Poll() (device.State, error) {
 			s.On = intended // just commanded — hold it through the power transition
 		} else {
 			s.On = reachable // live signal: reachable ⇒ on, unreachable ⇒ off
+		}
+		if haveVol {
+			s.Volume = vol
+		}
+		if haveMute {
+			s.Muted = muted
+		}
+		if !s.On {
+			s.TextActive = false // an off TV has no focused input field
+			s.TextValue = ""
 		}
 	})
 	return t.State(), nil

@@ -9,7 +9,7 @@ nothing about it.
 
 ## Routes
 - `GET /api/devices` → `manager.Snapshot()`.
-- `POST /api/devices/{id}/command` → `dispatch`: `on`/`off`, `set_brightness`, `set_color`, `set_color_temp`, `set_scene`, `set_scene_speed`, `volume_up`/`volume_down`/`mute`, `key`, `launch_app`.
+- `POST /api/devices/{id}/command` → `dispatch`: `on`/`off`, `set_brightness`, `set_color`, `set_color_temp`, `set_scene`, `set_scene_speed`, `volume_up`/`volume_down`/`set_volume`/`mute`, `key`, `key_down`/`key_up` (press-and-hold), `send_text`, `launch_app`.
 - `GET /ws` → per-connection bus subscription; pushes `snapshot` (on connect) then `state_changed`.
 - `/` → embedded `web/dist` with SPA fallback (a built-in placeholder if the UI isn't built).
 
