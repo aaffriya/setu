@@ -25,7 +25,7 @@ connects but keys silently do nothing.
 ## 2. REST (DIAL) — port 8001
 
 ```bash
-# device info (also a liveness/power probe)
+# device info (also the power probe: device.PowerState = "on" | "standby")
 curl http://192.168.0.100:8001/api/v2/
 
 # app status (installed / running / version)
@@ -260,7 +260,7 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
   not do). A stale socket is detected on the next write and redialed once.
   Writes are serialized; the drain reader answers control frames, refreshes the
   token, and feeds the IME events into device state.
-- **Press-and-hold safety:** `PressKey` arms a **watchdog** (`holdMax`, 10 s)
+- **Press-and-hold safety:** `PressKey` arms a **watchdog** (`holdMax`, 1 min)
   that auto-releases; any newer press/click first releases the held key; and
   `ReleaseKey` always sends the `Release` frame even if nothing is tracked as
   held (an extra release is harmless — a missed one freezes the remote channel,
@@ -285,19 +285,22 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
   TV's real installed apps (`ed.installedApp.get`, §3.3), matching by name, launching
   that id, and caching it. The UI shows the buttons from `Apps()` (icon-only). HDMI rides
   in the same shortcut grid but is a `KEY_HDMI` remote key, not an app.
-- **`Poll` / online vs. on:** `Poll` reads REST reachability as the **live power
-  signal** (reachable ⇒ on, unreachable ⇒ off), like the WiZ bulb's `getPilot` poll —
-  so powering the TV on/off out-of-band (e.g. the physical remote) is reflected on the
-  next tick. Reachability is a *power* proxy, not a presence proxy: an off TV stops
-  answering REST but can still be woken by WoL, so the TV is reported **online whenever
-  its address resolves** (config hint / ARP). That keeps off ≠ offline, so the UI never
-  hides the power control needed to wake it. Right after an explicit `On`/`Off` the
-  command is trusted for a short **grace window** (~10 s): the TV keeps answering REST
-  for a few seconds while it powers down, which would otherwise flicker the polled
-  state. While reachable, `Poll` also reads the real volume and mute over UPnP (§3.6)
-  and keeps the event socket connected. (Caveat: a TV with network-standby that keeps
-  answering REST while "off" will read as on once the grace window passes — REST alone
-  can't distinguish standby from on.)
+- **`Poll` / online vs. on:** `Poll` reads the REST info's **`device.PowerState`**
+  as the live power signal (`"on"` ⇒ on, `"standby"` ⇒ off, unreachable ⇒ off) — so
+  powering the TV on/off out-of-band (e.g. the physical remote) is reflected on the
+  next tick, **and a TV answering REST from network standby correctly reads as off**
+  (plain reachability used to misread that as on). Older firmware without the field
+  falls back to reachable ⇒ on. REST is a *power* proxy, not a presence proxy: an off
+  TV can still be woken by WoL, so the TV is reported **online whenever its address
+  resolves** (config hint / ARP). That keeps off ≠ offline, so the UI never hides the
+  power control needed to wake it. Right after an explicit `On`/`Off` the command is
+  trusted for a short **grace window** (~10 s) while the TV transitions. While on,
+  `Poll` also reads the real volume and mute over UPnP (§3.6) and keeps the event
+  socket connected.
+- **`Off` is toggle-safe:** `KEY_POWER` toggles, it doesn't "turn off". If the app's
+  state had drifted (showing on for a standby TV), blindly sending it would **wake**
+  the TV — the exact bug this guards against. `Off` checks `PowerState` first and
+  only sends the key when the TV really is on; otherwise it just corrects the state.
 
 **Known tradeoffs (not bugs):** `On` returns success once the WoL packet is sent
 (it can't confirm the TV woke — the next poll reconciles); `SetVolume`/`ToggleMute`

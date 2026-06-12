@@ -200,14 +200,6 @@
           onMute={() => command(device.id, 'mute')}
         />
       {/if}
-      {#if caps.has('text')}
-        <TextEntry
-          value={device.state.text_value}
-          active={device.state.text_active}
-          disabled={mediaDisabled}
-          onSend={(t) => command(device.id, 'send_text', t)}
-        />
-      {/if}
       {#if caps.has('key')}
         <RemotePad
           disabled={mediaDisabled}
@@ -215,6 +207,14 @@
           onKey={sendKey}
           onKeyDown={(k) => command(device.id, 'key_down', k)}
           onKeyUp={(k) => command(device.id, 'key_up', k)}
+        />
+      {/if}
+      {#if caps.has('text')}
+        <TextEntry
+          value={device.state.text_value}
+          active={device.state.text_active}
+          disabled={mediaDisabled}
+          onSend={(t) => command(device.id, 'send_text', t)}
         />
       {/if}
     </div>

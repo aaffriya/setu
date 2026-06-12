@@ -334,8 +334,9 @@ reported `capabilities`.
 - No automation/rules engine — only the event-bus seam it will subscribe to.
 - No HomeKit — but the front-end-protocol seam (the `api` package over the manager/bus) keeps it
   addable later without touching device code.
-- Setu treats REST reachability as a TV's power proxy — so a TV in network-standby may read
-  as "on". (Volume/mute *are* read back for real, over UPnP.)
+- A TV's power state is read from REST `device.PowerState` (on vs. standby), volume/mute over
+  UPnP — all real, polled state. Only firmware too old to report `PowerState` falls back to
+  reachability (where network standby can read as "on").
 
 ---
 

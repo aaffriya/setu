@@ -16,12 +16,15 @@
     <polygon points="6,3 8.7,3 18,21 15.3,21" fill="#E50914" />
   </svg>
 {:else if name === 'Prime Video'}
-  <!-- Prime Video: brand-blue (#00A8E1) tile, white play button + the signature
-       "smile" swoosh curving up beneath it. -->
+  <!-- Prime Video: the current app-icon lockup — dark navy tile, stacked white
+       lowercase "prime / video" wordmark with the Amazon smile (arrow tip at
+       the right end) curving under "prime". -->
   <svg class={cls} viewBox="0 0 24 24" aria-hidden="true">
-    <rect x="2" y="3.5" width="20" height="17" rx="4.5" fill="#00A8E1" />
-    <path d="M9.6 7.9 15.7 11.5 9.6 15.1z" fill="#fff" />
-    <path d="M5.2 16.1c4 2.6 9.6 2.5 13.6-.3" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" />
+    <rect x="2" y="3" width="20" height="18" rx="4.5" fill="#19222E" />
+    <text x="12" y="10.4" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="5.6" font-weight="700" letter-spacing="0.2" fill="#fff">prime</text>
+    <path d="M6.8 11.9c3.2 2 7.2 2 10.1.1" fill="none" stroke="#8AD8F8" stroke-width="1.2" stroke-linecap="round" />
+    <path d="M16.9 12 17 10.7l-1.2.5" fill="none" stroke="#8AD8F8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+    <text x="12" y="18.6" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="5.6" font-weight="700" letter-spacing="0.2" fill="#fff">video</text>
   </svg>
 {:else if name === 'Spotify'}
   <svg class={cls} viewBox="0 0 24 24" aria-hidden="true">

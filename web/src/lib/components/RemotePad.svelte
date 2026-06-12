@@ -89,8 +89,9 @@
 </script>
 
 <div class="space-y-3">
-  <!-- D-pad -->
-  <div class="mx-auto grid w-44 grid-cols-3 gap-1.5">
+  <!-- D-pad: a roomier gap than the other rows so neighbouring arrows aren't
+       mis-tapped (button size unchanged — only the spacing grew). -->
+  <div class="mx-auto grid w-48 grid-cols-3 gap-3">
     <span></span>
     <button class="setu-key h-11" {disabled} {...press('KEY_UP')} aria-label="Up">▲</button>
     <span></span>

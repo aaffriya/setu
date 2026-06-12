@@ -57,7 +57,7 @@ const (
 	defaultTimeout = 4 * time.Second
 	pairTimeout    = 15 * time.Second // first connect: time for the user to tap "Allow"
 	powerGrace     = 10 * time.Second // trust an explicit On/Off over REST during the TV's power transition
-	holdMax        = 10 * time.Second // watchdog: auto-release a held key the client never released
+	holdMax        = time.Minute      // watchdog: auto-release a held key the client never released
 
 	// maxTextLen mirrors the TV IME's entrylimit (seen in ms.remote.imeStart).
 	maxTextLen = 255
@@ -223,27 +223,44 @@ func (b *base) saveToken(tok string) {
 	}
 }
 
-// --- REST (reachability) ----------------------------------------------------
+// --- REST (power state / reachability) ---------------------------------------
 
-// reachable reports whether the TV answers its DIAL REST endpoint.
-func (b *base) reachable(ctx context.Context) bool {
+// powerState asks the TV's DIAL REST endpoint for its real power state. It
+// returns the reported state ("on" or "standby") and whether the endpoint
+// answered at all. A TV in network standby keeps answering REST — mere
+// reachability would misread that as "on" (and a KEY_POWER "off" would then
+// *wake* it, since the key is a toggle), so the JSON's device.PowerState is
+// the authoritative signal. Older firmware without the field reads as "on"
+// when reachable (the previous behavior).
+func (b *base) powerState(ctx context.Context) (state string, reachable bool) {
 	ip, err := b.resolveIP()
 	if err != nil {
-		return false
+		return "", false
 	}
 	u := fmt.Sprintf("http://%s/api/v2/", net.JoinHostPort(ip.String(), restPort))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return false
+		return "", false
 	}
 	resp, err := b.http.Do(req)
 	if err != nil {
 		b.invalidateIP()
-		return false
+		return "", false
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode == http.StatusOK
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	var info struct {
+		Device struct {
+			PowerState string `json:"PowerState"`
+		} `json:"device"`
+	}
+	if json.Unmarshal(body, &info) != nil || info.Device.PowerState == "" {
+		return "on", true
+	}
+	return info.Device.PowerState, true
 }
 
 // --- WebSocket remote keys & events ------------------------------------------
@@ -842,11 +859,22 @@ func (t *TV) On() error {
 }
 
 // Off powers the TV off via the remote KEY_POWER (reliable when the TV is on).
-// The TV stays Online (off ≠ offline): an off TV no longer answers REST but can
-// still be woken by Wake-on-LAN, so we keep it controllable.
+// KEY_POWER is a *toggle*, so it first checks the TV's real power state: if the
+// TV is already in standby (the app's state had drifted — e.g. network standby
+// read as "on"), sending the key would turn the TV ON. In that case it just
+// corrects the state, no key. The TV stays Online (off ≠ offline): an off TV no
+// longer answers REST but can still be woken by Wake-on-LAN.
 func (t *TV) Off() error {
-	if err := t.clickKey("KEY_POWER"); err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
+	ps, _ := t.powerState(ctx)
+	cancel()
+	// Send the toggle only when the TV really is on. In standby (state drift —
+	// the app showed "on" for an off TV) or unreachable (deep off, or a blip the
+	// next poll corrects), KEY_POWER would *wake* it; just correct the state.
+	if ps == "on" {
+		if err := t.clickKey("KEY_POWER"); err != nil {
+			return err
+		}
 	}
 	t.markPower(false)
 	t.clearTextInput()
@@ -1097,19 +1125,20 @@ func (t *TV) launchOne(ip net.IP, appID string) (int, error) {
 	return resp.StatusCode, nil
 }
 
-// Poll reflects the TV's real power state, like the WiZ bulb's getPilot poll: it
-// reads REST reachability as the live power signal, so turning the TV on/off
+// Poll reflects the TV's real power state, like the WiZ bulb's getPilot poll:
+// it reads the REST endpoint's reported device.PowerState as the live power
+// signal ("on" vs "standby" — see powerState), so turning the TV on/off
 // out-of-band (e.g. with the physical remote) shows up in the UI on the next
-// tick. REST reachability is a *power* proxy, not a presence proxy — an off TV
-// stops answering REST but can still be woken by Wake-on-LAN — so the TV is
-// reported Online whenever its address resolves (config hint / ARP; WoL works by
-// MAC regardless). That keeps off ≠ offline, so the power control stays usable to
-// wake it. Right after an explicit On/Off we trust the command for a short grace
-// window (see markPower): the TV keeps answering REST for a few seconds while it
-// powers down, which would otherwise flicker the state.
+// tick, and a TV answering REST from network standby no longer reads as on.
+// REST is a *power* proxy, not a presence proxy — an off TV can still be woken
+// by Wake-on-LAN — so the TV is reported Online whenever its address resolves
+// (config hint / ARP; WoL works by MAC regardless). That keeps off ≠ offline,
+// so the power control stays usable to wake it. Right after an explicit On/Off
+// we trust the command for a short grace window (see markPower): the TV's
+// power transition takes a few seconds, which would otherwise flicker the state.
 //
-// While the TV is reachable, Poll also reads the real volume and mute over UPnP
-// (so changes made with the physical remote land in the UI within a tick) and
+// While the TV is on, Poll also reads the real volume and mute over UPnP (so
+// changes made with the physical remote land in the UI within a tick) and
 // keeps the event socket connected (so IME events stream in).
 func (t *TV) Poll() (device.State, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*t.timeout)
@@ -1117,11 +1146,15 @@ func (t *TV) Poll() (device.State, error) {
 
 	_, err := t.resolveIP()
 	known := err == nil
-	reachable := known && t.reachable(ctx)
+	var on bool
+	if known {
+		ps, _ := t.powerState(ctx)
+		on = ps == "on"
+	}
 
 	vol, haveVol := 0, false
 	muted, haveMute := false, false
-	if reachable {
+	if on {
 		if v, verr := t.upnpVolume(ctx); verr == nil {
 			vol, haveVol = v, true
 		}
@@ -1137,7 +1170,7 @@ func (t *TV) Poll() (device.State, error) {
 		if fresh {
 			s.On = intended // just commanded — hold it through the power transition
 		} else {
-			s.On = reachable // live signal: reachable ⇒ on, unreachable ⇒ off
+			s.On = on // live signal from device.PowerState
 		}
 		if haveVol {
 			s.Volume = vol
