@@ -3,6 +3,11 @@
 Reference docs for humans **and** AI assistants — point-to-point, so a module can
 be understood or extended without re-deriving context.
 
+## Cross-module behavior
+- [`runtime.md`](runtime.md) — command/state flow, timing model, socket
+  lifecycles (browser + TV), the three caching layers, addressing invariants.
+  **Read first when touching anything that spans packages.**
+
 ## Native device protocols
 - [`devices/wiz.md`](devices/wiz.md) — Philips WiZ (UDP getPilot/setPilot, discovery).
 - [`devices/samsung.md`](devices/samsung.md) — Samsung Tizen (REST + WebSocket + Wake-on-LAN, key codes, app IDs).

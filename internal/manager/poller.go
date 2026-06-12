@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"setu/internal/device"
@@ -22,6 +23,7 @@ type Poller struct {
 	interval time.Duration
 	log      *slog.Logger
 
+	mu   sync.Mutex // guards last: pollOnce polls devices concurrently
 	last map[string]device.State
 }
 
@@ -56,27 +58,47 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-// pollOnce polls every Pollable device once and publishes any changes. State is
-// a comparable struct, so a plain == detects changes without extra bookkeeping.
+// pollOnce polls every Pollable device once and publishes any changes.
+//
+// Devices are polled concurrently, NOT in sequence: a Poll on an unreachable
+// device runs to its full network timeout (an off TV is ~4s of REST connect
+// timeout per tick; an unplugged WiZ bulb ~3.5s of discovery + rpc), and done
+// serially one slow device would delay every other device's state freshness to
+// its own worst case. One goroutine per device per tick is bounded and cheap.
+// The final Wait keeps cycles from overlapping, so a device is never polled
+// twice at once; if a cycle outruns the interval the ticker just drops ticks.
 func (p *Poller) pollOnce() {
+	var wg sync.WaitGroup
 	for _, d := range p.mgr.Devices() {
 		pd, ok := d.(device.Pollable)
 		if !ok {
 			continue
 		}
-		state, err := pd.Poll()
-		if err != nil {
-			p.log.Debug("poll failed", "device", d.ID(), "err", err)
-			continue
-		}
-		if prev, seen := p.last[d.ID()]; seen && prev == state {
-			continue // unchanged; emit nothing
-		}
-		p.last[d.ID()] = state
-		p.bus.Publish(events.Event{
-			Type:     events.StateChanged,
-			DeviceID: d.ID(),
-			State:    state,
-		})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			state, err := pd.Poll()
+			if err != nil {
+				p.log.Debug("poll failed", "device", d.ID(), "err", err)
+				return
+			}
+			// State is a comparable struct, so a plain == detects changes
+			// without extra bookkeeping.
+			p.mu.Lock()
+			prev, seen := p.last[d.ID()]
+			changed := !seen || prev != state
+			if changed {
+				p.last[d.ID()] = state
+			}
+			p.mu.Unlock()
+			if changed {
+				p.bus.Publish(events.Event{
+					Type:     events.StateChanged,
+					DeviceID: d.ID(),
+					State:    state,
+				})
+			}
+		}()
 	}
+	wg.Wait()
 }

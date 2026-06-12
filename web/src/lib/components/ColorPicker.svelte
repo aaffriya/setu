@@ -32,6 +32,18 @@
   })
 
   const sameColor = (a: Color, b: Color) => a.r === b.r && a.g === b.g && a.b === b.b
+
+  // The native picker fires `input` continuously while dragging — debounce it
+  // like the sliders (BrightnessSlider et al.) so a drag sends one command per
+  // pause instead of dozens per second of UDP at the bulb. Preset swatches are
+  // single taps and stay immediate.
+  let debounce: ReturnType<typeof setTimeout> | undefined
+  function handleCustom(event: Event) {
+    const c = fromHex((event.target as HTMLInputElement).value)
+    haptics.slide()
+    clearTimeout(debounce)
+    debounce = setTimeout(() => onPick?.(c), 120)
+  }
 </script>
 
 <div class="flex flex-wrap items-center gap-2">
@@ -59,10 +71,7 @@
       type="color"
       value={toHex(color)}
       {disabled}
-      oninput={(e) => {
-        haptics.slide()
-        onPick?.(fromHex((e.target as HTMLInputElement).value))
-      }}
+      oninput={handleCustom}
       class="absolute -inset-2 h-12 w-12 cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-0"
     />
   </label>

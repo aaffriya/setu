@@ -78,7 +78,11 @@ export async function command(
   action: CommandAction,
   value?: number | Color | string,
 ): Promise<void> {
-  const prev = get(devices)
+  // Snapshot only the TARGET device, not the whole list: while this command is
+  // on the wire, WS events and other in-flight commands keep updating other
+  // devices, and a whole-list revert on failure would wind those back too
+  // (stale UI until the next event/poll corrects it, seconds later).
+  const prev = get(devices).find((d) => d.id === id)
   devices.update((list) =>
     list.map((d) => (d.id === id ? { ...d, state: applyOptimistic(d.state, action, value) } : d)),
   )
@@ -86,7 +90,12 @@ export async function command(
     const updated = await sendCommand(id, action, value)
     devices.update((list) => list.map((d) => (d.id === id ? updated : d)))
   } catch (err) {
-    devices.set(prev) // revert the optimistic change
+    if (prev) {
+      // Revert just this device's optimistic change. If a newer WS state for
+      // it raced in, the next event/poll re-corrects — same as before, but the
+      // blast radius is one device instead of all of them.
+      devices.update((list) => list.map((d) => (d.id === id ? prev : d)))
+    }
     setError(err instanceof Error ? err.message : 'command failed')
   }
 }
@@ -268,20 +277,32 @@ function openSocket(): void {
     connection.set('unauthorized')
     return
   }
+  // ONE socket at a time: if the current one is live (or still connecting),
+  // keep it. A second socket would duplicate every event in the UI, leak a
+  // server-side subscription, and leave two sets of handlers fighting over the
+  // shared `ws` variable (the old onclose nulling it / scheduling a competing
+  // reconnect, the old onerror closing the new socket).
+  if (ws && ws.readyState !== WebSocket.CLOSING && ws.readyState !== WebSocket.CLOSED) return
   clearReconnect()
+  let sock: WebSocket
   try {
-    ws = new WebSocket(wsURL())
+    sock = new WebSocket(wsURL())
   } catch {
     scheduleReconnect()
     return
   }
+  ws = sock
   connection.set('connecting')
 
-  ws.onopen = () => {
+  // Handlers close over `sock` and bail unless it still owns `ws`, so a
+  // replaced/disconnected socket's late events can never clobber the live one.
+  sock.onopen = () => {
+    if (ws !== sock) return
     backoff = 1000
     connection.set('online')
   }
-  ws.onmessage = (ev) => {
+  sock.onmessage = (ev) => {
+    if (ws !== sock) return
     try {
       const msg = JSON.parse(ev.data as string) as WsMessage
       devices.update((list) =>
@@ -291,14 +312,16 @@ function openSocket(): void {
       // ignore malformed frames
     }
   }
-  ws.onclose = () => {
+  sock.onclose = () => {
+    if (ws !== sock) return
     ws = null
     if (!stopped) {
       connection.set('offline')
       scheduleReconnect()
     }
   }
-  ws.onerror = () => ws?.close()
+  // Close *this* socket, never whatever `ws` points at by now.
+  sock.onerror = () => sock.close()
 }
 
 function scheduleReconnect(): void {
@@ -320,16 +343,17 @@ function clearReconnect(): void {
 export function disconnect(): void {
   stopped = true
   clearReconnect()
-  ws?.close()
-  ws = null
+  const sock = ws
+  ws = null // neutralizes sock's handlers first (they identity-check `ws`)
+  sock?.close()
 }
 
 // resume re-fetches state and re-primes the socket after the tab returns to the
-// foreground (mobile OSes often suspend or kill backgrounded tabs).
+// foreground (mobile OSes often suspend or kill backgrounded tabs). The command
+// path never waits on this: actions fire against the cached list immediately.
+// openSocket itself refuses to double-connect, so calling eagerly is safe.
 export function resume(): void {
   void refresh()
-  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-    backoff = 1000
-    connect()
-  }
+  backoff = 1000 // foreground again — retry eagerly, not at the backed-off pace
+  connect()
 }

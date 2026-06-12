@@ -45,6 +45,10 @@
     setToken(token)
     showSettings = false
     refresh()
+    // Drop any existing socket first: it authenticated with the previous
+    // token, and connect() alone deliberately refuses to replace a live one
+    // (the one-socket rule in store.ts).
+    disconnect()
     connect()
   }
 

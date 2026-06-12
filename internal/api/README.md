@@ -16,6 +16,11 @@ nothing about it.
 ## Files
 - server.go (routing + JSON helpers), auth.go (bearer; also `?token=` for the WS), handlers.go (`dispatch`), ws.go (hub), static.go (embed + SPA + MIME).
 
+## Gotchas
+- ws.go: every write has a 10 s deadline (`wsWriteTimeout`) — half-open mobile sockets must die at the next event, not at kernel TCP timeout (~15 min of leaked goroutine + bus subscription).
+- static.go: `/assets/*` is served `immutable, max-age=1y` (Vite content-hashes the names); `service-worker.js` is `no-cache`. The embedded FS has zero modtimes → no Last-Modified/ETag, so these explicit headers are the only caching signal browsers get.
+- static.go: unknown paths return 200 + index.html (SPA fallback) — the service worker guards against caching that under asset URLs (see `docs/runtime.md`).
+
 ## Errors
 - `400` unsupported capability / bad input · `404` unknown device · `502` device or I/O failure · `401` missing/wrong token.
 

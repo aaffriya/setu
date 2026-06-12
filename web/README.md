@@ -18,6 +18,9 @@
 - **UI-only prefs stay client-side:** favourites (saved color / white-temp / scene presets) live in `localStorage` per device — no backend state, keeping the server lightweight. They're per-browser.
 - Same-origin relative calls; token from `localStorage`; `?token=` on the WebSocket.
 - Resilient to mobile backgrounding: persist state, re-fetch + reconnect on `visibilitychange` / `online`; clean up listeners.
+- **Socket rules** (store.ts — see `docs/runtime.md`): one socket at a time, handlers identity-check `ws === sock`, token change = `disconnect()` + `connect()`.
+- **Continuous controls debounce** (~120 ms): sliders *and* the native color input — anything firing `input` per pixel of drag must not become a command per pixel.
+- Service worker: cache name carries a per-build id (stamped by `vite.config.ts`), so deploys self-evict old caches; the asset branch refuses non-OK / HTML responses (the server's SPA fallback would poison asset URLs).
 
 ## Build / dev
 - `make web` (build) or `npm run dev` (Vite dev server, proxies `/api` + `/ws` → `:8080`).

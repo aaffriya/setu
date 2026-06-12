@@ -15,7 +15,7 @@
 ## Flow
 - `New()`: seed cache from each `device.State()`, then subscribe to the bus.
 - `consume()`: bus `StateChanged` → update cache. `Snapshot()` reads the cache (no device locks, consistent).
-- `Poller`: an **immediate** first poll on `Run`, then every `poll_interval`; calls `Pollable.Poll()` and publishes **only on change**.
+- `Poller`: an **immediate** first poll on `Run`, then every `poll_interval`; calls `Pollable.Poll()` **concurrently** (cycle cost = slowest device, not the sum — an off TV burns a full connect timeout per tick) and publishes **only on change**.
 
 ## Gotchas
 - Works with **zero** devices; `Snapshot()` returns `[]`, never nil.

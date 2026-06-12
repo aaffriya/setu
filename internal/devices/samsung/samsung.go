@@ -1131,11 +1131,13 @@ func (t *TV) launchOne(ip net.IP, appID string) (int, error) {
 // out-of-band (e.g. with the physical remote) shows up in the UI on the next
 // tick, and a TV answering REST from network standby no longer reads as on.
 // REST is a *power* proxy, not a presence proxy — an off TV can still be woken
-// by Wake-on-LAN — so the TV is reported Online whenever its address resolves
-// (config hint / ARP; WoL works by MAC regardless). That keeps off ≠ offline,
-// so the power control stays usable to wake it. Right after an explicit On/Off
-// we trust the command for a short grace window (see markPower): the TV's
-// power transition takes a few seconds, which would otherwise flicker the state.
+// by Wake-on-LAN — so the TV is ALWAYS reported Online: WoL needs only the MAC,
+// no IP. Tying Online to IP resolution would mark an off TV "offline" once its
+// ARP entry expires (minutes, when no ip hint is configured) and the UI would
+// disable the power toggle — the one control that still works. Off ≠ offline.
+// Right after an explicit On/Off we trust the command for a short grace window
+// (see markPower): the TV's power transition takes a few seconds, which would
+// otherwise flicker the state.
 //
 // While the TV is on, Poll also reads the real volume and mute over UPnP (so
 // changes made with the physical remote land in the UI within a tick) and
@@ -1144,6 +1146,9 @@ func (t *TV) Poll() (device.State, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*t.timeout)
 	defer cancel()
 
+	// IP resolution only gates whether the live signals are *queried*; it does
+	// not decide Online (see the doc comment — an unresolvable TV is still
+	// wakeable by MAC, it just reads as powered off until it answers again).
 	_, err := t.resolveIP()
 	known := err == nil
 	var on bool
@@ -1166,7 +1171,7 @@ func (t *TV) Poll() (device.State, error) {
 
 	intended, fresh := t.intendedPower()
 	t.updateState(func(s *device.State) {
-		s.Online = known
+		s.Online = true // always controllable: power-on is WoL by MAC alone
 		if fresh {
 			s.On = intended // just commanded — hold it through the power transition
 		} else {

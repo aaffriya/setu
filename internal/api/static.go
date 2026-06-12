@@ -30,6 +30,15 @@ func (s *Server) staticHandler() http.Handler {
 		if name == "service-worker.js" {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
+		// Vite content-hashes everything under assets/ (index-<hash>.js), so
+		// those files are immutable: cache them hard. The embedded FS has zero
+		// modtimes → http.FileServer emits no Last-Modified/ETag, and without
+		// any caching signal browsers re-download the whole bundle on every
+		// cold load — which matters on plain-HTTP LAN, where no service worker
+		// can run (not a secure context) to absorb it.
+		if strings.HasPrefix(name, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
 		if _, err := fs.Stat(s.dist, name); err != nil {
 			s.serveIndex(w) // not a real file → SPA fallback
 			return
