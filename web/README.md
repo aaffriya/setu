@@ -9,8 +9,9 @@
 - `src/App.svelte` — shell: header, device grid, empty state, token modal, resume handling.
 - `src/lib/api.ts` — fetch wrapper + bearer token; `wsURL()`.
 - `src/lib/store.ts` — stores + `localStorage` cache + optimistic `command()` + auto-reconnecting WebSocket.
-- `src/lib/components/` — `DeviceCard`, `Toggle`, `BrightnessSlider`, `ColorPicker`, `ColorTempSlider`, `ScenePicker`, `SceneSpeedSlider`, `VolumeControl` (real level + true mute state), `RemotePad` (tap + press-and-hold on every button), `TextEntry` (send text; mirrors the TV's focused field live), `Favorites`.
-- `public/` — `manifest.webmanifest`, `service-worker.js`, icons. `embed.go` — `//go:embed dist`.
+- `src/lib/haptics.ts` / `src/lib/wakelock.ts` — feature-detected, fail-soft progressive enhancements (vibration; screen wake lock while a remote is open). Mirror this pattern for any new optional capability.
+- `src/lib/components/` — `DeviceCard`, `Toggle`, `BrightnessSlider`, `ColorPicker`, `ColorTempSlider`, `ScenePicker`, `SceneSpeedSlider`, `VolumeControl` (real level + true mute state), `RemotePad` (tap + press-and-hold on every button; desktop arrow-key D-pad when the card is focused), `TextEntry` (send text; mirrors the TV's focused field live), `Favorites`.
+- `public/` — `manifest.webmanifest` (incl. `shortcuts` → `/?do=all_on|all_off`), `service-worker.js`, icons (`icon.svg` + maskable `icon-{180,192,512}.png`). `embed.go` — `//go:embed dist`.
 
 ## Rules
 - Cards render **from `capabilities`** — no per-device markup. A new backend capability lights up its control automatically.

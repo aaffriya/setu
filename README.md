@@ -130,6 +130,9 @@ listen:
   port: 80               # TCP port (default 80; binding to 80 needs privilege)
   interface: ""          # bind address; blank = all interfaces
   # socket: /run/setu.sock  # serve on a Unix socket instead (tunnel-only)
+  # tls:                  # optional own/self-signed cert → HTTPS (secure context for PWA)
+  #   cert: /etc/setu/cert.pem
+  #   key:  /etc/setu/key.pem
 auth:
   token: "CHANGE_ME"     # bearer token required on /api and /ws — CHANGE THIS
 poll_interval: 5s        # how often to re-read device state (Go duration string)
@@ -141,6 +144,7 @@ devices: []              # empty for now; see "Adding a device"
 | `listen.port` | TCP port. Defaults to `80` (binding to 80 needs privilege — run as root or grant `CAP_NET_BIND_SERVICE`). |
 | `listen.interface` | Bind address (a network interface's IP, e.g. `192.168.1.10`). **Blank = all interfaces.** Use `127.0.0.1` for loopback only. |
 | `listen.socket` | Optional Unix-domain socket path (e.g. `/run/setu.sock`) for tunnel-only, zero-open-port access. When set, it overrides `interface`/`port`. |
+| `listen.tls.cert` / `listen.tls.key` | Optional PEM cert + key. Set **both** to serve HTTPS (stdlib TLS, no proxy) — needed for the PWA's secure-context features. Omit both for plain HTTP (the default, unchanged). No ACME; bring your own cert (or use Tailscale). |
 | `auth.token` | Bearer token for `/api` and `/ws`. The server refuses to start with an empty token and warns if it's still `CHANGE_ME`. |
 | `poll_interval` | Duration like `5s`, `500ms`, `1m`. `0` disables polling. |
 | `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `ip` (optional hint), `series` (optional friendly product/series name shown in the UI, e.g. `AU7700`). |
@@ -202,7 +206,7 @@ type Resolver interface {
 
 ## Listener options
 
-The `listen` block has three fields:
+The `listen` block:
 
 - **TCP (default)** — `port` (default `80`) on `interface`. **Blank `interface` = all
   interfaces;** set it to one address (e.g. `127.0.0.1` for loopback) to **bind to a trusted
@@ -212,6 +216,11 @@ The `listen` block has three fields:
 - **Unix socket** — set `socket: /run/setu.sock` for zero open ports; reach it over an SSH
   tunnel (`ssh -L 8080:/run/setu.sock user@router`). Laptop-friendly; phones need a tunnel app.
   When set, it overrides `interface`/`port`.
+- **TLS (optional)** — set `tls.cert` **and** `tls.key` (PEM paths) and Setu serves HTTPS
+  itself (stdlib `crypto/tls`, no proxy). Leave them unset and it serves plain HTTP exactly as
+  before. This is what makes the LAN address a *secure context* so the PWA can install and run
+  its service worker (see below). Bring your own cert (self-signed is fine on a LAN) — there is
+  **no** ACME/Let's Encrypt auto-cert.
 
 Graceful shutdown is handled on `SIGINT`/`SIGTERM`.
 
@@ -237,14 +246,22 @@ there:
 
 Service workers and "Add to Home Screen" (install, fullscreen, offline app shell) only work in
 a **secure context** — HTTPS **or** `localhost`. Plain `http://<lan-ip>` loads fine but
-the browser blocks PWA features. No proxy is needed — Go does TLS natively
-(`ListenAndServeTLS`). Easiest options:
+the browser blocks PWA features (the frontend feature-detects this and simply skips the service
+worker over plain HTTP). No proxy is needed — Go serves TLS natively. Easiest options:
 
+- **Tailscale** — gives automatic HTTPS on your `*.ts.net` name, zero config in Setu.
 - **`localhost`** via an SSH tunnel — counts as secure, nothing else needed.
-- **Tailscale** — gives automatic HTTPS on your `*.ts.net` name.
-- **Self-signed cert** — trust it once on each device.
+- **Own / self-signed cert** — set `listen.tls.cert` + `listen.tls.key` (see *Listener options*)
+  and trust the cert once on each device. Generate one with, e.g.:
 
-(Phase 1 serves plain HTTP; the listener is the place to add TLS when you want installable PWA.)
+  ```sh
+  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    -keyout key.pem -out cert.pem -subj "/CN=setu.lan" \
+    -addext "subjectAltName=DNS:setu.lan,IP:192.168.0.50"
+  ```
+
+Once on HTTPS, the app is installable across iOS, Android, macOS, Windows and Linux — one PWA,
+no app store. Long-press / right-click the installed icon for the **All on / All off** shortcuts.
 
 ---
 

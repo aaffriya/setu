@@ -8,8 +8,10 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -97,7 +99,7 @@ func run() error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		log.Info("setu listening", "addr", cfg.Listen.String())
+		log.Info("setu listening", "addr", cfg.Listen.String(), "tls", cfg.Listen.TLS.Enabled())
 		if err := httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 		}
@@ -116,8 +118,27 @@ func run() error {
 }
 
 // listen opens the configured listener: a Unix-domain socket when one is
-// configured, otherwise TCP on the configured interface and port.
+// configured, otherwise TCP on the configured interface and port. When TLS is
+// configured it wraps the listener so the server speaks HTTPS — stdlib only, no
+// extra dependency and no behaviour change when TLS is unset.
 func listen(cfg config.ListenConfig) (net.Listener, error) {
+	ln, err := openListener(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.TLS.Enabled() {
+		cert, err := tls.LoadX509KeyPair(cfg.TLS.Cert, cfg.TLS.Key)
+		if err != nil {
+			_ = ln.Close()
+			return nil, fmt.Errorf("config: load TLS keypair: %w", err)
+		}
+		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}})
+	}
+	return ln, nil
+}
+
+// openListener opens the raw (plain) listener for the configured address.
+func openListener(cfg config.ListenConfig) (net.Listener, error) {
 	network, addr := cfg.Network()
 	if network == "unix" {
 		// Remove a stale socket file left by an unclean shutdown.

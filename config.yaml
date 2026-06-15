@@ -8,9 +8,16 @@
 #   interface  bind address; blank = all interfaces. "127.0.0.1" = loopback only.
 #   socket     Unix socket path to serve on instead of TCP (tunnel-only;
 #              overrides interface/port).
+#   tls        own/self-signed cert for HTTPS — needed so browsers treat the LAN
+#              address as a secure context and allow PWA install + offline. Set
+#              both cert and key (PEM paths) to enable; omit for plain HTTP (as
+#              before). No ACME; Tailscale is the zero-config HTTPS alternative.
 # Reach it by hostname (e.g. http://setu.lan) via your router's DNS — see README.
 listen:
   port: 80
+  # tls:
+  #   cert: /etc/setu/cert.pem
+  #   key:  /etc/setu/key.pem
 
 auth:
   # Bearer token required on /api and /ws. CHANGE THIS before any real use.

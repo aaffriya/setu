@@ -91,6 +91,41 @@ listen: {socket: /run/setu.sock}
 	}
 }
 
+func TestListenTLS(t *testing.T) {
+	// Both cert and key set -> TLS enabled.
+	cfg, err := Load(write(t, `
+auth: {token: x}
+listen:
+  port: 443
+  tls:
+    cert: /etc/setu/cert.pem
+    key: /etc/setu/key.pem
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Listen.TLS.Enabled() {
+		t.Error("TLS.Enabled() = false, want true when cert+key set")
+	}
+
+	// Neither set -> TLS disabled (plain HTTP, the default).
+	cfg, err = Load(write(t, "auth: {token: x}\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Listen.TLS.Enabled() {
+		t.Error("TLS.Enabled() = true, want false by default")
+	}
+
+	// Only one of cert/key set is a configuration error.
+	if _, err := Load(write(t, "auth: {token: x}\nlisten: {tls: {cert: /c.pem}}\n")); err == nil {
+		t.Error("expected error when only tls.cert is set")
+	}
+	if _, err := Load(write(t, "auth: {token: x}\nlisten: {tls: {key: /k.pem}}\n")); err == nil {
+		t.Error("expected error when only tls.key is set")
+	}
+}
+
 func TestValidate(t *testing.T) {
 	if _, err := Load(write(t, "poll_interval: 5s\n")); err == nil {
 		t.Error("expected error for missing token")

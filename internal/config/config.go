@@ -43,6 +43,24 @@ type ListenConfig struct {
 	// Socket, when set, serves on this Unix-domain socket instead of TCP
 	// (tunnel-only, zero open ports). Takes precedence over Interface/Port.
 	Socket string `yaml:"socket"`
+	// TLS optionally serves HTTPS with your own certificate. Leave it unset to
+	// serve plain HTTP exactly as before.
+	TLS TLSConfig `yaml:"tls"`
+}
+
+// TLSConfig holds an optional own/self-signed certificate. When both Cert and
+// Key are set, the listener is wrapped with TLS (HTTPS) — needed so browsers
+// treat http://<lan-ip> as a secure context and allow PWA install / service
+// workers. Empty = plain HTTP (the default). No ACME/Let's Encrypt: bring your
+// own cert (or use Tailscale for zero-config HTTPS).
+type TLSConfig struct {
+	Cert string `yaml:"cert"` // PEM certificate file
+	Key  string `yaml:"key"`  // PEM private-key file
+}
+
+// Enabled reports whether TLS should be served (both files configured).
+func (t TLSConfig) Enabled() bool {
+	return t.Cert != "" && t.Key != ""
 }
 
 // Network returns the network and address for net.Listen: a Unix-domain socket
@@ -119,6 +137,9 @@ func (c *Config) validate() error {
 	}
 	if c.Listen.Socket == "" && (c.Listen.Port < 1 || c.Listen.Port > 65535) {
 		return fmt.Errorf("config: listen.port %d out of range (1-65535)", c.Listen.Port)
+	}
+	if (c.Listen.TLS.Cert == "") != (c.Listen.TLS.Key == "") {
+		return fmt.Errorf("config: listen.tls needs both cert and key (or neither)")
 	}
 	seen := make(map[string]struct{}, len(c.Devices))
 	for i, d := range c.Devices {

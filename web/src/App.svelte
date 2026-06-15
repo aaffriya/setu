@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { get } from 'svelte/store'
   import { fade, fly } from 'svelte/transition'
   import { flip } from 'svelte/animate'
   import {
@@ -10,6 +11,7 @@
     connect,
     disconnect,
     resume,
+    command,
     type ConnectionStatus,
   } from './lib/store'
   import { getToken, setToken } from './lib/api'
@@ -26,8 +28,25 @@
     if (document.visibilityState === 'visible') resume()
   }
 
+  // Manifest shortcuts (long-press / jump-list) launch the app at /?do=all_off|all_on.
+  // Fire the matching power command at every switchable device, then strip the
+  // param so a refresh can't replay it. Runs after the first refresh so it acts
+  // on the live device list, not just whatever was cached.
+  function runLaunchAction() {
+    const params = new URLSearchParams(location.search)
+    const action = params.get('do')
+    if (action !== 'all_off' && action !== 'all_on') return
+    const want = action === 'all_off' ? 'off' : 'on'
+    for (const d of get(devices)) {
+      if (d.capabilities.includes('switch')) void command(d.id, want)
+    }
+    params.delete('do')
+    const qs = params.toString()
+    history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash)
+  }
+
   onMount(() => {
-    refresh()
+    refresh().then(runLaunchAction)
     connect()
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('online', resume)
@@ -69,7 +88,7 @@
 <svelte:window onkeydown={(e) => showSettings && e.key === 'Escape' && (showSettings = false)} />
 
 <div
-  class="mx-auto flex min-h-[100dvh] max-w-3xl flex-col px-4 pb-16"
+  class="mx-auto flex min-h-[100dvh] max-w-3xl flex-col px-4 pb-16 lg:max-w-5xl xl:max-w-7xl"
   style="padding-top: max(1.25rem, env(safe-area-inset-top))"
 >
   <header class="flex items-center justify-between gap-3 py-4">
@@ -152,7 +171,7 @@
       </p>
     </div>
   {:else}
-    <main class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <main class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {#each $devices as device (device.id)}
         <div in:fly={{ y: 14, duration: 250 }} animate:flip={{ duration: 200 }}>
           <DeviceCard {device} />
