@@ -22,6 +22,7 @@
   } from './lib/store'
   import { getToken, setToken } from './lib/api'
   import { getTheme, setTheme, type Theme } from './lib/theme'
+  import { canInstall, isStandalone, isIOS, secureContext, promptInstall } from './lib/pwa'
   import DeviceCard from './lib/components/DeviceCard.svelte'
   import Scenes from './lib/components/Scenes.svelte'
 
@@ -538,6 +539,32 @@
           </button>
         {/each}
       </div>
+
+      {#if !isStandalone}
+        <span class="mt-4 block text-sm text-ink/60">Install</span>
+        {#if $canInstall}
+          <button
+            onclick={promptInstall}
+            class="mt-1.5 w-full rounded-xl bg-ink/5 py-2.5 text-sm font-medium text-ink/80 transition hover:bg-ink/10"
+          >
+            Install Setu as an app
+          </button>
+        {:else if isIOS}
+          <p class="mt-1.5 text-xs leading-relaxed text-ink/50">
+            In Safari, tap the Share button, then “Add to Home Screen”.
+          </p>
+        {:else if !secureContext}
+          <p class="mt-1.5 text-xs leading-relaxed text-ink/50">
+            Installing needs a secure (HTTPS) connection. Serve Setu over HTTPS — set
+            <code class="rounded bg-ink/10 px-1">listen.tls</code> in
+            <code class="rounded bg-ink/10 px-1">config.yaml</code>, or reach it via Tailscale.
+          </p>
+        {:else}
+          <p class="mt-1.5 text-xs leading-relaxed text-ink/50">
+            Use your browser’s menu to install (look for “Install” or “Add to Home Screen”).
+          </p>
+        {/if}
+      {/if}
 
       <div class="mt-5 flex gap-2">
         <button

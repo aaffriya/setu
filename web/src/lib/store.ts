@@ -32,10 +32,10 @@ export const lastError = writable<string>('')
 // the header's "updated Xs ago" hint while offline. 0 = never yet.
 export const lastUpdated = writable<number>(0)
 
-// persisted is a writable mirrored to localStorage — the same pattern used for
-// favourites/expanded below, factored out now that several UI-only prefs share
-// it (scenes, rooms, order). Client-side only: no server state (keeps the binary
-// free of user prefs). Per-browser, and resilient to a mobile tab reload.
+// persisted is a writable mirrored to localStorage — the single pattern behind
+// every UI-only pref (favourites, expanded, scenes, rooms, order). Client-side
+// only: no server state (keeps the binary free of user prefs). Per-browser, and
+// resilient to a mobile tab reload.
 function persisted<T>(key: string, fallback: T): Writable<T> {
   let initial = fallback
   try {
@@ -53,6 +53,17 @@ function persisted<T>(key: string, fallback: T): Writable<T> {
     }
   })
   return store
+}
+
+// uid mints an opaque id for client-side records (favourites, scenes). Prefers
+// the platform UUID; the fallback only matters where crypto.randomUUID is absent
+// or throws (older / insecure contexts) and is never parsed — just unique.
+function uid(): string {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `u${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
 }
 
 // Persist the device list so a cold resume paints immediately.
@@ -188,33 +199,7 @@ export type Favorite = {
   brightness?: number
 }
 
-const FAV_KEY = 'setu.favorites'
-
-export const favorites = writable<Record<string, Favorite[]>>(loadFavorites())
-
-favorites.subscribe((all) => {
-  try {
-    localStorage.setItem(FAV_KEY, JSON.stringify(all))
-  } catch {
-    // storage disabled — non-fatal
-  }
-})
-
-function loadFavorites(): Record<string, Favorite[]> {
-  try {
-    return JSON.parse(localStorage.getItem(FAV_KEY) ?? '{}') as Record<string, Favorite[]>
-  } catch {
-    return {}
-  }
-}
-
-function favId(): string {
-  try {
-    return crypto.randomUUID()
-  } catch {
-    return `f${Date.now()}-${Math.random().toString(16).slice(2)}`
-  }
-}
+export const favorites = persisted<Record<string, Favorite[]>>('setu.favorites', {})
 
 export function addFavorite(deviceId: string, fav: Omit<Favorite, 'id'>): void {
   favorites.update((all) => {
@@ -226,7 +211,7 @@ export function addFavorite(deviceId: string, fav: Omit<Favorite, 'id'>): void {
         f.brightness === fav.brightness,
     )
     if (dup) return all
-    return { ...all, [deviceId]: [...list, { ...fav, id: favId() }] }
+    return { ...all, [deviceId]: [...list, { ...fav, id: uid() }] }
   })
 }
 
@@ -261,25 +246,7 @@ export function applyFavorite(deviceId: string, fav: Favorite): void {
 // Whether a card is expanded is a UI preference, so — like favourites — it lives
 // in localStorage rather than the backend, and survives a mobile tab reload.
 
-const EXPAND_KEY = 'setu.expanded'
-
-export const expanded = writable<Record<string, boolean>>(loadExpanded())
-
-expanded.subscribe((map) => {
-  try {
-    localStorage.setItem(EXPAND_KEY, JSON.stringify(map))
-  } catch {
-    // storage disabled — non-fatal
-  }
-})
-
-function loadExpanded(): Record<string, boolean> {
-  try {
-    return JSON.parse(localStorage.getItem(EXPAND_KEY) ?? '{}') as Record<string, boolean>
-  } catch {
-    return {}
-  }
-}
+export const expanded = persisted<Record<string, boolean>>('setu.expanded', {})
 
 export function toggleExpanded(id: string): void {
   expanded.update((map) => ({ ...map, [id]: !map[id] }))
@@ -384,14 +351,6 @@ export function resume(): void {
   void refresh()
   backoff = 1000 // foreground again — retry eagerly, not at the backed-off pace
   connect()
-}
-
-function uid(): string {
-  try {
-    return crypto.randomUUID()
-  } catch {
-    return `s${Date.now()}-${Math.random().toString(16).slice(2)}`
-  }
 }
 
 // --- scenes: manual multi-device presets (snapshot + replay) -----------------

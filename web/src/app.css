@@ -6,8 +6,10 @@
   /* Light is the default. The OS theme is followed by pure CSS
      (prefers-color-scheme) — UNLESS the user forces one: theme.ts toggles
      `.theme-light` / `.theme-dark` on <html>, and those class rules (higher
-     specificity than the bare media query) win. The dark values live in one
-     reusable place via the helper class below. */
+     specificity than the bare media query) win. The dark tokens are repeated in
+     the system-dark media query and the .theme-dark class on purpose: vanilla
+     CSS can't share one declaration block across a media-query'd selector and a
+     plain one, and a custom-property toggle would be more, not less, code. */
   :root {
     color-scheme: light;
     --ink: 15 23 42; /* slate-900 — text, fills, borders (used with opacity) */
