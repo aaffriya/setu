@@ -124,56 +124,9 @@
     wakeLock.request()
     return () => wakeLock.release()
   })
-
-  // Desktop keyboard remote: when focus is inside an open, reachable TV card,
-  // arrow keys drive the D-pad, Enter is OK, and +/-/m drive volume — all through
-  // the same command path as the on-screen buttons. Scoped to the focused card
-  // (so multiple TVs don't fight) and never hijacks typing in a text field.
-  let articleEl: HTMLElement | undefined
-  const DPAD: Record<string, string> = {
-    ArrowUp: 'KEY_UP',
-    ArrowDown: 'KEY_DOWN',
-    ArrowLeft: 'KEY_LEFT',
-    ArrowRight: 'KEY_RIGHT',
-  }
-  function onKeydown(e: KeyboardEvent) {
-    if (mediaDisabled || !articleEl?.contains(document.activeElement)) return
-    const ae = document.activeElement as HTMLElement | null
-    const tag = ae?.tagName
-    // Leave real text fields (TextEntry) and range sliders to the browser.
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || ae?.isContentEditable) return
-    const k = e.key
-    if (k in DPAD) {
-      e.preventDefault()
-      haptics.tap()
-      sendKey(DPAD[k])
-    } else if (k === 'Enter') {
-      // A focused button already activates itself on Enter; only synthesize OK
-      // when focus is elsewhere in the card, not on a real control.
-      if (tag === 'BUTTON' || tag === 'A') return
-      e.preventDefault()
-      haptics.tap()
-      sendKey('KEY_ENTER')
-    } else if (caps.has('volume') && (k === '+' || k === '=')) {
-      e.preventDefault()
-      command(device.id, 'volume_up')
-    } else if (caps.has('volume') && (k === '-' || k === '_')) {
-      e.preventDefault()
-      command(device.id, 'volume_down')
-    } else if (caps.has('volume') && (k === 'm' || k === 'M')) {
-      e.preventDefault()
-      command(device.id, 'mute')
-    }
-  }
-  $effect(() => {
-    if (!isOpen || !caps.has('key')) return
-    window.addEventListener('keydown', onKeydown)
-    return () => window.removeEventListener('keydown', onKeydown)
-  })
 </script>
 
 <article
-  bind:this={articleEl}
   class="rounded-3xl border border-ink/10 bg-ink/[0.06] p-5 backdrop-blur-xl transition-shadow duration-500"
   style={`box-shadow: ${glow}`}
   class:opacity-60={offline}

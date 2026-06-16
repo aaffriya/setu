@@ -10,13 +10,13 @@
 - `src/lib/api.ts` — fetch wrapper + bearer token; `wsURL()`.
 - `src/lib/store.ts` — stores + `localStorage` cache + optimistic `command()` + auto-reconnecting WebSocket.
 - `src/lib/haptics.ts` / `src/lib/wakelock.ts` — feature-detected, fail-soft progressive enhancements (vibration; screen wake lock while a remote is open). Mirror this pattern for any new optional capability.
-- `src/lib/components/` — `DeviceCard`, `Toggle`, `BrightnessSlider`, `ColorPicker`, `ColorTempSlider`, `ScenePicker`, `SceneSpeedSlider`, `VolumeControl` (real level + true mute state), `RemotePad` (tap + press-and-hold on every button; desktop arrow-key D-pad when the card is focused), `TextEntry` (send text; mirrors the TV's focused field live), `Favorites`.
-- `public/` — `manifest.webmanifest` (incl. `shortcuts` → `/?do=all_on|all_off`), `service-worker.js`, icons (`icon.svg` + maskable `icon-{180,192,512}.png`). `embed.go` — `//go:embed dist`.
+- `src/lib/components/` — `DeviceCard`, `Toggle`, `BrightnessSlider`, `ColorPicker`, `ColorTempSlider`, `ScenePicker`, `SceneSpeedSlider`, `VolumeControl` (real level + true mute state), `RemotePad` (tap + press-and-hold on every button), `TextEntry` (send text; mirrors the TV's focused field live), `Favorites`, `Scenes` (header popover + editor: pick devices to snapshot — plus an optional TV source/app — and restore with one tap). Search, room filter and a drag-to-arrange "organize" mode live in `App.svelte`'s header.
+- `public/` — `manifest.webmanifest` (incl. `shortcuts` → `/?do=all_on|all_off`), `service-worker.js`, icons (`icon.svg` + maskable `icon-{180,192,512}.png`), iOS `splash-*.png`. `embed.go` — `//go:embed dist`.
 
 ## Rules
 - Cards render **from `capabilities`** — no per-device markup. A new backend capability lights up its control automatically.
 - **Theme follows the OS** (light/dark via `prefers-color-scheme` — no toggle, no JS, no flash). Style with the theme-aware tokens from `app.css` + `tailwind.config.js`: `ink` (neutral text/fills/borders, always with an opacity, e.g. `text-ink/70`, `bg-ink/5`, `border-ink/10`), `panel` (solid surface), and the `--card-shadow` var. Vivid accents (indigo/fuchsia/emerald/rose) stay literal. **Don't hardcode `white`/`black`/`slate` for neutrals;** reach for `dark:` only for the rare accent the tokens can't express.
-- **UI-only prefs stay client-side:** favourites (saved color / white-temp / scene presets) live in `localStorage` per device — no backend state, keeping the server lightweight. They're per-browser.
+- **UI-only prefs stay client-side:** favourites, scenes, room assignments and manual card order all live in `localStorage` (via the `persisted()` helper in `store.ts`) — no backend state, keeping the server lightweight. They're per-browser.
 - Same-origin relative calls; token from `localStorage`; `?token=` on the WebSocket.
 - Resilient to mobile backgrounding: persist state, re-fetch + reconnect on `visibilitychange` / `online`; clean up listeners.
 - **Socket rules** (store.ts — see `docs/runtime.md`): one socket at a time, handlers identity-check `ws === sock`, token change = `disconnect()` + `connect()`.

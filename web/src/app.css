@@ -3,23 +3,41 @@
 @tailwind utilities;
 
 @layer base {
-  /* Light is the default; the dark block below flips the same tokens. Following
-     the OS is pure CSS (prefers-color-scheme) — no JS, no flash, no toggle. */
+  /* Light is the default. The OS theme is followed by pure CSS
+     (prefers-color-scheme) — UNLESS the user forces one: theme.ts toggles
+     `.theme-light` / `.theme-dark` on <html>, and those class rules (higher
+     specificity than the bare media query) win. The dark values live in one
+     reusable place via the helper class below. */
   :root {
-    color-scheme: light dark;
+    color-scheme: light;
     --ink: 15 23 42; /* slate-900 — text, fills, borders (used with opacity) */
     --panel: 255 255 255; /* solid surface (modal) */
     --page: 247 248 252; /* page base behind the gradient */
     --card-shadow: 0 12px 30px -16px rgba(2, 6, 23, 0.18);
+    --glow-indigo: 0.18; /* gradient-glow strength (stronger in dark) */
+    --glow-fuchsia: 0.14;
   }
 
+  /* System dark (no forced choice) and explicit dark share these values. */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not(.theme-light) {
+      color-scheme: dark;
       --ink: 255 255 255;
       --panel: 17 22 42; /* #11162a */
       --page: 11 16 32; /* #0b1020 */
       --card-shadow: 0 12px 30px -16px rgba(0, 0, 0, 0.6);
+      --glow-indigo: 0.25;
+      --glow-fuchsia: 0.22;
     }
+  }
+  :root.theme-dark {
+    color-scheme: dark;
+    --ink: 255 255 255;
+    --panel: 17 22 42;
+    --page: 11 16 32;
+    --card-shadow: 0 12px 30px -16px rgba(0, 0, 0, 0.6);
+    --glow-indigo: 0.25;
+    --glow-fuchsia: 0.22;
   }
 
   html {
@@ -31,9 +49,10 @@
   body {
     @apply min-h-[100dvh] antialiased;
     color: rgb(var(--ink));
+    /* Glow strengths come from tokens so this one rule serves every theme. */
     background:
-      radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, 0.18), transparent 60%),
-      radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.14), transparent 55%),
+      radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, var(--glow-indigo)), transparent 60%),
+      radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, var(--glow-fuchsia)), transparent 55%),
       rgb(var(--page));
     background-attachment: fixed;
     /* Feel native: no long-press text selection / iOS callout on the chrome. */
@@ -47,15 +66,6 @@
   textarea {
     -webkit-user-select: text;
     user-select: text;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    body {
-      background:
-        radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, 0.25), transparent 60%),
-        radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.22), transparent 55%),
-        rgb(var(--page));
-    }
   }
 }
 
@@ -109,4 +119,23 @@
 /* Warm→cool track for the color-temperature slider (overrides the flat track). */
 .setu-temp {
   background: linear-gradient(to right, #ff9d3c, #ffd9a0, #ffffff, #cfe3ff, #9cc4ff);
+}
+
+/* Cold-start ease-in for the whole shell. Opacity-only (no transform) so it can't
+   break the sticky header's viewport positioning during the animation. */
+@keyframes app-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.app-shell {
+  animation: app-fade-in 0.35s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell {
+    animation: none;
+  }
 }

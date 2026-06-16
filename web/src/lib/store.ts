@@ -8,7 +8,7 @@
 //     (called from visibilitychange / online), so it "just works" after a tab
 //     comes back to the foreground.
 
-import { writable, get } from 'svelte/store'
+import { writable, get, type Writable } from 'svelte/store'
 import {
   listDevices,
   sendCommand,
@@ -28,6 +28,32 @@ export type ConnectionStatus = 'connecting' | 'online' | 'offline' | 'unauthoriz
 export const devices = writable<Device[]>(loadCache())
 export const connection = writable<ConnectionStatus>('connecting')
 export const lastError = writable<string>('')
+// When we last got fresh state (REST refresh or a WS event), as epoch ms. Drives
+// the header's "updated Xs ago" hint while offline. 0 = never yet.
+export const lastUpdated = writable<number>(0)
+
+// persisted is a writable mirrored to localStorage — the same pattern used for
+// favourites/expanded below, factored out now that several UI-only prefs share
+// it (scenes, rooms, order). Client-side only: no server state (keeps the binary
+// free of user prefs). Per-browser, and resilient to a mobile tab reload.
+function persisted<T>(key: string, fallback: T): Writable<T> {
+  let initial = fallback
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw) initial = JSON.parse(raw) as T
+  } catch {
+    // unreadable / disabled — fall back
+  }
+  const store = writable<T>(initial)
+  store.subscribe((v) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(v))
+    } catch {
+      // storage full/disabled — non-fatal
+    }
+  })
+  return store
+}
 
 // Persist the device list so a cold resume paints immediately.
 devices.subscribe((list) => {
@@ -60,6 +86,7 @@ export async function refresh(): Promise<void> {
   try {
     devices.set(await listDevices())
     connection.set('online')
+    lastUpdated.set(Date.now())
     setError('')
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
@@ -308,6 +335,7 @@ function openSocket(): void {
       devices.update((list) =>
         list.map((d) => (d.id === msg.device_id ? { ...d, state: msg.state } : d)),
       )
+      lastUpdated.set(Date.now())
     } catch {
       // ignore malformed frames
     }
@@ -356,4 +384,134 @@ export function resume(): void {
   void refresh()
   backoff = 1000 // foreground again — retry eagerly, not at the backed-off pace
   connect()
+}
+
+function uid(): string {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `s${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+}
+
+// --- scenes: manual multi-device presets (snapshot + replay) -----------------
+// A scene is a *manual* tile that fires several existing commands at once ("Movie
+// mode" = TV on + lamp warm-dim). It's user-triggered only — nothing time- or
+// event-driven (that would be the out-of-scope automation engine). The editor
+// picks which devices to include and snapshots their current look; stored in
+// localStorage like every other UI pref.
+
+export type SceneCommand = {
+  deviceId: string
+  action: CommandAction
+  value?: number | Color | string
+}
+export type Scene = { id: string; name: string; commands: SceneCommand[] }
+
+export const scenes = persisted<Scene[]>('setu.scenes', [])
+
+// snapshotCommands turns a device's current state into the commands that would
+// reproduce its look — power first, then (if on) brightness and whichever colour
+// mode is active, plus volume. Mirrors the optimistic mapping in reverse. Note:
+// a TV's input *source* isn't in device state, so it can't be snapshotted — the
+// editor lets the user attach a source/app launch explicitly (see ScenePick).
+function snapshotCommands(d: Device): SceneCommand[] {
+  const caps = new Set(d.capabilities)
+  const s = d.state
+  const out: SceneCommand[] = []
+  if (caps.has('switch') && !s.on) {
+    out.push({ deviceId: d.id, action: 'off' })
+    return out // off → nothing else to restore
+  }
+  if (caps.has('switch')) out.push({ deviceId: d.id, action: 'on' })
+  if (caps.has('brightness') && s.brightness > 0)
+    out.push({ deviceId: d.id, action: 'set_brightness', value: s.brightness })
+  if (caps.has('color_temp') && s.color_temp > 0)
+    out.push({ deviceId: d.id, action: 'set_color_temp', value: s.color_temp })
+  else if (caps.has('scene') && s.scene > 0)
+    out.push({ deviceId: d.id, action: 'set_scene', value: s.scene })
+  else if (caps.has('color'))
+    out.push({ deviceId: d.id, action: 'set_color', value: s.color })
+  if (caps.has('volume')) out.push({ deviceId: d.id, action: 'set_volume', value: s.volume })
+  return out
+}
+
+// ScenePick is one included device. `launch`, when set, appends an explicit
+// action the snapshot can't express — "app:<id>" launches a TV app, "key:<KEY>"
+// sends a source key (e.g. key:KEY_HDMI) — so a scene can switch the TV's input.
+export type ScenePick = { deviceId: string; launch?: string }
+
+// createScene snapshots the picked devices (plus any chosen source/app) into a
+// named scene. Empty picks → no-op.
+export function createScene(name: string, picks: ScenePick[]): void {
+  const live = get(devices)
+  const commands: SceneCommand[] = []
+  for (const p of picks) {
+    const d = live.find((x) => x.id === p.deviceId)
+    if (!d) continue
+    commands.push(...snapshotCommands(d))
+    if (p.launch?.startsWith('app:'))
+      commands.push({ deviceId: d.id, action: 'launch_app', value: p.launch.slice(4) })
+    else if (p.launch?.startsWith('key:'))
+      commands.push({ deviceId: d.id, action: 'key', value: p.launch.slice(4) })
+  }
+  if (commands.length === 0) return
+  scenes.update((list) => [...list, { id: uid(), name, commands }])
+}
+
+export function removeScene(id: string): void {
+  scenes.update((list) => list.filter((s) => s.id !== id))
+}
+
+// runScene replays a scene's commands through the normal (optimistic) command
+// path. Devices it referenced that no longer exist are skipped harmlessly.
+export function runScene(scene: Scene): void {
+  const live = new Set(get(devices).map((d) => d.id))
+  for (const c of scene.commands) {
+    if (live.has(c.deviceId)) void command(c.deviceId, c.action, c.value)
+  }
+}
+
+// --- rooms & manual order (UI-only organisation) -----------------------------
+// Both are localStorage-only and only matter once there are many devices. `rooms`
+// maps deviceId → room name (absent = unassigned). `order` is the manual card
+// order by id; ids missing from it fall back to server order, appended.
+
+export const rooms = persisted<Record<string, string>>('setu.rooms', {})
+
+export function setRoom(deviceId: string, room: string): void {
+  rooms.update((m) => {
+    const next = { ...m }
+    if (room) next[deviceId] = room
+    else delete next[deviceId]
+    return next
+  })
+}
+
+export const order = persisted<string[]>('setu.order', [])
+
+// orderDevices sorts a device list by the saved manual order; unknown ids keep
+// their incoming (server) order, appended after the explicitly-ordered ones.
+export function orderDevices(list: Device[], ids: string[]): Device[] {
+  if (ids.length === 0) return list
+  const rank = new Map(ids.map((id, i) => [id, i]))
+  return [...list].sort((a, b) => {
+    const ra = rank.get(a.id) ?? Infinity
+    const rb = rank.get(b.id) ?? Infinity
+    return ra === rb ? 0 : ra - rb
+  })
+}
+
+// moveDevice rewrites `order` so dragId sits immediately before overId, using the
+// supplied display order as the base (so a first drag captures today's order).
+export function moveDevice(displayIds: string[], dragId: string, overId: string): void {
+  if (dragId === overId) return
+  const ids = displayIds.filter((id) => id !== dragId)
+  const at = ids.indexOf(overId)
+  if (at < 0) return
+  ids.splice(at, 0, dragId)
+  // No-op if nothing actually moved — `order.set` would otherwise re-persist an
+  // identical list (a localStorage write) on every such call.
+  if (ids.length === displayIds.length && ids.every((id, i) => id === displayIds[i])) return
+  order.set(ids)
 }

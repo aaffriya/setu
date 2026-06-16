@@ -24,17 +24,22 @@ function wakeLockApi(): WakeLockLike | undefined {
 
 let sentinel: WakeLockSentinelLike | null = null
 let holders = 0
+let acquiring = false // guards against two concurrent requests leaking a lock
 
 async function acquire(): Promise<void> {
   const api = wakeLockApi()
-  // Nothing to hold, already held, unsupported, or the page is hidden (the
-  // request would reject) — bail quietly.
-  if (!api || holders === 0 || sentinel || document.visibilityState !== 'visible') return
+  // Nothing to hold, already held, a request already in flight, unsupported, or
+  // the page is hidden (the request would reject) — bail quietly. The `acquiring`
+  // check is what stops two same-tick request()s (e.g. two TV cards opening at
+  // once) from each calling the platform and orphaning one sentinel.
+  if (!api || holders === 0 || sentinel || acquiring || document.visibilityState !== 'visible')
+    return
+  acquiring = true
   try {
     const s = await api.request('screen')
     // A request that resolved after we no longer want it (or after the page
     // went hidden) is stale — drop it immediately.
-    if (holders === 0) {
+    if (holders === 0 || document.visibilityState !== 'visible') {
       void s.release().catch(() => {})
       return
     }
@@ -47,6 +52,8 @@ async function acquire(): Promise<void> {
   } catch {
     // denied / unsupported / hidden — the screen just won't be kept awake
     sentinel = null
+  } finally {
+    acquiring = false
   }
 }
 
