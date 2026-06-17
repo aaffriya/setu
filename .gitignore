@@ -50,3 +50,4 @@ go.work.sum
 /.claude/
 .DS_Store
 tmp/
+certs/

@@ -20,6 +20,10 @@ build-arm64: web ## Cross-compile a static linux/arm64 binary (MikroTik / Pi / O
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
 		go build -trimpath -ldflags="$(LDFLAGS)" -o bin/$(BINARY)-linux-arm64 $(PKG)
 
+build-amd64: web ## Cross-compile a static linux/amd64 binary (MikroTik / Pi / OpenWrt)
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+		go build -trimpath -ldflags="$(LDFLAGS)" -o bin/$(BINARY)-linux-amd64 $(PKG)
+
 build-mipsle: web ## Cross-compile a static linux/mipsle binary (TP-Link Archer C6U / OpenWrt)
 	GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=0 \
 		go build -trimpath -ldflags="$(LDFLAGS)" -o bin/$(BINARY)-linux-mipsle $(PKG)

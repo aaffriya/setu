@@ -286,7 +286,12 @@ function openSocket(): void {
     return
   }
   ws = sock
-  connection.set('connecting')
+  // Don't blink the status chip to "connecting" when we're just recycling an
+  // already-live connection (e.g. a healthy resume — see resume()): keep the
+  // current status and let onopen/onclose settle it. A genuine reconnect comes
+  // in via onclose, which has already set 'offline', so this still shows
+  // "connecting" there.
+  if (get(connection) !== 'online') connection.set('connecting')
 
   // Handlers close over `sock` and bail unless it still owns `ws`, so a
   // replaced/disconnected socket's late events can never clobber the live one.
@@ -346,10 +351,20 @@ export function disconnect(): void {
 // resume re-fetches state and re-primes the socket after the tab returns to the
 // foreground (mobile OSes often suspend or kill backgrounded tabs). The command
 // path never waits on this: actions fire against the cached list immediately.
-// openSocket itself refuses to double-connect, so calling eagerly is safe.
 export function resume(): void {
   void refresh()
   backoff = 1000 // foreground again — retry eagerly, not at the backed-off pace
+  // A backgrounded socket can go *half-open*: the mobile OS / NAT drops the TCP
+  // link without the socket ever leaving readyState OPEN. Since the client never
+  // writes to the WS, nothing detects this — and openSocket() would treat the
+  // zombie as live and refuse to reconnect, so live events stall silently (the
+  // header even keeps reading "Live"). Drop any existing socket first — its
+  // handlers identity-check `ws`, so nulling `ws` neutralizes them — then
+  // reconnect fresh. refresh() above already re-synced, so the brief reconnect
+  // is effectively free and guarantees a working live channel after resume.
+  const stale = ws
+  ws = null
+  stale?.close()
   connect()
 }
 

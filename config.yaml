@@ -16,8 +16,8 @@
 listen:
   port: 80
   # tls:
-  #   cert: /etc/setu/cert.pem
-  #   key:  /etc/setu/key.pem
+  #   cert: certs/setu.pem
+  #   key:  certs/setu-key.pem
 
 auth:
   # Bearer token required on /api and /ws. CHANGE THIS before any real use.
