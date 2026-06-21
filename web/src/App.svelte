@@ -25,6 +25,7 @@
   import { canInstall, isStandalone, isIOS, secureContext, promptInstall } from './lib/pwa'
   import DeviceCard from './lib/components/DeviceCard.svelte'
   import Scenes from './lib/components/Scenes.svelte'
+  import { masonry } from './lib/masonry'
 
   let token = $state(getToken())
   let tokenDraft = $state(getToken())
@@ -175,9 +176,14 @@
     window.removeEventListener('pointerup', endDrag)
     window.removeEventListener('pointercancel', endDrag)
   }
+  // The drag-lift visual (transform + shadow) goes on an INNER wrapper, never on
+  // the grid item itself: the masonry action writes grid-row-end/align-self to the
+  // grid item's inline style, and a `style={…}` binding there would clobber it on
+  // every drag frame (collapsing the card). Stacking (relative z-50) is applied to
+  // the grid item via a class instead, which leaves its inline style untouched.
   function dragStyle(id: string): string {
     if (draggingId !== id) return ''
-    return `transform: translate(${dragDX}px, ${dragDY}px) scale(1.03); transition: none; pointer-events: none; position: relative; z-index: 50; cursor: grabbing; box-shadow: 0 22px 50px -12px rgba(2,6,23,.5);`
+    return `transform: translate(${dragDX}px, ${dragDY}px) scale(1.03); transition: none; pointer-events: none; cursor: grabbing; box-shadow: 0 22px 50px -12px rgba(2,6,23,.5);`
   }
 
   function onVisibility() {
@@ -443,16 +449,24 @@
            320px width and only the column *count* changes — leftover space is
            centered margin, so a card never stretches or shrinks as the desktop
            window resizes. The page also has a 320px min-width so it can't
-           collapse below a usable size. -->
-      <main class="grid grid-cols-1 gap-4 sm:justify-center sm:[grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),320px))]">
+           collapse below a usable size.
+           `use:masonry` packs cards tightly column-by-column so an expanded
+           (tall) card doesn't leave a gap beside the short ones — see masonry.ts.
+           (The action owns grid-auto-rows, so without it this stays a normal grid.) -->
+      <main
+        class="grid grid-cols-1 gap-4 sm:justify-center sm:[grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),320px))]"
+        use:masonry
+      >
         {#each displayDevices as device, i (device.id)}
           <div
             data-devid={device.id}
-            class="rounded-3xl {overId === device.id ? 'ring-2 ring-indigo-400/80' : ''}"
-            style={dragStyle(device.id)}
+            class="rounded-3xl {overId === device.id ? 'ring-2 ring-indigo-400/80' : ''} {draggingId === device.id ? 'relative z-50' : ''}"
             in:fly={{ y: 16, duration: 280, delay: Math.min(i * 45, 270) }}
             animate:flip={{ duration: 220 }}
           >
+            <!-- Inner wrapper carries the drag-lift transform so the grid item's
+                 inline style stays owned by the masonry action (see dragStyle). -->
+            <div class="rounded-3xl" style={dragStyle(device.id)}>
             {#if organizing}
               <div class="mb-2 flex items-center gap-2">
                 <button
@@ -480,6 +494,7 @@
               </div>
             {/if}
             <DeviceCard {device} />
+            </div>
           </div>
         {/each}
       </main>

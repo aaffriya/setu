@@ -25,6 +25,7 @@ const (
 	CapKeyHold    = "key_hold"
 	CapApp        = "app"
 	CapText       = "text"
+	CapWoL        = "wol"
 )
 
 // Color is a 24-bit RGB color; each channel is 0–255.
@@ -100,6 +101,14 @@ type Switchable interface {
 // Dimmable is implemented by devices with adjustable brightness (0–100).
 type Dimmable interface {
 	SetBrightness(pct int) error
+}
+
+// WakeOnLAN is implemented by devices woken with a Wake-on-LAN magic packet
+// (e.g. a PC or NAS). It is fire-and-forget: there is no readable state, so such
+// a device implements neither Switchable nor Pollable — Wake just broadcasts the
+// packet to the device's MAC.
+type WakeOnLAN interface {
+	Wake() error
 }
 
 // ColorControl is implemented by devices with an adjustable RGB color.

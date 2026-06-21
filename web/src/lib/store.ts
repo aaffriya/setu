@@ -111,11 +111,14 @@ export async function refresh(): Promise<void> {
 
 // --- commands (optimistic, reconciled by the response + WS) ------------------
 
+// Returns true when the command reached the device, false on failure — callers
+// can use this for one-shot feedback (e.g. the WoL "Sent" pulse). Existing
+// callers that ignore the result are unaffected.
 export async function command(
   id: string,
   action: CommandAction,
   value?: number | Color | string,
-): Promise<void> {
+): Promise<boolean> {
   // Snapshot only the TARGET device, not the whole list: while this command is
   // on the wire, WS events and other in-flight commands keep updating other
   // devices, and a whole-list revert on failure would wind those back too
@@ -127,6 +130,7 @@ export async function command(
   try {
     const updated = await sendCommand(id, action, value)
     devices.update((list) => list.map((d) => (d.id === id ? updated : d)))
+    return true
   } catch (err) {
     if (prev) {
       // Revert just this device's optimistic change. If a newer WS state for
@@ -135,6 +139,7 @@ export async function command(
       devices.update((list) => list.map((d) => (d.id === id ? prev : d)))
     }
     setError(err instanceof Error ? err.message : 'command failed')
+    return false
   }
 }
 

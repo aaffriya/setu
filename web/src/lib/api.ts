@@ -53,6 +53,7 @@ export type CommandAction =
   | 'key_up'
   | 'send_text'
   | 'launch_app'
+  | 'wake'
 
 const TOKEN_KEY = 'setu.token'
 

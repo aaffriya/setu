@@ -218,6 +218,13 @@ func (s *Server) dispatch(dev device.Device, req commandRequest) error {
 		}
 		return ac.LaunchApp(id)
 
+	case "wake":
+		wol, ok := dev.(device.WakeOnLAN)
+		if !ok {
+			return badRequest("device does not support wake-on-lan")
+		}
+		return wol.Wake()
+
 	default:
 		return badRequest("unknown action: " + req.Action)
 	}

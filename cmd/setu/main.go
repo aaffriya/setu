@@ -25,6 +25,7 @@ import (
 	"setu/internal/devices/example"
 	"setu/internal/devices/samsung"
 	"setu/internal/devices/wiz"
+	"setu/internal/devices/wol"
 	"setu/internal/events"
 	"setu/internal/manager"
 	"setu/internal/resolver"
@@ -61,6 +62,7 @@ func run() error {
 	example.Register(factory) // template / blueprint (no real protocol)
 	wiz.Register(factory)     // Philips WiZ bulbs (UDP)
 	samsung.Register(factory) // Samsung Tizen TVs (REST + WebSocket + WoL)
+	wol.Register(factory)     // Wake-on-LAN targets (PC/NAS/router — magic packet)
 
 	devices, err := factory.BuildAll(cfg.Devices, config.Deps{Resolver: res, Bus: bus})
 	if err != nil {

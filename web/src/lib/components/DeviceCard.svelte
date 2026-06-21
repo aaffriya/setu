@@ -15,6 +15,7 @@
   import RemotePad from './RemotePad.svelte'
   import AppShortcuts from './AppShortcuts.svelte'
   import TextEntry from './TextEntry.svelte'
+  import WakeButton from './WakeButton.svelte'
 
   // Renders one device entirely from its data + capabilities — no per-device
   // markup. Adding a device type to the backend lights up the right controls
@@ -22,6 +23,9 @@
   let { device }: { device: Device } = $props()
 
   let caps = $derived(new Set(device.capabilities))
+  // A Wake-on-LAN device is just a MAC + a Wake button — no light, no media, and
+  // nothing to expand.
+  let isWol = $derived(caps.has('wol'))
   let offline = $derived(!device.state.online)
   let on = $derived(device.state.on)
   let color = $derived(device.state.color)
@@ -139,7 +143,9 @@
   <header class="flex items-start justify-between gap-3">
     <div class="min-w-0">
       <h2 class="truncate text-lg font-semibold leading-tight">{device.name || device.id}</h2>
-      {#if isOpen}
+      {#if isWol}
+        <p class="mt-0.5 truncate font-mono text-xs text-ink/45">{device.mac}</p>
+      {:else if isOpen}
         <p class="mt-0.5 truncate text-xs text-ink/45">
           {device.brand} · {modelLabel}
           {#if offline}<span class="text-rose-500 dark:text-rose-300/80"> · offline</span>{/if}
@@ -150,29 +156,34 @@
       {#if caps.has('switch')}
         <Toggle checked={on} disabled={offline} label={device.name || device.id} onToggle={toggle} />
       {/if}
-      <button
-        type="button"
-        onclick={() => {
-          haptics.tap()
-          toggleExpanded(device.id)
-        }}
-        aria-expanded={isOpen}
-        aria-label={isOpen ? `Collapse ${device.name || device.id}` : `Expand ${device.name || device.id}`}
-        class="grid h-8 w-8 place-items-center rounded-full bg-ink/5 text-ink/60 transition hover:bg-ink/10 hover:text-ink"
-      >
-        <svg
-          class="h-5 w-5 transition-transform duration-300 {isOpen ? 'rotate-180' : ''}"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+      {#if caps.has('wol')}
+        <WakeButton onWake={() => command(device.id, 'wake')} />
+      {/if}
+      {#if hasLight || hasMedia}
+        <button
+          type="button"
+          onclick={() => {
+            haptics.tap()
+            toggleExpanded(device.id)
+          }}
+          aria-expanded={isOpen}
+          aria-label={isOpen ? `Collapse ${device.name || device.id}` : `Expand ${device.name || device.id}`}
+          class="grid h-8 w-8 place-items-center rounded-full bg-ink/5 text-ink/60 transition hover:bg-ink/10 hover:text-ink"
         >
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </button>
+          <svg
+            class="h-5 w-5 transition-transform duration-300 {isOpen ? 'rotate-180' : ''}"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+      {/if}
     </div>
   </header>
 
