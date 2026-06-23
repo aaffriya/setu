@@ -5,7 +5,9 @@
 # then copy just the binary into a tiny final image.
 
 # --- Stage 1: build the Svelte frontend → /web/dist ---
-FROM node:22-alpine AS web
+# Output is just static JS/CSS (arch-independent), so always build on the
+# native BUILDPLATFORM — never under QEMU emulation for the target arch.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
 # Copy manifests first for dependency-layer caching.
 COPY web/package.json web/package-lock.json* ./
@@ -14,24 +16,39 @@ COPY web/ ./
 RUN npm run build
 
 # --- Stage 2: build the static Go binary (embeds web/dist) ---
-FROM golang:1.24-alpine AS build
+# Build stage native runner par chalta hai, Go cross-compile karta hai.
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
+ARG TARGETOS TARGETARCH TARGETVARIANT
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # Bring in the freshly built frontend so //go:embed picks it up.
 COPY --from=web /web/dist ./web/dist
+# TARGETVARIANT = v5/v6/v7 (arm ke liye); "v" hata ke GOARM banata hai.
 # CGO off → fully static binary; -s -w + -trimpath shrink it.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/setu ./cmd/setu
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
+    go build -trimpath -ldflags="-s -w" -o /out/setu ./cmd/setu
 
 # --- Stage 3: tiny final image (just the binary + a default config) ---
-FROM gcr.io/distroless/static-debian12:nonroot AS final
+# scratch works for EVERY target arch (386, arm/v5·v6·v7, mipsle…). Distroless
+# isn't published for those exotic router archs, and the binary is fully static
+# (CGO off) so it needs nothing else — no libc, no shell.
+FROM scratch AS final
 COPY --from=build /out/setu /usr/local/bin/setu
 # A default config; mount your own over it (see README "Deployment").
 COPY config.yaml /etc/setu/config.yaml
-EXPOSE 8080
+EXPOSE 80
+EXPOSE 443
 ENTRYPOINT ["/usr/local/bin/setu", "-config", "/etc/setu/config.yaml"]
 
+# Multi-arch build (cross-compiled, no QEMU for the Go/JS builds), e.g. for a
+# 32-bit ARMv7 router plus arm64 and amd64:
+#
+#   docker buildx build \
+#     --platform linux/amd64,linux/arm64,linux/arm/v7 \
+#     -t setu:latest .
+#
 # NOTE: Setu needs the host network to reach LAN devices, read the ARP table,
 # and (later) send UDP broadcasts / mDNS. Run with host networking and mount a
 # config, e.g.:
