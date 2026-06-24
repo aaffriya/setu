@@ -37,17 +37,21 @@
 
   const isMedia = (caps: string[]) => caps.includes('app') || caps.includes('key')
 
+  // WoL devices are just a Wake trigger — no power, brightness, colour or volume,
+  // so a scene has nothing to capture from them. Keep them out of the picker.
+  let sceneDevices = $derived($devices.filter((d) => !d.capabilities.includes('wol')))
+
   function openCreate() {
     haptics.tap()
     draft = ''
-    picks = Object.fromEntries($devices.map((d) => [d.id, { include: true, launch: '' }]))
+    picks = Object.fromEntries(sceneDevices.map((d) => [d.id, { include: true, launch: '' }]))
     creating = true
     open = false
   }
   function saveScene() {
     const name = draft.trim()
     if (!name) return
-    const sel: ScenePick[] = $devices
+    const sel: ScenePick[] = sceneDevices
       .filter((d) => picks[d.id]?.include)
       .map((d) => ({ deviceId: d.id, launch: picks[d.id].launch || undefined }))
     if (sel.length === 0) return
@@ -209,7 +213,7 @@
       />
 
       <div class="mt-3 min-h-0 flex-1 space-y-0.5 overflow-y-auto rounded-xl bg-ink/[0.03] p-1">
-        {#each $devices as d (d.id)}
+        {#each sceneDevices as d (d.id)}
           {#if picks[d.id]}
           <div class="flex items-center gap-2.5 rounded-lg px-2 py-2">
             <input

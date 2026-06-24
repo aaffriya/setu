@@ -93,12 +93,7 @@
   })
 
   const toggle = (v: boolean) => command(device.id, v ? 'on' : 'off')
-  // 0% means "off" for any dimmable device, so route a slider drag to the bottom
-  // to the power command. Otherwise it would rest at the hardware's minimum dim
-  // level (e.g. WiZ floors dimming at 10%) and the bottom of the track would
-  // visibly snap back up — the light staying on when you dragged it to zero.
-  const setBrightness = (v: number) =>
-    v <= 0 ? command(device.id, 'off') : command(device.id, 'set_brightness', v)
+  const setBrightness = (v: number) => command(device.id, 'set_brightness', v)
   const setColor = (c: Color) => command(device.id, 'set_color', c)
   const setColorTemp = (k: number) => command(device.id, 'set_color_temp', k)
   const setScene = (id: number) => command(device.id, 'set_scene', id)

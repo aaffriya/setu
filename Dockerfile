@@ -42,20 +42,20 @@ EXPOSE 80
 EXPOSE 443
 ENTRYPOINT ["/usr/local/bin/setu", "-config", "/etc/setu/config.yaml"]
 
-# Multi-arch build (cross-compiled, no QEMU for the Go/JS builds), e.g. for a
-# 32-bit ARMv7 router plus arm64 and amd64:
+# Multi-arch build (cross-compiled, no QEMU for the Go/JS builds):
 #
 #   docker buildx build \
-#     --platform linux/amd64,linux/arm64,linux/arm/v7 \
+#     --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v5 \
 #     -t setu:latest .
 #
-# NOTE: Setu needs the host network to reach LAN devices, read the ARP table,
-# and (later) send UDP broadcasts / mDNS. Run with host networking and mount a
-# config, e.g.:
+# Setu needs L2 access to the LAN: it reads the ARP table and sends UDP
+# broadcasts / mDNS. So its network namespace must sit ON the LAN broadcast
+# domain (not NAT'd / routed). Two deployments:
 #
-#   docker run --rm --network host \
-#     -v $PWD/config.yaml:/etc/setu/config.yaml:ro \
-#     setu
+# • Plain Docker / Podman (x86 or Linux host) — host networking + a mounted config:
 #
-# For a Unix-socket listener, also mount a writable dir for the socket, e.g.
+#     docker run --rm --network host \
+#       -v $PWD/config.yaml:/etc/setu/config.yaml:ro setu
+#
+# For a Unix-socket listener, mount a writable dir for the socket, e.g.
 #   -v /run/setu:/run   and set listen: "unix:/run/setu.sock" in the config.
