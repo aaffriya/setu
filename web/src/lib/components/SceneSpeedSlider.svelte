@@ -1,5 +1,6 @@
 <script lang="ts">
   import { haptics } from '../haptics'
+  import Slider from './Slider.svelte'
 
   // Animation speed for dynamic scenes (slow → fast). WiZ range is 10–200.
   const MIN = 10
@@ -19,8 +20,7 @@
   const display = $derived(dragging ?? (value || 100))
 
   let debounce: ReturnType<typeof setTimeout> | undefined
-  function handle(event: Event) {
-    const v = Number((event.target as HTMLInputElement).value)
+  function handle(v: number) {
     dragging = v
     haptics.slide()
     clearTimeout(debounce)
@@ -40,17 +40,7 @@
     <path d="M17 14c1.4 0 2.3-.6 2.3-1.5S18.4 11 18 11.4" />
   </svg>
 
-  <input
-    class="setu-range w-full"
-    type="range"
-    min={MIN}
-    max={MAX}
-    step="5"
-    value={display}
-    {disabled}
-    oninput={handle}
-    aria-label="Scene speed"
-  />
+  <Slider min={MIN} max={MAX} step={5} value={display} {disabled} label="Scene speed" oninput={handle} />
 
   <!-- rabbit (fast) -->
   <svg class="h-4 w-4 shrink-0 text-ink/55" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

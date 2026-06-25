@@ -80,42 +80,47 @@
   }
 }
 
-/* Range slider — plain CSS (outside @layer) so Tailwind never purges it. The
-   track flips with the theme; the white knob reads on both (iOS-style). */
-.setu-range {
-  -webkit-appearance: none;
-  appearance: none;
+/* Pointer-driven slider (components/Slider.svelte). Plain CSS (outside @layer) so
+   Tailwind never purges it. Replaces the native range input, whose track ignores
+   taps on touch — here a tap anywhere on the track jumps the thumb and starts the
+   drag. The track flips with the theme; the white knob reads on both (iOS-style).
+   `flex: 1` lets it grow to fill its row (each parent is a flex row). */
+.setu-slider {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 0; /* 8px track + padding → a comfortable ~26px touch target */
+  cursor: pointer;
+  touch-action: none; /* a drag adjusts the slider — never scrolls the page */
+  outline: none;
+}
+.setu-slider-track {
+  position: relative;
   height: 8px;
   border-radius: 9999px;
   background: rgb(var(--ink) / 0.15);
-  outline: none;
 }
-.setu-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
+.setu-slider-thumb {
+  position: absolute;
+  top: 50%;
   height: 20px;
   width: 20px;
   border-radius: 9999px;
   background: #ffffff;
   border: 1px solid rgb(var(--ink) / 0.12);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  cursor: pointer;
+  transform: translate(-50%, -50%);
   transition: transform 0.15s ease;
 }
-.setu-range::-webkit-slider-thumb:active {
-  transform: scale(1.18);
+.setu-slider.is-dragging .setu-slider-thumb {
+  transform: translate(-50%, -50%) scale(1.18);
 }
-.setu-range::-moz-range-thumb {
-  height: 20px;
-  width: 20px;
-  border: 1px solid rgb(var(--ink) / 0.12);
-  border-radius: 9999px;
-  background: #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  cursor: pointer;
-}
-.setu-range:disabled {
+.setu-slider.is-disabled {
   opacity: 0.4;
+  cursor: not-allowed;
+}
+.setu-slider:focus-visible .setu-slider-track {
+  box-shadow: 0 0 0 2px rgb(var(--page)), 0 0 0 4px rgb(99 102 241 / 0.7);
 }
 
 /* Warm→cool track for the color-temperature slider (overrides the flat track). */

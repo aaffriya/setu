@@ -1,5 +1,6 @@
 <script lang="ts">
   import { haptics } from '../haptics'
+  import Slider from './Slider.svelte'
 
   // Absolute volume slider (0–100). The backend sets and reads the level over
   // UPnP, so `value` is the TV's real volume (re-synced every poll) — no
@@ -25,8 +26,7 @@
   const display = $derived(dragging ?? value)
 
   let debounce: ReturnType<typeof setTimeout> | undefined
-  function handle(event: Event) {
-    const v = Number((event.target as HTMLInputElement).value)
+  function handle(v: number) {
     dragging = v
     haptics.slide()
     clearTimeout(debounce)
@@ -61,15 +61,6 @@
       </svg>
     {/if}
   </button>
-  <input
-    class="setu-range flex-1"
-    type="range"
-    min="0"
-    max="100"
-    value={display}
-    {disabled}
-    oninput={handle}
-    aria-label="Volume"
-  />
+  <Slider min={0} max={100} value={display} {disabled} label="Volume" oninput={handle} />
   <span class="w-9 text-right text-sm tabular-nums text-ink/60">{display}%</span>
 </div>

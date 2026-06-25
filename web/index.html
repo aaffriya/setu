@@ -24,9 +24,193 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Setu" />
     <title>Setu</title>
+
+    <!-- Pre-app splash: shown from the very first paint until the Svelte app
+         mounts, so a cold load (or a slow IoT device) never flashes a blank
+         screen. Inline + framework-free so it paints before app.css and the JS
+         bundle even arrive. If the app never mounts (e.g. the server is down and
+         the bundle can't be fetched), a watchdog swaps the loader for a static
+         "can't reach" card. main.ts removes it the moment it mounts. Colours
+         mirror the page gradient/tokens in app.css for a seamless handoff. -->
+    <style>
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.1rem;
+        color: #0f172a;
+        background:
+          radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, 0.18), transparent 60%),
+          radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.14), transparent 55%),
+          #f7f8fc;
+        transition: opacity 0.4s ease;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #splash.hide {
+        opacity: 0;
+        pointer-events: none;
+      }
+      @media (prefers-color-scheme: dark) {
+        #splash {
+          color: #fff;
+          background:
+            radial-gradient(1200px 600px at 8% -10%, rgba(99, 102, 241, 0.25), transparent 60%),
+            radial-gradient(1000px 520px at 108% 6%, rgba(236, 72, 153, 0.22), transparent 55%),
+            #0b1020;
+        }
+      }
+      .splash-loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1.1rem;
+      }
+      .splash-badge {
+        position: relative;
+        display: grid;
+        place-items: center;
+        height: 4rem;
+        width: 4rem;
+        border-radius: 1.25rem;
+        background: linear-gradient(135deg, #6366f1, #ec4899);
+        box-shadow: 0 12px 30px -8px rgba(99, 102, 241, 0.5);
+      }
+      .splash-badge svg {
+        position: relative;
+        height: 2rem;
+        width: 2rem;
+        color: #fff;
+      }
+      .splash-badge::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 1.25rem;
+        background: rgba(99, 102, 241, 0.4);
+        animation: splash-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+      }
+      @keyframes splash-ping {
+        0% {
+          transform: scale(1);
+          opacity: 0.6;
+        }
+        75%,
+        100% {
+          transform: scale(1.9);
+          opacity: 0;
+        }
+      }
+      .splash-title {
+        font: 600 1.1rem/1 system-ui, -apple-system, sans-serif;
+        opacity: 0.85;
+      }
+      .splash-dots {
+        display: flex;
+        gap: 0.35rem;
+      }
+      .splash-dots span {
+        height: 0.4rem;
+        width: 0.4rem;
+        border-radius: 9999px;
+        background: currentColor;
+        opacity: 0.3;
+        animation: splash-dot 1s ease-in-out infinite;
+      }
+      .splash-dots span:nth-child(2) {
+        animation-delay: 0.15s;
+      }
+      .splash-dots span:nth-child(3) {
+        animation-delay: 0.3s;
+      }
+      @keyframes splash-dot {
+        0%,
+        100% {
+          opacity: 0.25;
+          transform: translateY(0);
+        }
+        50% {
+          opacity: 0.9;
+          transform: translateY(-3px);
+        }
+      }
+      /* Static offline card — revealed by the watchdog if the app never mounts. */
+      .splash-offline {
+        display: none;
+        max-width: 20rem;
+        padding: 0 1.5rem;
+        text-align: center;
+      }
+      #splash.offline .splash-loading {
+        display: none;
+      }
+      #splash.offline .splash-offline {
+        display: block;
+      }
+      .splash-offline h2 {
+        margin: 0 0 0.4rem;
+        font: 600 1.2rem/1.3 system-ui, -apple-system, sans-serif;
+      }
+      .splash-offline p {
+        margin: 0 0 1.2rem;
+        font: 400 0.9rem/1.5 system-ui, -apple-system, sans-serif;
+        opacity: 0.55;
+      }
+      .splash-retry {
+        border: 0;
+        cursor: pointer;
+        padding: 0.6rem 1.5rem;
+        border-radius: 9999px;
+        color: #fff;
+        font: 500 0.9rem system-ui, -apple-system, sans-serif;
+        background: linear-gradient(90deg, #6366f1, #ec4899);
+        box-shadow: 0 10px 24px -10px rgba(99, 102, 241, 0.6);
+      }
+      .splash-retry:active {
+        transform: scale(0.98);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #splash,
+        .splash-badge::before,
+        .splash-dots span {
+          animation: none;
+          transition: none;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="splash" role="status" aria-live="polite">
+      <div class="splash-loading">
+        <div class="splash-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M3 16h18" /><path d="M5 16a7 7 0 0114 0" /><path d="M12 9v7M8 12.5V16M16 12.5V16" />
+          </svg>
+        </div>
+        <div class="splash-title">सेतु</div>
+        <div class="splash-dots"><span></span><span></span><span></span></div>
+      </div>
+      <div class="splash-offline">
+        <h2>Can’t reach Setu</h2>
+        <p>The app couldn’t load. Check that the Setu server is running and that you’re on the same network.</p>
+        <button class="splash-retry" onclick="location.reload()">Retry</button>
+      </div>
+    </div>
+    <script>
+      // Watchdog: if the app hasn't mounted after a grace period — e.g. the
+      // server is down so the JS bundle can't be fetched — swap the loader for a
+      // static offline card so the user never sees a blank screen. main.ts clears
+      // this the instant it mounts.
+      window.__setuSplashWatchdog = setTimeout(function () {
+        var s = document.getElementById('splash')
+        if (s) s.className = 'offline'
+      }, 10000)
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

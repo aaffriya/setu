@@ -1,5 +1,6 @@
 <script lang="ts">
   import { haptics } from '../haptics'
+  import Slider from './Slider.svelte'
 
   // Brightness control (0–100). While dragging we show a local override so the
   // label tracks the thumb instantly; the command is debounced so we don't flood
@@ -19,8 +20,7 @@
   const display = $derived(dragging ?? value)
 
   let debounce: ReturnType<typeof setTimeout> | undefined
-  function handle(event: Event) {
-    const v = Number((event.target as HTMLInputElement).value)
+  function handle(v: number) {
     dragging = v
     haptics.slide()
     clearTimeout(debounce)
@@ -36,15 +36,6 @@
     <circle cx="12" cy="12" r="4" fill="currentColor" />
     <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
   </svg>
-  <input
-    class="setu-range w-full"
-    type="range"
-    min="0"
-    max="100"
-    value={display}
-    {disabled}
-    oninput={handle}
-    aria-label="Brightness"
-  />
+  <Slider min={0} max={100} value={display} {disabled} label="Brightness" oninput={handle} />
   <span class="w-9 text-right text-sm tabular-nums text-ink/60">{display}%</span>
 </div>

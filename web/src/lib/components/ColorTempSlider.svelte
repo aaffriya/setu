@@ -1,5 +1,6 @@
 <script lang="ts">
   import { haptics } from '../haptics'
+  import Slider from './Slider.svelte'
 
   // White color-temperature control (Kelvin). Warm (left) → cool (right). Same
   // drag-override + debounce pattern as BrightnessSlider.
@@ -21,8 +22,7 @@
   const display = $derived(dragging ?? (value || 2700))
 
   let debounce: ReturnType<typeof setTimeout> | undefined
-  function handle(event: Event) {
-    const v = Number((event.target as HTMLInputElement).value)
+  function handle(v: number) {
     dragging = v
     haptics.slide()
     clearTimeout(debounce)
@@ -41,16 +41,15 @@
     <path d="M12 9v5.4" />
     <circle cx="12" cy="16.6" r="1.7" fill="currentColor" stroke="none" />
   </svg>
-  <input
-    class="setu-range setu-temp w-full"
-    type="range"
+  <Slider
     min={MIN}
     max={MAX}
-    step="100"
+    step={100}
     value={display}
     {disabled}
+    label="Color temperature"
+    trackClass="setu-temp"
     oninput={handle}
-    aria-label="Color temperature"
   />
   <span class="w-12 text-right text-sm tabular-nums text-ink/60">{display}K</span>
 </div>
