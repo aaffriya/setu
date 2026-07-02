@@ -15,6 +15,7 @@ import {
   wsURL,
   getToken,
   ApiError,
+  normalizeDevices,
   type Device,
   type DeviceState,
   type Color,
@@ -36,11 +37,11 @@ export const lastUpdated = writable<number>(0)
 // every UI-only pref (favourites, expanded, scenes, rooms, order). Client-side
 // only: no server state (keeps the binary free of user prefs). Per-browser, and
 // resilient to a mobile tab reload.
-function persisted<T>(key: string, fallback: T): Writable<T> {
+function persisted<T>(key: string, fallback: T, normalize: (value: unknown) => T = (v) => v as T): Writable<T> {
   let initial = fallback
   try {
     const raw = localStorage.getItem(key)
-    if (raw) initial = JSON.parse(raw) as T
+    if (raw) initial = normalize(JSON.parse(raw))
   } catch {
     // unreadable / disabled — fall back
   }
@@ -53,6 +54,47 @@ function persisted<T>(key: string, fallback: T): Writable<T> {
     }
   })
   return store
+}
+
+function recordOrEmpty<T>(value: unknown): Record<string, T> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, T>)
+    : {}
+}
+
+function recordOfArraysOrEmpty<T>(value: unknown): Record<string, T[]> {
+  const raw = recordOrEmpty<unknown>(value)
+  const out: Record<string, T[]> = {}
+  for (const [key, item] of Object.entries(raw)) {
+    if (Array.isArray(item)) out[key] = item as T[]
+  }
+  return out
+}
+
+function stringRecordOrEmpty(value: unknown): Record<string, string> {
+  const raw = recordOrEmpty<unknown>(value)
+  const out: Record<string, string> = {}
+  for (const [key, item] of Object.entries(raw)) {
+    if (typeof item === 'string') out[key] = item
+  }
+  return out
+}
+
+function booleanRecordOrEmpty(value: unknown): Record<string, boolean> {
+  const raw = recordOrEmpty<unknown>(value)
+  const out: Record<string, boolean> = {}
+  for (const [key, item] of Object.entries(raw)) {
+    if (typeof item === 'boolean') out[key] = item
+  }
+  return out
+}
+
+function arrayOrEmpty<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
+function stringArrayOrEmpty(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
 // uid mints an opaque id for client-side records (favourites, scenes). Prefers
@@ -78,7 +120,7 @@ devices.subscribe((list) => {
 function loadCache(): Device[] {
   try {
     const raw = localStorage.getItem(CACHE_KEY)
-    return raw ? (JSON.parse(raw) as Device[]) : []
+    return raw ? normalizeDevices(JSON.parse(raw)) : []
   } catch {
     return []
   }
@@ -204,7 +246,11 @@ export type Favorite = {
   brightness?: number
 }
 
-export const favorites = persisted<Record<string, Favorite[]>>('setu.favorites', {})
+export const favorites = persisted<Record<string, Favorite[]>>(
+  'setu.favorites',
+  {},
+  recordOfArraysOrEmpty<Favorite>,
+)
 
 export function addFavorite(deviceId: string, fav: Omit<Favorite, 'id'>): void {
   favorites.update((all) => {
@@ -251,7 +297,7 @@ export function applyFavorite(deviceId: string, fav: Favorite): void {
 // Whether a card is expanded is a UI preference, so — like favourites — it lives
 // in localStorage rather than the backend, and survives a mobile tab reload.
 
-export const expanded = persisted<Record<string, boolean>>('setu.expanded', {})
+export const expanded = persisted<Record<string, boolean>>('setu.expanded', {}, booleanRecordOrEmpty)
 
 export function toggleExpanded(id: string): void {
   expanded.update((map) => ({ ...map, [id]: !map[id] }))
@@ -387,7 +433,7 @@ export type SceneCommand = {
 }
 export type Scene = { id: string; name: string; commands: SceneCommand[] }
 
-export const scenes = persisted<Scene[]>('setu.scenes', [])
+export const scenes = persisted<Scene[]>('setu.scenes', [], arrayOrEmpty<Scene>)
 
 // snapshotCommands turns a device's current state into the commands that would
 // reproduce its look — power first, then (if on) brightness and whichever colour
@@ -456,7 +502,7 @@ export function runScene(scene: Scene): void {
 // maps deviceId → room name (absent = unassigned). `order` is the manual card
 // order by id; ids missing from it fall back to server order, appended.
 
-export const rooms = persisted<Record<string, string>>('setu.rooms', {})
+export const rooms = persisted<Record<string, string>>('setu.rooms', {}, stringRecordOrEmpty)
 
 export function setRoom(deviceId: string, room: string): void {
   rooms.update((m) => {
@@ -467,7 +513,7 @@ export function setRoom(deviceId: string, room: string): void {
   })
 }
 
-export const order = persisted<string[]>('setu.order', [])
+export const order = persisted<string[]>('setu.order', [], stringArrayOrEmpty)
 
 // orderDevices sorts a device list by the saved manual order; unknown ids keep
 // their incoming (server) order, appended after the explicitly-ordered ones.

@@ -32,6 +32,7 @@
   let showSettings = $state(false)
   let themeChoice = $state<Theme>(getTheme())
   let confirmReset = $state(false)
+  let initialRefreshDone = $state(false)
   // Forget the reset confirmation whenever the dialog closes.
   $effect(() => {
     if (!showSettings) confirmReset = false
@@ -190,6 +191,15 @@
     if (document.visibilityState === 'visible') resume()
   }
 
+  function refreshDevices(after?: () => void) {
+    initialRefreshDone = false
+    return refresh()
+      .then(() => after?.())
+      .finally(() => {
+        initialRefreshDone = true
+      })
+  }
+
   // Manifest shortcuts (long-press / jump-list) launch the app at /?do=all_off|all_on.
   // Fire the matching power command at every switchable device, then strip the
   // param so a refresh can't replay it. Runs after the first refresh so it acts
@@ -208,7 +218,7 @@
   }
 
   onMount(() => {
-    refresh().then(runLaunchAction)
+    void refreshDevices(runLaunchAction)
     connect()
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('online', resume)
@@ -225,7 +235,7 @@
     token = tokenDraft.trim()
     setToken(token)
     showSettings = false
-    refresh()
+    void refreshDevices()
     // Drop any existing socket first: it authenticated with the previous
     // token, and connect() alone deliberately refuses to replace a live one
     // (the one-socket rule in store.ts).
@@ -265,6 +275,7 @@
   const iconBtnActive =
     'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-indigo-500/15 text-indigo-500 transition dark:text-indigo-300'
   const chip = 'shrink-0 rounded-full px-3 py-1 text-xs font-medium transition'
+  const skeletonCards = [0, 1, 2, 3]
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
@@ -387,17 +398,38 @@
           Connect
         </button>
       </div>
-    {:else if $devices.length === 0 && $connection === 'connecting' && !stalled}
-      <!-- Cold start with no cache: a calm pulsing logo instead of an empty flash. -->
-      <div in:fade={{ duration: 200 }} class="flex flex-1 flex-col items-center justify-center py-24 text-center">
-        <div class="relative grid h-16 w-16 place-items-center rounded-3xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 shadow-lg shadow-indigo-500/30">
-          <span class="absolute inset-0 animate-ping rounded-3xl bg-indigo-500/40"></span>
-          <svg class="relative h-8 w-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-            <path d="M3 16h18" /><path d="M5 16a7 7 0 0114 0" /><path d="M12 9v7M8 12.5V16M16 12.5V16" />
-          </svg>
-        </div>
-        <p class="mt-4 text-sm text-ink/50">Connecting…</p>
-      </div>
+    {:else if $devices.length === 0 && (!initialRefreshDone || ($connection === 'connecting' && !stalled))}
+      <!-- Cold start with no cache: paint card-shaped placeholders immediately. -->
+      <main
+        in:fade={{ duration: 180 }}
+        class="grid grid-cols-1 gap-4 sm:justify-center sm:[grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),320px))]"
+        aria-label="Loading devices"
+        aria-busy="true"
+      >
+        {#each skeletonCards as n (n)}
+          <article class="rounded-3xl border border-ink/10 bg-ink/[0.06] p-5 backdrop-blur-xl">
+            <div class="animate-pulse">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="h-5 w-2/3 rounded-full bg-ink/10"></div>
+                  <div class="mt-2 h-3 w-1/3 rounded-full bg-ink/10"></div>
+                </div>
+                <div class="h-8 w-14 rounded-full bg-ink/10"></div>
+              </div>
+              <div class="mt-6 space-y-4">
+                <div class="h-4 w-full rounded-full bg-ink/10"></div>
+                <div class="h-9 w-full rounded-2xl bg-ink/10"></div>
+                <div class="grid grid-cols-4 gap-2">
+                  <div class="h-8 rounded-xl bg-ink/10"></div>
+                  <div class="h-8 rounded-xl bg-ink/10"></div>
+                  <div class="h-8 rounded-xl bg-ink/10"></div>
+                  <div class="h-8 rounded-xl bg-ink/10"></div>
+                </div>
+              </div>
+            </div>
+          </article>
+        {/each}
+      </main>
     {:else if $devices.length === 0 && ($connection === 'offline' || $connection === 'connecting')}
       <!-- Can't reach the server and nothing cached: say so, don't show blank. -->
       <div in:fade={{ duration: 200 }} class="flex flex-1 flex-col items-center justify-center py-20 text-center">

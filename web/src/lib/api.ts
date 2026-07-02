@@ -83,6 +83,85 @@ export class ApiError extends Error {
   }
 }
 
+const emptyState: DeviceState = {
+  online: false,
+  on: false,
+  brightness: 0,
+  color: { r: 255, g: 255, b: 255 },
+  color_temp: 0,
+  scene: 0,
+  scene_speed: 0,
+  volume: 0,
+  muted: false,
+  text_active: false,
+  text_value: '',
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function asNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function asColor(value: unknown): Color {
+  if (!isRecord(value)) return emptyState.color
+  return {
+    r: asNumber(value.r),
+    g: asNumber(value.g),
+    b: asNumber(value.b),
+  }
+}
+
+function asState(value: unknown): DeviceState {
+  if (!isRecord(value)) return emptyState
+  return {
+    online: value.online === true,
+    on: value.on === true,
+    brightness: asNumber(value.brightness),
+    color: asColor(value.color),
+    color_temp: asNumber(value.color_temp),
+    scene: asNumber(value.scene),
+    scene_speed: asNumber(value.scene_speed),
+    volume: asNumber(value.volume),
+    muted: value.muted === true,
+    text_active: value.text_active === true,
+    text_value: asString(value.text_value),
+  }
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+export function normalizeDevices(value: unknown): Device[] {
+  if (!Array.isArray(value)) return []
+  const out: Device[] = []
+  for (const item of value) {
+    if (!isRecord(item)) continue
+    const id = asString(item.id)
+    if (!id) continue
+    out.push({
+      id,
+      name: asString(item.name),
+      brand: asString(item.brand),
+      model: asString(item.model),
+      series: typeof item.series === 'string' ? item.series : undefined,
+      mac: asString(item.mac),
+      capabilities: asStringArray(item.capabilities),
+      scenes: Array.isArray(item.scenes) ? (item.scenes as Scene[]) : undefined,
+      apps: Array.isArray(item.apps) ? (item.apps as App[]) : undefined,
+      state: asState(item.state),
+    })
+  }
+  return out
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -105,7 +184,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function listDevices(): Promise<Device[]> {
-  return request<Device[]>('/api/devices')
+  return request<unknown>('/api/devices').then(normalizeDevices)
 }
 
 export function sendCommand(
