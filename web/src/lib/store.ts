@@ -5,8 +5,8 @@
 //   - State is mirrored to localStorage so a tab the mobile OS killed repaints
 //     instantly on resume, before any network round-trip.
 //   - The WebSocket auto-reconnects with backoff and is re-primed on resume()
-//     (called from visibilitychange / online), so it "just works" after a tab
-//     comes back to the foreground.
+//     (called from visibilitychange / pageshow / online), so it "just works"
+//     after a tab comes back to the foreground.
 
 import { writable, get, type Writable } from 'svelte/store'
 import {
@@ -135,16 +135,27 @@ function setError(msg: string): void {
 
 // --- data loading -----------------------------------------------------------
 
+let refreshGeneration = 0
+
 export async function refresh(): Promise<void> {
+  const generation = ++refreshGeneration
   try {
-    devices.set(await listDevices())
+    const next = await listDevices()
+    if (generation !== refreshGeneration) return
+    devices.set(next)
     connection.set('online')
     lastUpdated.set(Date.now())
     setError('')
   } catch (err) {
+    // listDevices aborts the previous request when a newer refresh starts. Its
+    // rejection is intentionally invisible: only the latest request owns UI
+    // state, connection status, and the error toast.
+    if (generation !== refreshGeneration) return
     if (err instanceof ApiError && err.status === 401) {
       connection.set('unauthorized')
-    } else {
+    } else if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // A REST snapshot can time out while the current WebSocket is already
+      // delivering live state. Keep that proven-live connection online.
       connection.set('offline')
     }
     setError(err instanceof Error ? err.message : 'failed to load devices')

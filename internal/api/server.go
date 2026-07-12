@@ -53,6 +53,11 @@ func New(o Options) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	// Public, self-contained escape hatch for a broken service-worker cache. The
+	// worker deliberately bypasses /api, so this remains reachable even when the
+	// normal cached app shell cannot navigate. It clears no token/preferences.
+	mux.HandleFunc("GET /api/recover", s.handleAppRecovery)
+
 	// JSON API (token-protected). Go 1.22+ method+pattern routing.
 	mux.Handle("GET /api/devices", s.auth(http.HandlerFunc(s.handleListDevices)))
 	mux.Handle("POST /api/devices/{id}/command", s.auth(http.HandlerFunc(s.handleCommand)))

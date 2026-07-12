@@ -58,8 +58,14 @@ Rules — all three exist to fix real bugs, don't relax them:
    1 means `connect()` alone won't replace a live socket.
 
 Reconnect backoff: 1 s ×2 → cap 15 s; reset on open and on `resume()`.
-`resume()` (visibilitychange / online) = REST `refresh()` + eager reconnect —
-commands never wait for it; they fire against the cached list instantly.
+Foreground signals (`visibilitychange`, bfcache `pageshow`, `online`) are
+coalesced before `resume()` = bounded REST `refresh()` + eager reconnect;
+`pagehide` closes the old socket. Commands never wait for this path and cached
+cards stay rendered while it runs. The initial device-list request times out
+after 8 s so a half-reachable LAN server cannot hold the loading state forever.
+A newer refresh aborts and supersedes the previous one; only its result may
+update UI state, and a non-auth REST failure never demotes an already-open live
+WebSocket to offline.
 
 ## TV socket lifecycle (samsung)
 
@@ -83,14 +89,20 @@ commands never wait for it; they fire against the cached list instantly.
 | Layer | What | Invalidation |
 | --- | --- | --- |
 | `localStorage` | device list (instant paint on cold resume), token, favourites, expanded | overwritten by next `refresh()` / WS event |
-| Service worker (secure contexts only) | shell + assets, cache `setu-shell-<build id>` | build id stamped by `vite.config.ts` plugin → new build = new cache, `activate` deletes old ones |
-| HTTP headers (plain-HTTP LAN — **no SW possible there**) | `/assets/*` → `immutable, max-age=1y` (Vite content-hashes names); `service-worker.js` → `no-cache` | filename hash changes per build |
+| Service worker (secure contexts only) | complete shell + hashed JS/CSS, cache `setu-shell-<content id>` | `vite.config.ts` injects boot assets and hashes all emitted content plus the worker template → any changed UI/icon/splash/cache logic = new cache, `activate` deletes old Setu caches |
+| HTTP headers (plain-HTTP LAN — **no SW possible there**) | HTML + `service-worker.js` → `no-cache`; `/assets/*` → `immutable, max-age=1y` (Vite content-hashes names) | entrypoints revalidate; asset filename hash changes per build |
 
-Service-worker fetch rules: never touches `/api` or `/ws`; navigations are
-network-first; asset branch caches **only `res.ok` non-HTML** responses — the
-Go server answers any unknown path with 200 + index.html (SPA fallback), which
-would otherwise get cached *under the asset URL* and served cache-first
-forever.
+Service-worker fetch rules: never touches `/api` or `/ws`; controlled
+navigations return the versioned cached canonical `/` response immediately so
+an OS-evicted PWA never waits on a stalled LAN request before it can paint.
+Hashed JS/CSS are pre-cached during install, and the asset branch caches **only
+`res.ok` non-HTML** responses — the Go server answers any unknown non-asset path
+with `200` plus `index.html` (SPA fallback), while missing `/assets/*` paths
+return `404` plus `no-store`; this keeps HTML from ever masquerading as stale
+JS/CSS. A newly activated worker is adopted on the next natural navigation; it
+never force-reloads a client that may be suspended in the background.
+`/index.html` is also served directly (never redirected), but is not used as a
+cache key: WebKit rejects redirected cached navigation responses.
 
 ## Addressing invariants
 

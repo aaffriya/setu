@@ -187,8 +187,36 @@
     return `transform: translate(${dragDX}px, ${dragDY}px) scale(1.03); transition: none; pointer-events: none; cursor: grabbing; box-shadow: 0 22px 50px -12px rgba(2,6,23,.5);`
   }
 
+  // Foregrounding can emit visibilitychange, pageshow and online almost at once.
+  // Coalesce them into one refresh + socket recycle so resume never starts a
+  // small storm of duplicate REST requests and short-lived sockets.
+  let resumeTimer: ReturnType<typeof setTimeout> | undefined
+  function scheduleResume() {
+    if (document.visibilityState !== 'visible') return
+    clearTimeout(resumeTimer)
+    resumeTimer = setTimeout(() => {
+      resumeTimer = undefined
+      if (document.visibilityState === 'visible') resume()
+    }, 100)
+  }
+  function cancelScheduledResume() {
+    clearTimeout(resumeTimer)
+    resumeTimer = undefined
+  }
   function onVisibility() {
-    if (document.visibilityState === 'visible') resume()
+    if (document.visibilityState === 'visible') scheduleResume()
+    else cancelScheduledResume()
+  }
+  function onPageShow(event: PageTransitionEvent) {
+    // A fresh document already refreshes in onMount. pageshow matters when the
+    // browser restores this mounted instance from its back/forward cache.
+    if (event.persisted) scheduleResume()
+  }
+  function onPageHide() {
+    cancelScheduledResume()
+    // pagehide also covers bfcache entry, where onDestroy deliberately does not
+    // run. Drop the socket now; pageshow will reconnect it if the page returns.
+    disconnect()
   }
 
   function refreshDevices(after?: () => void) {
@@ -221,13 +249,18 @@
     void refreshDevices(runLaunchAction)
     connect()
     document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('online', resume)
+    window.addEventListener('online', scheduleResume)
+    window.addEventListener('pageshow', onPageShow)
+    window.addEventListener('pagehide', onPageHide)
   })
 
   // Clean up listeners and the socket so nothing leaks (matters on mobile).
   onDestroy(() => {
     document.removeEventListener('visibilitychange', onVisibility)
-    window.removeEventListener('online', resume)
+    window.removeEventListener('online', scheduleResume)
+    window.removeEventListener('pageshow', onPageShow)
+    window.removeEventListener('pagehide', onPageHide)
+    cancelScheduledResume()
     disconnect()
   })
 
@@ -398,7 +431,7 @@
           Connect
         </button>
       </div>
-    {:else if $devices.length === 0 && (!initialRefreshDone || ($connection === 'connecting' && !stalled))}
+    {:else if $devices.length === 0 && !stalled && (!initialRefreshDone || $connection === 'connecting')}
       <!-- Cold start with no cache: paint card-shaped placeholders immediately. -->
       <main
         in:fade={{ duration: 180 }}

@@ -56,6 +56,8 @@ export type CommandAction =
   | 'wake'
 
 const TOKEN_KEY = 'setu.token'
+const DEVICE_LIST_TIMEOUT_MS = 8000
+let activeDeviceListController: AbortController | undefined
 
 export function getToken(): string {
   try {
@@ -183,8 +185,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-export function listDevices(): Promise<Device[]> {
-  return request<unknown>('/api/devices').then(normalizeDevices)
+export async function listDevices(): Promise<Device[]> {
+  // Only the newest snapshot request is useful. Abort an older one immediately
+  // so a slow pre-resume/pre-token-change response cannot finish after it and
+  // overwrite newer state in the store.
+  activeDeviceListController?.abort()
+  const controller = new AbortController()
+  activeDeviceListController = controller
+  let timedOut = false
+  const timeout = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, DEVICE_LIST_TIMEOUT_MS)
+
+  try {
+    return normalizeDevices(await request<unknown>('/api/devices', { signal: controller.signal }))
+  } catch (err) {
+    if (timedOut) throw new Error('Setu did not respond within 8 seconds.')
+    throw err
+  } finally {
+    clearTimeout(timeout)
+    if (activeDeviceListController === controller) activeDeviceListController = undefined
+  }
 }
 
 export function sendCommand(

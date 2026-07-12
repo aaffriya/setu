@@ -263,6 +263,10 @@ worker over plain HTTP). No proxy is needed — Go serves TLS natively. Easiest 
 Once on HTTPS, the app is installable across iOS, Android, macOS, Windows and Linux — one PWA,
 no app store. Long-press / right-click the installed icon for the **All on / All off** shortcuts.
 
+If upgrading from a build whose installed app goes blank specifically after refresh, open
+`https://<your-setu-host>/api/recover` once. It removes only Setu's service worker and shell
+cache, keeps the access token and UI preferences, and returns to the fixed app automatically.
+
 ---
 
 ## Supported devices
