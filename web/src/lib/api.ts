@@ -31,6 +31,8 @@ export type Device = {
   series?: string // optional friendly product/series name (falls back to model)
   mac: string
   capabilities: string[]
+  color_temp_min?: number
+  color_temp_max?: number
   scenes?: Scene[]
   apps?: App[]
   state: DeviceState
@@ -141,6 +143,12 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
+function asColorTempRange(item: Record<string, unknown>): { min?: number; max?: number } {
+  const min = asNumber(item.color_temp_min)
+  const max = asNumber(item.color_temp_max)
+  return min > 0 && max > min ? { min, max } : {}
+}
+
 export function normalizeDevices(value: unknown): Device[] {
   if (!Array.isArray(value)) return []
   const out: Device[] = []
@@ -148,6 +156,7 @@ export function normalizeDevices(value: unknown): Device[] {
     if (!isRecord(item)) continue
     const id = asString(item.id)
     if (!id) continue
+    const colorTempRange = asColorTempRange(item)
     out.push({
       id,
       name: asString(item.name),
@@ -156,6 +165,8 @@ export function normalizeDevices(value: unknown): Device[] {
       series: typeof item.series === 'string' ? item.series : undefined,
       mac: asString(item.mac),
       capabilities: asStringArray(item.capabilities),
+      color_temp_min: colorTempRange.min,
+      color_temp_max: colorTempRange.max,
       scenes: Array.isArray(item.scenes) ? (item.scenes as Scene[]) : undefined,
       apps: Array.isArray(item.apps) ? (item.apps as App[]) : undefined,
       state: asState(item.state),

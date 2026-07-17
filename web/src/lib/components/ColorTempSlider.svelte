@@ -4,22 +4,24 @@
 
   // White color-temperature control (Kelvin). Warm (left) → cool (right). Same
   // drag-override + debounce pattern as BrightnessSlider.
-  const MIN = 2200
-  const MAX = 6500
-
   let {
     value = 0,
+    min = 2200,
+    max = 6500,
     disabled = false,
     onChange,
   }: {
     value?: number
+    min?: number
+    max?: number
     disabled?: boolean
     onChange?: (kelvin: number) => void
   } = $props()
 
   let dragging = $state<number | null>(null)
-  // Fall back to a neutral 2700 K for display when the bulb isn't in white mode.
-  const display = $derived(dragging ?? (value || 2700))
+  // Fall back to a neutral 2700 K when the bulb isn't in white mode, then keep
+  // both that fallback and any stale cached value inside this device's range.
+  const display = $derived(Math.min(max, Math.max(min, dragging ?? (value || 2700))))
 
   let debounce: ReturnType<typeof setTimeout> | undefined
   function handle(v: number) {
@@ -42,8 +44,8 @@
     <circle cx="12" cy="16.6" r="1.7" fill="currentColor" stroke="none" />
   </svg>
   <Slider
-    min={MIN}
-    max={MAX}
+    {min}
+    {max}
     step={100}
     value={display}
     {disabled}

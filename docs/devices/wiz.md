@@ -127,22 +127,26 @@ Package `internal/devices/wiz` (`go doc setu/internal/devices/wiz`).
 | `switch` | `On` / `Off` | `{"state":true|false}` |
 | `brightness` | `SetBrightness(pct)` | `{"state":true,"dimming":max(10,pct)}` |
 | `color` | `SetColor(r,g,b)` | `{"state":true,"r","g","b"}` |
-| `color_temp` | `SetColorTemp(k)` | `{"state":true,"temp":clamp(2200,6500)}` |
+| `color_temp` | `SetColorTemp(k)` | `{"state":true,"temp":clamp(model range)}` (2200–6500 colour; 2700–6500 tunable white) |
 | `scene` | `SetScene(id)` / `Scenes()` | `{"state":true,"sceneId":id}` |
-| `scene` (speed) | `SetSceneSpeed(s)` | `{"speed":clamp(10,200)}` (dynamic scenes) |
+| `scene` (speed) | `SetSceneSpeed(s)` | `{"speed":clamp(10,200)}` (`color_bulb` dynamic scenes; tunable-white static scenes no-op) |
 | (internal) | `Poll` | `getPilot` → map to `device.State` |
 
-- `wiz.go` — `base` (UDP transport, resolve chain, state), `ColorBulb` model.
+- `wiz.go` — `base` (UDP transport, resolve chain, state), `ColorBulb` and
+  `TunableWhiteBulb` models.
 - `discovery.go` — `Discoverer` implements `resolver.Resolver` via the broadcast in §3.
 - `scenes.go` — the named scene catalogue (§7) exposed via `Scenes()`.
 - Resolve order: cached IP → ARP table → WiZ discovery → `ip` hint. On any UDP
   failure the cached IP is invalidated so the next call re-resolves.
-- **Modes are exclusive:** setting color clears temp+scene, setting temp clears
-  scene, in both the bulb and `device.State` (`color_temp`/`scene` = 0 when
-  inactive), so the UI can tell which mode is live.
+- **Mode commands are exclusive:** setting color clears temp+scene and setting
+  direct temperature clears scene. A white scene may read back both `sceneId`
+  and its underlying `temp`; `sceneId` remains the selected mode for favourites
+  and multi-device scene snapshots.
 
-**Adding a tunable-white-only model:** copy `ColorBulb`, drop `ColorControl`
-(keep `ColorTempControl`).
+`tunable_white` implements switch, brightness, color temperature, polling, and
+the supported white scenes (ids 9–16). It deliberately does not implement
+`ColorControl`; its 2700 K hardware floor is enforced independently of the
+2200 K floor used by the reference colour bulb.
 
 ---
 
@@ -184,7 +188,8 @@ Setu command → independent `getPilot` readback:
 
 The bulb Setu's WiZ support is developed and verified against, read from the
 WiZ / Philips Smart app (**device → settings → device info**). WiZ is Signify's
-budget line, so the app brands it **Philips**. Config entry: `bedroom_light`.
+budget line, so the app brands it **Philips**. This reference bulb is no longer
+in the active device list after its former IP was reassigned to T Beamer.
 
 | Field (app) | Value | Notes |
 |---|---|---|
@@ -201,3 +206,23 @@ The driver key stays `model: color_bulb` (it selects the Go driver); the friendl
 `A60` rides in `series`. This is a full-colour + tunable-white bulb, so it
 implements every light capability (`Switchable`, `Dimmable`, `ColorControl`,
 `ColorTempControl`, `SceneControl`).
+
+---
+
+## 10. T Beamer (`T8`)
+
+Verified directly over the local UDP protocol on **2026-07-17**:
+
+| Field | Value | Verification |
+|---|---|---|
+| Config ID | `t_beamer` | stable friendly ID; not derived from the MAC |
+| Driver model | `tunable_white` | capability routing key; this is not the hardware model |
+| Product model / bulb shape | `T8` | product details; exposed as `series` in the UI |
+| Bulb base | `B22D` | product details |
+| Light colour | Cool Daylight | product details |
+| Rated colour temperature | 6500 K | product details |
+| Internal module | `ESP25_SHTW_01` | `getSystemConfig.moduleName` |
+| Firmware | `1.38.0` | `getSystemConfig` |
+| MAC | `98:77:D5:A2:34:F2` | both `getPilot` and `getSystemConfig` returned `9877d5a234f2` |
+| IP hint | `192.168.88.70` | UDP source/target; identity remains the MAC |
+| White range | 2700–6500 K | `getModelConfig.cctRange` |

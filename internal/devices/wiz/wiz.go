@@ -2,10 +2,10 @@
 // (port 38899, JSON getPilot/setPilot) — no cloud, login, or local key needed.
 //
 // It is a worked instance of the blueprint in internal/devices/example: a brand
-// `base` holding the transport, a model type (ColorBulb) implementing the
-// capability interfaces, MAC→IP resolution with caching + re-resolution, and a
-// brand Resolver (UDP broadcast discovery, see discovery.go) that demonstrates
-// the per-brand discovery seam the resolver package documents.
+// `base` holding the transport, model types implementing only their hardware
+// capabilities, MAC→IP resolution with caching + re-resolution, and a brand
+// Resolver (UDP broadcast discovery, see discovery.go) that demonstrates the
+// per-brand discovery seam the resolver package documents.
 package wiz
 
 import (
@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	Brand          = "WiZ"
-	ModelColorBulb = "color_bulb"
+	Brand             = "WiZ"
+	ModelColorBulb    = "color_bulb"
+	ModelTunableWhite = "tunable_white"
 
 	port           = 38899
 	minDimming     = 10 // WiZ hardware floor; lower values are ignored by the bulb
@@ -181,52 +182,17 @@ func (b *base) updateState(mutate func(*device.State)) {
 	b.mu.Unlock()
 }
 
-// ---------------------------------------------------------------------------
-// ColorBulb: a WiZ RGB color bulb — power, brightness, and color. A
-// tunable-white-only WiZ model would embed the same base but implement only
-// Switchable + Dimmable (and set color temp instead of RGB).
-// ---------------------------------------------------------------------------
-
-type ColorBulb struct {
-	base
-}
-
-var (
-	_ device.Device           = (*ColorBulb)(nil)
-	_ device.Switchable       = (*ColorBulb)(nil)
-	_ device.Dimmable         = (*ColorBulb)(nil)
-	_ device.ColorControl     = (*ColorBulb)(nil)
-	_ device.ColorTempControl = (*ColorBulb)(nil)
-	_ device.SceneControl     = (*ColorBulb)(nil)
-	_ device.Pollable         = (*ColorBulb)(nil)
-)
-
-func (b *ColorBulb) Model() string { return ModelColorBulb }
-
-func (b *ColorBulb) Capabilities() []string {
-	return []string{
-		device.CapSwitch, device.CapBrightness,
-		device.CapColor, device.CapColorTemp, device.CapScene,
-	}
-}
-
-func (b *ColorBulb) On() error {
-	if err := b.setPilot(map[string]any{"state": true}); err != nil {
+// The helpers below keep transport/state behavior shared while each concrete
+// model exposes only the capability methods its hardware actually supports.
+func (b *base) setPower(on bool) error {
+	if err := b.setPilot(map[string]any{"state": on}); err != nil {
 		return err
 	}
-	b.applyState(func(s *device.State) { s.Online = true; s.On = true })
+	b.applyState(func(s *device.State) { s.Online = true; s.On = on })
 	return nil
 }
 
-func (b *ColorBulb) Off() error {
-	if err := b.setPilot(map[string]any{"state": false}); err != nil {
-		return err
-	}
-	b.applyState(func(s *device.State) { s.Online = true; s.On = false })
-	return nil
-}
-
-func (b *ColorBulb) SetBrightness(pct int) error {
+func (b *base) setBrightness(pct int) error {
 	d := pct
 	if d < minDimming {
 		d = minDimming // WiZ ignores dimming below 10%
@@ -241,28 +207,10 @@ func (b *ColorBulb) SetBrightness(pct int) error {
 	return nil
 }
 
-func (b *ColorBulb) SetColor(c device.Color) error {
-	// Setting r,g,b puts the bulb in color mode — mutually exclusive with white
-	// temperature and scenes, so clear those in the local state too.
-	if err := b.setPilot(map[string]any{"state": true, "r": c.R, "g": c.G, "b": c.B}); err != nil {
-		return err
-	}
-	b.applyState(func(s *device.State) {
-		s.Online = true
-		s.On = true
-		s.Color = c
-		s.ColorTemp = 0
-		s.Scene = 0
-	})
-	return nil
-}
-
-// --- ColorTempControl (tunable white) ---
-
-func (b *ColorBulb) SetColorTemp(kelvin int) error {
+func (b *base) setColorTemp(kelvin, minimum int) error {
 	k := kelvin
-	if k < minKelvin {
-		k = minKelvin
+	if k < minimum {
+		k = minimum
 	}
 	if k > maxKelvin {
 		k = maxKelvin
@@ -280,27 +228,25 @@ func (b *ColorBulb) SetColorTemp(kelvin int) error {
 	return nil
 }
 
-// --- SceneControl (predefined scenes) ---
-
-func (b *ColorBulb) Scenes() []device.Scene { return scenes }
-
-func (b *ColorBulb) SetScene(id int) error {
-	if id < 1 || id > len(sceneNames) {
-		return fmt.Errorf("wiz %s: scene %d out of range 1–%d", b.id, id, len(sceneNames))
+func (b *base) setScene(supported []device.Scene, id int) error {
+	for _, scene := range supported {
+		if scene.ID != id {
+			continue
+		}
+		if err := b.setPilot(map[string]any{"state": true, "sceneId": id}); err != nil {
+			return err
+		}
+		b.applyState(func(s *device.State) {
+			s.Online = true
+			s.On = true
+			s.Scene = id
+		})
+		return nil
 	}
-	if err := b.setPilot(map[string]any{"state": true, "sceneId": id}); err != nil {
-		return err
-	}
-	b.applyState(func(s *device.State) {
-		s.Online = true
-		s.On = true
-		s.Scene = id
-	})
-	return nil
+	return fmt.Errorf("wiz %s: scene %d is not supported by this model", b.id, id)
 }
 
-// SetSceneSpeed sets the animation speed (10–200) of the active dynamic scene.
-func (b *ColorBulb) SetSceneSpeed(speed int) error {
+func (b *base) setSceneSpeed(speed int) error {
 	sp := speed
 	if sp < minSpeed {
 		sp = minSpeed
@@ -318,9 +264,7 @@ func (b *ColorBulb) SetSceneSpeed(speed int) error {
 	return nil
 }
 
-// Poll reads live state via getPilot and updates the cached state quietly (the
-// state poller publishes any change).
-func (b *ColorBulb) Poll() (device.State, error) {
+func (b *base) poll() (device.State, error) {
 	ip, err := b.resolveIP()
 	if err != nil {
 		b.updateState(func(s *device.State) { s.Online = false })
@@ -363,6 +307,120 @@ func (b *ColorBulb) Poll() (device.State, error) {
 	return b.State(), nil
 }
 
+// ---------------------------------------------------------------------------
+// ColorBulb: a WiZ RGB + tunable-white bulb.
+// ---------------------------------------------------------------------------
+
+type ColorBulb struct {
+	base
+}
+
+var (
+	_ device.Device           = (*ColorBulb)(nil)
+	_ device.Switchable       = (*ColorBulb)(nil)
+	_ device.Dimmable         = (*ColorBulb)(nil)
+	_ device.ColorControl     = (*ColorBulb)(nil)
+	_ device.ColorTempControl = (*ColorBulb)(nil)
+	_ device.SceneControl     = (*ColorBulb)(nil)
+	_ device.Pollable         = (*ColorBulb)(nil)
+)
+
+func (b *ColorBulb) Model() string { return ModelColorBulb }
+
+func (b *ColorBulb) Capabilities() []string {
+	return []string{
+		device.CapSwitch, device.CapBrightness,
+		device.CapColor, device.CapColorTemp, device.CapScene,
+	}
+}
+
+func (b *ColorBulb) On() error                   { return b.setPower(true) }
+func (b *ColorBulb) Off() error                  { return b.setPower(false) }
+func (b *ColorBulb) SetBrightness(pct int) error { return b.base.setBrightness(pct) }
+
+func (b *ColorBulb) SetColor(c device.Color) error {
+	// Setting r,g,b puts the bulb in color mode — mutually exclusive with white
+	// temperature and scenes, so clear those in the local state too.
+	if err := b.setPilot(map[string]any{"state": true, "r": c.R, "g": c.G, "b": c.B}); err != nil {
+		return err
+	}
+	b.applyState(func(s *device.State) {
+		s.Online = true
+		s.On = true
+		s.Color = c
+		s.ColorTemp = 0
+		s.Scene = 0
+	})
+	return nil
+}
+
+// --- ColorTempControl (tunable white) ---
+
+func (b *ColorBulb) SetColorTemp(kelvin int) error { return b.base.setColorTemp(kelvin, minKelvin) }
+
+func (b *ColorBulb) ColorTempRange() (int, int) { return minKelvin, maxKelvin }
+
+// --- SceneControl (predefined scenes) ---
+
+func (b *ColorBulb) Scenes() []device.Scene { return scenes }
+
+func (b *ColorBulb) SetScene(id int) error { return b.base.setScene(scenes, id) }
+
+// SetSceneSpeed sets the animation speed (10–200) of the active dynamic scene.
+func (b *ColorBulb) SetSceneSpeed(speed int) error { return b.base.setSceneSpeed(speed) }
+
+// Poll reads live state via getPilot and updates the cached state quietly (the
+// state poller publishes any change).
+func (b *ColorBulb) Poll() (device.State, error) { return b.base.poll() }
+
+// ---------------------------------------------------------------------------
+// TunableWhiteBulb: warm-to-cool white only. It deliberately does not satisfy
+// device.ColorControl, so the frontend never renders an RGB picker.
+// ---------------------------------------------------------------------------
+
+type TunableWhiteBulb struct {
+	base
+}
+
+var (
+	_ device.Device           = (*TunableWhiteBulb)(nil)
+	_ device.Switchable       = (*TunableWhiteBulb)(nil)
+	_ device.Dimmable         = (*TunableWhiteBulb)(nil)
+	_ device.ColorTempControl = (*TunableWhiteBulb)(nil)
+	_ device.SceneControl     = (*TunableWhiteBulb)(nil)
+	_ device.Pollable         = (*TunableWhiteBulb)(nil)
+)
+
+func (b *TunableWhiteBulb) Model() string { return ModelTunableWhite }
+
+func (b *TunableWhiteBulb) Capabilities() []string {
+	return []string{
+		device.CapSwitch, device.CapBrightness,
+		device.CapColorTemp, device.CapScene,
+	}
+}
+
+func (b *TunableWhiteBulb) On() error  { return b.setPower(true) }
+func (b *TunableWhiteBulb) Off() error { return b.setPower(false) }
+
+func (b *TunableWhiteBulb) SetBrightness(pct int) error { return b.base.setBrightness(pct) }
+func (b *TunableWhiteBulb) SetColorTemp(kelvin int) error {
+	return b.base.setColorTemp(kelvin, tunableWhiteMinKelvin)
+}
+
+func (b *TunableWhiteBulb) ColorTempRange() (int, int) {
+	return tunableWhiteMinKelvin, maxKelvin
+}
+
+func (b *TunableWhiteBulb) Scenes() []device.Scene { return tunableWhiteScenes }
+
+func (b *TunableWhiteBulb) SetScene(id int) error { return b.base.setScene(tunableWhiteScenes, id) }
+
+// All exposed tunable-white scenes are static, so speed has no effect.
+func (b *TunableWhiteBulb) SetSceneSpeed(int) error { return nil }
+
+func (b *TunableWhiteBulb) Poll() (device.State, error) { return b.base.poll() }
+
 func clampByte(v int) uint8 {
 	switch {
 	case v < 0:
@@ -374,9 +432,8 @@ func clampByte(v int) uint8 {
 	}
 }
 
-// New builds a WiZ ColorBulb from its config entry (matches config.Constructor).
-func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
-	return &ColorBulb{base: base{
+func newBase(spec config.DeviceSpec, deps config.Deps) base {
+	return base{
 		id:         spec.ID,
 		name:       spec.Name,
 		series:     spec.Series,
@@ -387,10 +444,21 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 		bus:        deps.Bus,
 		timeout:    defaultTimeout,
 		// State is unknown until the first poll fills it in.
-	}}, nil
+	}
+}
+
+// New builds a WiZ ColorBulb from its config entry (matches config.Constructor).
+func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
+	return &ColorBulb{base: newBase(spec, deps)}, nil
+}
+
+// NewTunableWhite builds a warm-to-cool-white WiZ bulb.
+func NewTunableWhite(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
+	return &TunableWhiteBulb{base: newBase(spec, deps)}, nil
 }
 
 // Register wires WiZ models into the factory (called from cmd/setu/main.go).
 func Register(f *config.Factory) {
 	f.Register(Brand, ModelColorBulb, New)
+	f.Register(Brand, ModelTunableWhite, NewTunableWhite)
 }

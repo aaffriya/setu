@@ -27,7 +27,11 @@
   } = $props()
 
   let el = $state<HTMLDivElement>()
-  let active = $state(false)
+  // Track the exact pointer that owns the drag. A boolean can get stuck when a
+  // browser drops pointer capture or the release happens outside the element,
+  // causing later mouse hover moves to keep changing the value.
+  let activePointer = $state<number | null>(null)
+  let active = $derived(activePointer !== null)
 
   const clamp = (v: number) => Math.min(max, Math.max(min, v))
   const snap = (v: number) => clamp(Math.round((v - min) / step) * step + min)
@@ -48,10 +52,11 @@
   }
 
   function down(e: PointerEvent) {
-    // Ignore a second finger landing mid-drag — one pointer owns the slider.
-    if (disabled || active) return
+    // Ignore non-primary mouse buttons and a second pointer landing mid-drag.
+    if (disabled || activePointer !== null || (e.pointerType === 'mouse' && e.button !== 0)) return
     e.preventDefault()
     el?.focus()
+    activePointer = e.pointerId
     // Capture so the drag keeps tracking even if the finger leaves the track;
     // guarded because a synthetic/stale pointer id can throw, and that must not
     // abort the value update below.
@@ -60,21 +65,33 @@
     } catch {
       /* non-fatal */
     }
-    active = true
     emit(valueAt(e.clientX))
   }
   function move(e: PointerEvent) {
-    if (!active) return
+    if (activePointer !== e.pointerId) return
+    // Defensive recovery for the exact failure mode where mouseup/capture-loss
+    // was missed: hover events have no pressed buttons and must end, not move,
+    // the drag.
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      finish(e)
+      return
+    }
     emit(valueAt(e.clientX))
   }
-  function up(e: PointerEvent) {
-    if (!active) return
-    active = false
+  function finish(e: PointerEvent) {
+    if (activePointer !== e.pointerId) return
+    activePointer = null
     try {
       el?.releasePointerCapture(e.pointerId)
     } catch {
       /* non-fatal */
     }
+  }
+  function lostCapture(e: PointerEvent) {
+    if (activePointer === e.pointerId) activePointer = null
+  }
+  function cancel() {
+    activePointer = null
   }
 
   function key(e: KeyboardEvent) {
@@ -89,6 +106,9 @@
     emit(v)
   }
 </script>
+
+<!-- Window-level release is the fallback when pointer capture is unavailable. -->
+<svelte:window onpointerup={finish} onpointercancel={finish} onblur={cancel} />
 
 <div
   bind:this={el}
@@ -105,8 +125,7 @@
   aria-disabled={disabled}
   onpointerdown={down}
   onpointermove={move}
-  onpointerup={up}
-  onpointercancel={up}
+  onlostpointercapture={lostCapture}
   onkeydown={key}
 >
   <div class="setu-slider-track {trackClass}">

@@ -29,13 +29,13 @@ poll_interval: 5s
 # Configured devices. MAC is the PRIMARY, stable identity; IP is an optional
 # hint/fallback that Setu resolves from the MAC at runtime (ARP / brand discovery).
 devices:
-  - id: bedroom_light
+  - id: t_beamer
     brand: WiZ
-    model: color_bulb         # driver key (Signify/WiZ A60, hw model 23110) — see docs/devices/wiz.md
-    series: "A60"             # friendly product name shown in the UI (the bulb's form factor)
-    name: "Bedroom Light"
-    mac: "d8:a0:11:ff:5e:f0"  # WiZ bulb (from getPilot result.mac)
-    ip: 192.168.88.70         # hint; WiZ broadcast discovery also finds it by MAC
+    model: tunable_white      # driver key: warm/cool white only (no RGB)
+    series: "T8"               # product model / bulb shape; shown in the UI
+    name: "T Beamer"
+    mac: "98:77:d5:a2:34:f2"  # verified from getPilot/getSystemConfig
+    ip: 192.168.88.70         # hint; WiZ discovery still resolves by MAC
 
   - id: living_tv
     brand: Samsung

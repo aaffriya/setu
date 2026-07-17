@@ -462,10 +462,14 @@ function snapshotCommands(d: Device): SceneCommand[] {
   if (caps.has('switch')) out.push({ deviceId: d.id, action: 'on' })
   if (caps.has('brightness') && s.brightness > 0)
     out.push({ deviceId: d.id, action: 'set_brightness', value: s.brightness })
-  if (caps.has('color_temp') && s.color_temp > 0)
-    out.push({ deviceId: d.id, action: 'set_color_temp', value: s.color_temp })
-  else if (caps.has('scene') && s.scene > 0)
+  // A white WiZ scene can report both its scene id and the temperature it is
+  // currently rendering. Scene is the selected mode and must win, matching the
+  // per-device favourites behavior; otherwise a snapshot silently degrades the
+  // preset into a plain fixed temperature.
+  if (caps.has('scene') && s.scene > 0)
     out.push({ deviceId: d.id, action: 'set_scene', value: s.scene })
+  else if (caps.has('color_temp') && s.color_temp > 0)
+    out.push({ deviceId: d.id, action: 'set_color_temp', value: s.color_temp })
   else if (caps.has('color'))
     out.push({ deviceId: d.id, action: 'set_color', value: s.color })
   if (caps.has('volume')) out.push({ deviceId: d.id, action: 'set_volume', value: s.volume })

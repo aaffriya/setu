@@ -5,10 +5,11 @@ import "setu/internal/device"
 // WiZ white color-temperature range (Kelvin) and scene animation speed range.
 // Values outside are clamped.
 const (
-	minKelvin = 2200
-	maxKelvin = 6500
-	minSpeed  = 10
-	maxSpeed  = 200
+	minKelvin             = 2200
+	tunableWhiteMinKelvin = 2700
+	maxKelvin             = 6500
+	minSpeed              = 10
+	maxSpeed              = 200
 )
 
 // sceneNames is WiZ's fixed catalogue of predefined scenes; the scene id is the
@@ -36,6 +37,12 @@ var dynamicSceneIDs = map[int]bool{
 // scenes is the catalogue as device.Scene values, built once. Treated as
 // read-only (it's only serialized to JSON for the UI).
 var scenes = buildScenes()
+
+// Tunable-white WiZ lights ignore the colour-only modes. This conservative
+// subset is the white/functional group supported by ESP*_SHTW modules. The
+// device used to add this model was read back successfully in every mode 9–16,
+// while mode 1 (Ocean) was ignored.
+var tunableWhiteScenes = scenes[8:16]
 
 func buildScenes() []device.Scene {
 	out := make([]device.Scene, len(sceneNames))

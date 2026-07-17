@@ -9,7 +9,8 @@
 
 ## Key types
 - `Manager` — `Device(id)`, `Devices()`, `Snapshot()`, `Close()`.
-- `DeviceView` — JSON projection (id, name, brand, model, mac, capabilities, state); `ViewOf(d)`.
+- `DeviceView` — JSON projection (id, name, brand, model, mac, capabilities,
+  optional color-temperature range, state); `ViewOf(d)`.
 - `Poller` — `NewPoller(mgr, bus, interval, log).Run(ctx)`.
 
 ## Flow

@@ -12,7 +12,7 @@ package: it imports nothing from Setu; everything else points here.
 - `Switchable` — `On()` / `Off()`.
 - `Dimmable` — `SetBrightness(0–100)`.
 - `ColorControl` — `SetColor(Color)`.
-- `ColorTempControl` — `SetColorTemp(kelvin)` (tunable white).
+- `ColorTempControl` — `SetColorTemp(kelvin)` + the hardware's min/max Kelvin range.
 - `SceneControl` — `Scenes() []Scene` + `SetScene(id)` + `SetSceneSpeed(speed)` (named presets; dynamic-scene speed).
 - `Volume` — `VolumeUp` / `VolumeDown` / `ToggleMute` (TVs; `State.Muted` reflects real mute where readable).
 - `VolumeSetter` — `SetVolume(0–100)` (absolute level; TVs over UPnP).

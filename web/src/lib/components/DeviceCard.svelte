@@ -130,8 +130,10 @@
   })
 </script>
 
+<!-- Keep the glow static between state updates. A shadow transition restarts on
+     store reconciliation and makes unrelated card edges appear to blink. -->
 <article
-  class="rounded-3xl border border-ink/10 bg-ink/[0.06] p-5 backdrop-blur-xl transition-shadow duration-500"
+  class="rounded-3xl border border-ink/10 bg-ink/[0.06] p-5 backdrop-blur-xl"
   style={`box-shadow: ${glow}`}
   class:opacity-60={offline}
 >
@@ -188,7 +190,13 @@
         <BrightnessSlider value={device.state.brightness} disabled={offline || !on} onChange={setBrightness} />
       {/if}
       {#if caps.has('color_temp')}
-        <ColorTempSlider value={device.state.color_temp} disabled={offline || !on} onChange={setColorTemp} />
+        <ColorTempSlider
+          value={device.state.color_temp}
+          min={device.color_temp_min ?? 2200}
+          max={device.color_temp_max ?? 6500}
+          disabled={offline || !on}
+          onChange={setColorTemp}
+        />
       {/if}
       {#if caps.has('color')}
         <ColorPicker {color} disabled={offline || !on} onPick={setColor} />

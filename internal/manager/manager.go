@@ -104,6 +104,8 @@ type DeviceView struct {
 	Series       string         `json:"series,omitempty"` // friendly product/series name, when the device provides one
 	MAC          string         `json:"mac"`
 	Capabilities []string       `json:"capabilities"`
+	ColorTempMin int            `json:"color_temp_min,omitempty"` // hardware Kelvin range, for ColorTempControl devices
+	ColorTempMax int            `json:"color_temp_max,omitempty"`
 	Scenes       []device.Scene `json:"scenes,omitempty"` // present only for SceneControl devices
 	Apps         []device.App   `json:"apps,omitempty"`   // present only for AppControl devices
 	State        device.State   `json:"state"`
@@ -121,6 +123,9 @@ func metaView(d device.Device) DeviceView {
 	}
 	if ds, ok := d.(device.Described); ok {
 		v.Series = ds.Series()
+	}
+	if ct, ok := d.(device.ColorTempControl); ok {
+		v.ColorTempMin, v.ColorTempMax = ct.ColorTempRange()
 	}
 	if sc, ok := d.(device.SceneControl); ok {
 		v.Scenes = sc.Scenes()

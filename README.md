@@ -155,7 +155,7 @@ All endpoints require `Authorization: Bearer <token>` (the WebSocket also accept
 
 | Method & path | Body | Result |
 | --- | --- | --- |
-| `GET /api/devices` | — | `[]DeviceView` (id, name, brand, model, `series` (optional), mac, capabilities, state) — `[]` when none |
+| `GET /api/devices` | — | `[]DeviceView` (id, name, brand, model, `series` (optional), mac, capabilities, optional `color_temp_min`/`color_temp_max`, state) — `[]` when none |
 | `POST /api/devices/{id}/command` | `{"action":"on"}` / `{"action":"off"}` | updated `DeviceView` |
 | | `{"action":"set_brightness","value":70}` | (0–100) |
 | | `{"action":"set_color","value":{"r":255,"g":120,"b":0}}` | |
@@ -274,9 +274,10 @@ cache, keeps the access token and UI preferences, and returns to the fixed app a
 | Brand · model (`brand`/`model`) | Capabilities | Transport |
 | --- | --- | --- |
 | Philips WiZ — `WiZ`/`color_bulb` | switch, brightness, color, color_temp, scene | UDP :38899 (local, no cloud) |
+| Philips WiZ White — `WiZ`/`tunable_white` | switch, brightness, color_temp, scene | UDP :38899 (local, no cloud) |
 | Samsung Tizen TV — `Samsung`/`tizen` | switch (power), volume (absolute + mute), key, key_hold, app, text | REST :8001 + WebSocket/TLS :8002 + UPnP :9197 + Wake-on-LAN |
 
-### Philips WiZ (`WiZ`/`color_bulb`)
+### Philips WiZ (`WiZ`/`color_bulb`, `WiZ`/`tunable_white`)
 
 - Pure local control over UDP — no cloud, login, or key. On/off, brightness (10–100; the WiZ
   hardware floor is 10%, so lower values clamp), RGB color, **white temperature** (2200–6500 K),
@@ -284,8 +285,9 @@ cache, keeps the access token and UI preferences, and returns to the fixed app a
 - IP resolution chain: ARP table → **WiZ UDP broadcast discovery** (matches the bulb by MAC) →
   the `ip` hint. Discovery means a DHCP IP change is handled automatically — this is the
   per-brand discovery the `Resolver` seam anticipates (`internal/devices/wiz/discovery.go`).
-- Tunable-white-only WiZ bulbs ignore RGB; add a `tunable_white` model (switch + brightness +
-  color temperature) the same way if you have one.
+- Tunable-white-only WiZ bulbs use `model: tunable_white`: switch, brightness,
+  2700–6500 K color temperature, and the supported white scenes (ids 9–16).
+  They deliberately omit RGB/color modes, which this hardware ignores.
 
 ### Samsung Tizen TV (`Samsung`/`tizen`)
 

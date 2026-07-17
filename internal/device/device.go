@@ -117,10 +117,12 @@ type ColorControl interface {
 }
 
 // ColorTempControl is implemented by tunable-white devices: set the white color
-// temperature in Kelvin (e.g. ~2200 warm … 6500 cool). On many bulbs RGB color
-// and white temperature are mutually exclusive modes.
+// temperature in Kelvin and report the hardware's supported range so clients do
+// not offer values the device will only clamp or ignore. On many bulbs RGB
+// color and white temperature are mutually exclusive modes.
 type ColorTempControl interface {
 	SetColorTemp(kelvin int) error
+	ColorTempRange() (minKelvin, maxKelvin int)
 }
 
 // Scene is a named preset a device can activate. Dynamic marks animated scenes
