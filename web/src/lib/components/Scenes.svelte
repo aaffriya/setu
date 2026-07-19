@@ -104,7 +104,7 @@
     }}
     aria-label="Scenes"
     aria-expanded={open}
-    class="relative grid h-9 w-9 place-items-center rounded-full transition
+    class="relative grid h-8 w-8 place-items-center rounded-full transition min-[360px]:h-9 min-[360px]:w-9
            {open ? 'bg-indigo-500/15 text-indigo-500 dark:text-indigo-300' : 'bg-ink/5 text-ink/70 hover:bg-ink/10 hover:text-ink'}"
   >
     <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

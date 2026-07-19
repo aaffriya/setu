@@ -316,9 +316,9 @@
   }
 
   const iconBtn =
-    'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink/5 text-ink/70 transition hover:bg-ink/10 hover:text-ink'
+    'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink/5 text-ink/70 transition hover:bg-ink/10 hover:text-ink disabled:cursor-wait disabled:opacity-50 min-[360px]:h-9 min-[360px]:w-9'
   const iconBtnActive =
-    'grid h-9 w-9 shrink-0 place-items-center rounded-full bg-indigo-500/15 text-indigo-500 transition dark:text-indigo-300'
+    'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-indigo-500/15 text-indigo-500 transition dark:text-indigo-300 min-[360px]:h-9 min-[360px]:w-9'
   const chip = 'shrink-0 rounded-full px-3 py-1 text-xs font-medium transition'
   const skeletonCards = [0, 1, 2, 3]
 </script>
@@ -332,7 +332,7 @@
     style="padding-top: max(0.6rem, env(safe-area-inset-top))"
   >
     <div class="mx-auto max-w-3xl px-4 lg:max-w-5xl xl:max-w-7xl">
-      <div class="flex h-14 items-center gap-2">
+      <div class="flex h-14 items-center gap-1 min-[360px]:gap-2">
         {#if searching}
           <svg class="h-5 w-5 shrink-0 text-ink/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
             <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
@@ -354,7 +354,7 @@
               <path d="M3 16h18" /><path d="M5 16a7 7 0 0114 0" /><path d="M12 9v7M8 12.5V16M16 12.5V16" />
             </svg>
           </div>
-          <h1 class="text-lg font-semibold tracking-tight">सेतु</h1>
+          <h1 class="hidden text-lg font-semibold tracking-tight min-[360px]:block">सेतु</h1>
           <span
             class="flex items-center gap-1.5 rounded-full bg-ink/5 px-2.5 py-1 text-xs text-ink/60"
             title={statusLabel[$connection]}
@@ -369,8 +369,19 @@
             <span>{statusLabel[$connection]}</span>{#if agoLabel}<span class="hidden sm:inline">&nbsp;· {agoLabel}</span>{/if}
           </span>
 
-          <div class="ml-auto flex items-center gap-1.5">
+          <div class="ml-auto flex items-center gap-1 min-[360px]:gap-1.5">
             {#if hasDevices}
+              <button
+                onclick={manualRefresh}
+                class={iconBtn}
+                disabled={refreshing}
+                aria-label={refreshing ? 'Refreshing device status' : 'Refresh device status'}
+                title={refreshing ? 'Refreshing…' : 'Refresh'}
+              >
+                <svg class="h-5 w-5 {refreshing ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M20 11a8 8 0 10-2.3 5.7" /><path d="M20 4v7h-7" />
+                </svg>
+              </button>
               <button onclick={() => (searching = true)} class={iconBtn} aria-label="Search devices">
                 <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
                   <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
@@ -419,21 +430,6 @@
   </header>
 
   <div class="mx-auto max-w-3xl px-4 pb-16 pt-4 lg:max-w-5xl xl:max-w-7xl">
-    {#if hasDevices}
-      <div class="mb-3 flex justify-end">
-        <button
-          onclick={manualRefresh}
-          class="flex items-center gap-1.5 rounded-full bg-ink/5 px-3 py-1.5 text-xs font-medium text-ink/60 transition hover:bg-ink/10 hover:text-ink disabled:cursor-wait disabled:opacity-50"
-          disabled={refreshing}
-          aria-label="Refresh device status"
-        >
-          <svg class="h-4 w-4 {refreshing ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M20 11a8 8 0 10-2.3 5.7" /><path d="M20 4v7h-7" />
-          </svg>
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </div>
-    {/if}
     {#if needsToken}
       <div in:fade={{ duration: 200 }} class="mx-auto mt-12 w-full max-w-sm rounded-3xl border border-ink/10 bg-ink/[0.06] p-6 text-center backdrop-blur-xl">
         <div class="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-ink/10">
