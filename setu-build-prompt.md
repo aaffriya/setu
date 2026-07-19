@@ -43,7 +43,7 @@ The whole thing is **Go-only**: a single static Go binary serves the embedded fr
 
 IoT devices keep a **fixed MAC** but their **IP can change** (DHCP). So:
 
-- In config, **`mac` is the required, stable identifier**; `ip` is an **optional hint/fallback** only.
+- In config, **`mac` is the required, stable identifier**; device IPs are resolved at runtime.
 - You cannot address a device by MAC at the application layer (MAC is Layer 2). At runtime, **resolve the current IP from the MAC**, cache it, and **re-resolve on any send/connection failure**.
 - Behind one interface:
 
@@ -54,7 +54,7 @@ type Resolver interface {
 ```
 
   - **ARP table (default impl — build now):** read `/proc/net/arp` (or `ip neigh`) and match the MAC. Requires host networking.
-  - **Per-device discovery (later, per brand):** e.g. WiZ replies to a UDP broadcast with its MAC + current IP — that brand's package will implement this when added.
+  - **Per-device discovery (per brand):** e.g. WiZ replies to a UDP broadcast with its MAC + current IP.
   - **DHCP lease table (future impl — do not build):** OpenWrt `/tmp/dhcp.leases`; RouterOS via API — slots behind the same interface.
 
 ## Backend Architecture (Go)
@@ -119,7 +119,6 @@ devices: []                   # empty for now; real devices added later, e.g.:
   #   model: color_bulb
   #   name: "Living Room"
   #   mac: "a8:bb:50:xx:xx:xx" # PRIMARY identity (stable)
-  #   ip: 192.168.1.50         # optional hint/fallback only
 ```
 The `(brand, model)` factory maps each entry to its package type. Adding a device later = implement the brand/model package + add a config entry + register one factory line.
 

@@ -50,7 +50,6 @@ type base struct {
 	name    string
 	series  string
 	mac     string
-	ipHint  string // optional config hint/fallback
 	resolve resolver.Resolver
 	bus     *events.Bus
 
@@ -87,13 +86,6 @@ func (b *base) resolveIP() (net.IP, error) {
 
 	ip, err := b.resolve.Lookup(b.mac)
 	if err != nil {
-		// Fall back to the optional config hint if resolution fails.
-		if b.ipHint != "" {
-			if hint := net.ParseIP(b.ipHint); hint != nil {
-				b.setIP(hint)
-				return hint, nil
-			}
-		}
 		return nil, fmt.Errorf("%s: resolve %s: %w", b.id, b.mac, err)
 	}
 	b.setIP(ip)
@@ -262,7 +254,6 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 		name:    spec.Name,
 		series:  spec.Series,
 		mac:     spec.MAC,
-		ipHint:  spec.IP,
 		resolve: deps.Resolver,
 		bus:     deps.Bus,
 		// Optimistic initial state; the first send/poll reconciles it.

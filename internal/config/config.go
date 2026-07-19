@@ -96,7 +96,6 @@ type DeviceSpec struct {
 	Series string `yaml:"series"` // optional friendly product/series name shown in the UI (e.g. "AU7700")
 	Name   string `yaml:"name"`   // human-friendly label
 	MAC    string `yaml:"mac"`    // PRIMARY identity (stable across DHCP leases)
-	IP     string `yaml:"ip"`     // optional hint/fallback only
 }
 
 const (

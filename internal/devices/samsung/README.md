@@ -22,7 +22,18 @@
 - Captured from the `ms.channel.connect` event after the on-screen **Allow**.
 - Cached at `$SETU_STATE_DIR/setu-samsung-<id>.token` (defaults to OS temp; set `SETU_STATE_DIR` to persist across reboots), mode `0600`.
 
+## Resolution
+- Config needs only the TV's MAC; no IP or DHCP reservation is required.
+- Resolution order is cached IP → ARP → Samsung DIAL SSDP discovery.
+- SSDP supplies candidate IPs, not identity. Setu reads each candidate's `/api/v2/`
+  `device.wifiMac` and caches the IP only when it matches the configured MAC.
+- A transport failure clears the cached IP, so the next operation discovers the TV again
+  after a DHCP lease change. Wake-on-LAN always uses the MAC directly.
+
 ## Status / caveats
+- **Verified live (2026-07-19, UA50AU7700KLXL):** MAC-only cold discovery resolved the TV,
+  explicit IP-cache invalidation rediscovered the same DHCP address, and a full Setu API
+  refresh returned live power, volume, and mute state without an `ip` config entry.
 - **Verified live (2026-06-04, UA50AU7700KLXL):** WoL woke the TV from off; token pairing + volume/mute keys work. First pairing ~8 s (waits for on-screen Allow); cached-token keys ~1 s. **2026-06-02:** UPnP GetMute/SetVolume and the IME event stream confirmed on the same unit.
 - WoL sprays the magic packet at each interface's **directed broadcast** (e.g. 192.168.0.255) + the limited broadcast, ports 9 & 7 — needed to wake this unit. WoL over Wi-Fi can still fail on a TV with network-standby disabled.
 - The remote-control WS is opened once and **kept open while the TV is on** — it doubles as the event stream (IME, token refresh), with `Poll` redialing it if it drops. A stale socket is redialed once on the next write. `Poll` never dials without a cached token (an unpaired dial would pop the on-screen Allow prompt from the background).

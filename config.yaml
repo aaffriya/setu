@@ -27,8 +27,8 @@ auth:
 # through 5m, 10m, 30m, 1h and 6h. App resume/manual refresh polls immediately.
 poll_interval: 45s
 
-# Configured devices. MAC is the PRIMARY, stable identity; IP is an optional
-# hint/fallback that Setu resolves from the MAC at runtime (ARP / brand discovery).
+# Configured devices. MAC is the PRIMARY, stable identity; drivers discover the
+# current IP at runtime (ARP / brand discovery).
 devices:
   - id: t_beamer
     brand: WiZ
@@ -46,7 +46,6 @@ devices:
     # info shows a different MAC (1c:86:9a:05:e1:4c) — its other interface; don't
     # swap this one, it's the one that works. See docs/devices/samsung.md.
     mac: "a0:d7:f3:9e:74:b2"  # used for Wake-on-LAN + IP resolution
-    ip: 192.168.88.71         # hint/fallback
     # First control attempt: the TV shows an "Allow" prompt — accept it once;
     # the pairing token is then cached (see README → Samsung TV).
 

@@ -34,7 +34,7 @@ supervisor.
                          │        devices ──────▶ event bus (Go channels) ◀── state poller         │
                          │            │                       ▲                                     │
                          │   MAC→IP   ▼                       └── (future: automation engine)      │
-                         │        resolver (ARP table → IP)                                        │
+                         │        resolver (ARP / brand discovery → IP)                            │
                          └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -48,7 +48,7 @@ engine plugs in later — without touching device code.
 | Seam | Interface | Why |
 | --- | --- | --- |
 | Device capabilities | `Switchable`, `Dimmable`, `ColorControl` (in `internal/device`) | New device features without changing existing devices; the API discovers support via type assertions |
-| Address resolution | `Resolver` (in `internal/resolver`) | Swap MAC→IP strategies (ARP now; DHCP leases / per-brand discovery later) |
+| Address resolution | `Resolver` (in `internal/resolver`) | Swap MAC→IP strategies (ARP + per-brand discovery now; DHCP leases later) |
 | Front-end protocol | the `api` package vs. the manager + event bus | A second protocol (e.g. an Apple HomeKit bridge) can be added beside `api`, talking to the same manager/bus, with no device-code changes |
 
 ### Repository layout
@@ -147,7 +147,7 @@ devices: []              # empty for now; see "Adding a device"
 | `listen.tls.cert` / `listen.tls.key` | Optional PEM cert + key. Set **both** to serve HTTPS (stdlib TLS, no proxy) — needed for the PWA's secure-context features. Omit both for plain HTTP (the default, unchanged). No ACME; bring your own cert (or use Tailscale). |
 | `auth.token` | Bearer token for `/api` and `/ws`. The server refuses to start with an empty token and warns if it's still `CHANGE_ME`. |
 | `poll_interval` | Active-use cadence (default `45s`). After 2m without app activity or device changes, polling backs off through `5m`, `10m`, `30m`, `1h`, then `6h`. Opening/using the app resets the cadence; foreground/manual refresh polls immediately. `0` disables only scheduled polling. |
-| `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `ip` (optional hint), `series` (optional friendly product/series name shown in the UI, e.g. `AU7700`). |
+| `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `series` (optional friendly product/series name shown in the UI, e.g. `AU7700`). |
 
 ### HTTP / WebSocket API
 
@@ -183,7 +183,7 @@ today: `switch`, `brightness`, `color`, `color_temp`, `scene`, `volume`, `key`, 
 
 IoT devices keep a fixed **MAC** but their **IP can change** (DHCP). So in Setu:
 
-- `mac` is the **required, stable** identity in config; `ip` is only an optional hint/fallback.
+- `mac` is the **required, stable** identity in config; device IPs are never stored there.
 - You can't address a device by MAC at the application layer (MAC is Layer 2). At runtime Setu
   resolves the current IP from the MAC, **caches** it, and **re-resolves on send failure** (the
   device may have a new lease). The `example` template shows this pattern (`resolveIP` /
@@ -199,8 +199,9 @@ type Resolver interface {
 
 - **ARP table** — the default, built now. Reads `/proc/net/arp` and matches the MAC. Requires
   host networking and only knows devices the host has talked to recently.
-- **Per-device discovery** — *later, per brand.* E.g. WiZ answers a UDP broadcast with its MAC
-  + current IP; that brand's package will implement discovery behind the same interface.
+- **Per-device discovery** — built per brand. WiZ answers a UDP broadcast with its MAC;
+  Samsung TVs answer SSDP and are then verified through `/api/v2/`'s `wifiMac` before their
+  current IP is cached.
 - **DHCP lease table** — *future.* OpenWrt `/tmp/dhcp.leases`, RouterOS via API. Same interface.
 
 ---
@@ -283,8 +284,8 @@ cache, keeps the access token and UI preferences, and returns to the fixed app a
 - Pure local control over UDP — no cloud, login, or key. On/off, brightness (10–100; the WiZ
   hardware floor is 10%, so lower values clamp), RGB color, **white temperature** (2200–6500 K),
   and the **32 predefined scenes** (color / white-temp / scene are exclusive modes on the bulb).
-- IP resolution chain: ARP table → **WiZ UDP broadcast discovery** (matches the bulb by MAC) →
-  the `ip` hint. Discovery means a DHCP IP change is handled automatically — this is the
+- IP resolution chain: ARP table → **WiZ UDP broadcast discovery** (matches the bulb by MAC).
+  Discovery means a DHCP IP change is handled automatically — this is the
   per-brand discovery the `Resolver` seam anticipates (`internal/devices/wiz/discovery.go`).
 - Tunable-white-only WiZ bulbs use `model: tunable_white`: switch, brightness,
   2700–6500 K color temperature, and the supported white scenes (ids 9–16).
@@ -292,6 +293,9 @@ cache, keeps the access token and UI preferences, and returns to the fixed app a
 
 ### Samsung Tizen TV (`Samsung`/`tizen`)
 
+- **MAC-only addressing:** no `ip` is needed in config. Setu discovers DIAL receivers over
+  SSDP, verifies the candidate TV's `/api/v2/` `wifiMac` against the configured MAC, caches the
+  current IP, and repeats discovery after a transport failure invalidates that cache.
 - **Power on** = Wake-on-LAN (sprayed at each interface's directed broadcast + the limited
   broadcast, ports 9 & 7). ✅ Verified to wake a UA50AU7700KLXL from off. ⚠️ WoL over Wi-Fi can
   still fail if the TV's network-standby ("Power On with Mobile") is off — that's a Samsung/Wi-Fi
@@ -347,7 +351,6 @@ capability methods, resolver usage, and factory registration).
        model: color_bulb
        name: "Living Room"
        mac: "a8:bb:50:11:22:33"   # primary identity
-       ip: 192.168.1.50           # optional hint
    ```
 
 The frontend needs **no changes** — `DeviceCard` renders the right controls from the device's

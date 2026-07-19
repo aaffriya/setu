@@ -96,12 +96,13 @@ var tvApps = []tvApp{
 // base is the shared Samsung brand foundation: identity, IP resolution, the
 // shared HTTP client (REST + WS dial), and the pairing token.
 type base struct {
-	id, name, series, mac, ipHint string
-	arp                           resolver.Resolver
-	bus                           *events.Bus
-	http                          *http.Client
-	timeout                       time.Duration
-	tokenPath                     string
+	id, name, series, mac string
+	arp                   resolver.Resolver
+	discoverer            resolver.Resolver
+	bus                   *events.Bus
+	http                  *http.Client
+	timeout               time.Duration
+	tokenPath             string
 
 	mu      sync.Mutex
 	ip      net.IP
@@ -130,8 +131,8 @@ func (b *base) State() device.State {
 	return b.state
 }
 
-// resolveIP: cached → injected ARP resolver → config hint. (Samsung has no
-// simple broadcast discovery like WiZ; SSDP/mDNS would slot in here later.)
+// resolveIP: cached → injected ARP resolver → MAC-verified Samsung SSDP
+// discovery. No configured IP is needed; the MAC remains the source of truth.
 func (b *base) resolveIP() (net.IP, error) {
 	b.mu.Lock()
 	cached := b.ip
@@ -145,8 +146,8 @@ func (b *base) resolveIP() (net.IP, error) {
 			return ip, nil
 		}
 	}
-	if b.ipHint != "" {
-		if ip := net.ParseIP(b.ipHint); ip != nil {
+	if b.discoverer != nil {
+		if ip, err := b.discoverer.Lookup(b.mac); err == nil {
 			b.setIP(ip)
 			return ip, nil
 		}
@@ -1127,16 +1128,16 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	}
 
 	t := &TV{base: base{
-		id:        spec.ID,
-		name:      spec.Name,
-		series:    spec.Series,
-		mac:       spec.MAC,
-		ipHint:    spec.IP,
-		arp:       deps.Resolver,
-		bus:       deps.Bus,
-		http:      client,
-		timeout:   defaultTimeout,
-		tokenPath: filepath.Join(dir, "setu-samsung-"+sanitizeID(spec.ID)+".token"),
+		id:         spec.ID,
+		name:       spec.Name,
+		series:     spec.Series,
+		mac:        spec.MAC,
+		arp:        deps.Resolver,
+		discoverer: NewDiscoverer(client),
+		bus:        deps.Bus,
+		http:       client,
+		timeout:    defaultTimeout,
+		tokenPath:  filepath.Join(dir, "setu-samsung-"+sanitizeID(spec.ID)+".token"),
 	}}
 	t.loadToken()
 	return t, nil

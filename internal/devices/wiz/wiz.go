@@ -58,11 +58,11 @@ type pilotResponse struct {
 // base is the shared WiZ brand foundation: identity, the resolution strategy,
 // and the UDP transport. Models embed it.
 type base struct {
-	id, name, series, mac, ipHint string
-	arp                           resolver.Resolver // injected fallback (ARP table)
-	discoverer                    *Discoverer       // brand-specific UDP discovery
-	bus                           *events.Bus
-	timeout                       time.Duration
+	id, name, series, mac string
+	arp                   resolver.Resolver // injected fallback (ARP table)
+	discoverer            *Discoverer       // brand-specific UDP discovery
+	bus                   *events.Bus
+	timeout               time.Duration
 
 	mu    sync.Mutex
 	ip    net.IP // cached resolved IP (nil until resolved)
@@ -83,7 +83,7 @@ func (b *base) State() device.State {
 
 // resolveIP tries, in order: the cached IP, the injected ARP resolver (instant
 // when the host knows the device), WiZ UDP broadcast discovery (brand-specific,
-// works cross-platform), then the optional config hint.
+// works cross-platform).
 func (b *base) resolveIP() (net.IP, error) {
 	b.mu.Lock()
 	cached := b.ip
@@ -100,12 +100,6 @@ func (b *base) resolveIP() (net.IP, error) {
 	if ip, err := b.discoverer.Lookup(b.mac); err == nil {
 		b.setIP(ip)
 		return ip, nil
-	}
-	if b.ipHint != "" {
-		if ip := net.ParseIP(b.ipHint); ip != nil {
-			b.setIP(ip)
-			return ip, nil
-		}
 	}
 	return nil, fmt.Errorf("wiz %s: cannot resolve ip for mac %s", b.id, b.mac)
 }
@@ -438,7 +432,6 @@ func newBase(spec config.DeviceSpec, deps config.Deps) base {
 		name:       spec.Name,
 		series:     spec.Series,
 		mac:        spec.MAC,
-		ipHint:     spec.IP,
 		arp:        deps.Resolver,
 		discoverer: NewDiscoverer(),
 		bus:        deps.Bus,

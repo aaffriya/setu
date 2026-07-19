@@ -224,7 +224,8 @@ IDs change per release; pull the live list with `ed.installedApp.get` if one fai
    "First Time Only".
 3. **Same L2 segment.** Samsung blocks the remote WS across subnets/VLANs — keep
    the controller and TV on the same network.
-4. **Pin the IP** (DHCP reservation for the MAC) so scripts don't break.
+4. **Raw scripts need an IP; Setu does not.** Setu discovers the current IP over SSDP and
+   accepts it only when `/api/v2/` reports the configured `wifiMac`.
 5. **Flush before close.** Sending a key then closing immediately drops it — wait
    ~500 ms (or keep the socket open).
 6. **Self-signed cert** on 8002/https — clients skip verification.
@@ -260,6 +261,10 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
   not do). A stale socket is detected on the next write and redialed once.
   Writes are serialized; the drain reader answers control frames, refreshes the
   token, and feeds the IME events into device state.
+- **MAC-only resolution:** config contains the stable Wi-Fi MAC, not a required IP. Resolution
+  is cached IP → ARP → DIAL SSDP discovery; every SSDP candidate is checked through
+  `/api/v2/` and accepted only when `device.wifiMac` matches. Network failures clear the cache,
+  so a changed DHCP lease is discovered on the next operation.
 - **Press-and-hold safety:** `PressKey` arms a **watchdog** (`holdMax`, 1 min)
   that auto-releases; any newer press/click first releases the held key; and
   `ReleaseKey` always sends the `Release` frame even if nothing is tracked as
@@ -291,8 +296,8 @@ Package `internal/devices/samsung` (`go doc setu/internal/devices/samsung`).
   next tick, **and a TV answering REST from network standby correctly reads as off**
   (plain reachability used to misread that as on). Older firmware without the field
   falls back to reachable ⇒ on. REST is a *power* proxy, not a presence proxy: an off
-  TV can still be woken by WoL, so the TV is reported **online whenever its address
-  resolves** (config hint / ARP). That keeps off ≠ offline, so the UI never hides the
+  TV can still be woken by WoL, so the TV is always reported **online** even while its
+  address is temporarily unknown. That keeps off ≠ offline, so the UI never hides the
   power control needed to wake it. Right after an explicit `On`/`Off` the command is
   trusted for a short **grace window** (~10 s) while the TV transitions. While on,
   `Poll` also reads the real volume and mute over UPnP (§3.6) and keeps the event

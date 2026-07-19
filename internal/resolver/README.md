@@ -12,9 +12,11 @@
 
 ## Strategies (all behind `Resolver`)
 - **ARP** — now (default).
-- **Per-brand discovery** — e.g. `internal/devices/wiz/discovery.go` (UDP broadcast).
+- **Per-brand discovery** — WiZ UDP broadcast and Samsung SSDP + REST `wifiMac`
+  verification, both implementing the same `Resolver` seam.
 - **DHCP leases** — future (OpenWrt `/tmp/dhcp.leases`, RouterOS API).
 
 ## Gotchas
-- On non-Linux dev (macOS) ARP returns an error → callers fall back to brand discovery or the config `ip` hint.
+- On non-Linux dev (macOS) ARP returns an error → WiZ and Samsung fall back to their
+  cross-platform brand discovery.
 - Reading `/proc/net/arp` only sees devices the host has talked to recently.

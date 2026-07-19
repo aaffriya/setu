@@ -111,8 +111,7 @@ echo -n '{"method":"setPilot","params":{"sceneId":12,"speed":120}}'    | nc -u -
 2. **Color vs white vs scene are exclusive** (see §2.2).
 3. **White-only bulbs ignore `r,g,b`.** If `getPilot` never returns `r/g/b`
    (only `temp`), the bulb is tunable-white — use `temp`, not RGB.
-4. **IP is DHCP** → keep MAC as the identity and (re)discover; an `ip` is only a
-   hint/fallback.
+4. **IP is DHCP** → keep only the MAC in config and (re)discover the current address.
 5. **UDP is fire-and-mostly-reply.** `setPilot` replies with `success`; treat a
    missing reply as a failure and retry / re-resolve.
 
@@ -199,7 +198,6 @@ in the active device list after its former IP was reassigned to T Beamer.
 | Features | Dimmable · Adjustable white · Adjustable colors | ⇒ caps `brightness`, `color`, `color_temp`, `scene` |
 | Firmware | `1.35.0` | |
 | MAC address | `D8:A0:11:FF:5E:F0` | = config `d8:a0:11:ff:5e:f0` ✓ (= `getPilot` `result.mac`) |
-| IP address | `192.168.0.140` | current DHCP lease — config `ip:` hint only (§4) |
 | Home ID | `17181078` | WiZ cloud "home" grouping; **not** used by Setu (pure-LAN) |
 
 The driver key stays `model: color_bulb` (it selects the Go driver); the friendly
@@ -224,5 +222,4 @@ Verified directly over the local UDP protocol on **2026-07-17**:
 | Internal module | `ESP25_SHTW_01` | `getSystemConfig.moduleName` |
 | Firmware | `1.38.0` | `getSystemConfig` |
 | MAC | `98:77:D5:A2:34:F2` | both `getPilot` and `getSystemConfig` returned `9877d5a234f2` |
-| IP hint | `192.168.88.70` | UDP source/target; identity remains the MAC |
 | White range | 2700–6500 K | `getModelConfig.cctRange` |

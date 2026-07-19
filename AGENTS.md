@@ -43,7 +43,7 @@ megabyte as precious.
 2. Put the wire protocol in the brand `base`; implement the capability methods + `Poll`.
 3. Implement **only** the capabilities the model has; update the `var _ device.X = (*T)(nil)` asserts.
 4. Export `New` + `Register`; add **one** `<brand>.Register(factory)` line in `cmd/setu/main.go`.
-5. Add a `config.yaml` entry (brand, model, id, name, **mac**, ip-hint).
+5. Add a `config.yaml` entry (brand, model, id, name, **mac**). The driver resolves IP at runtime.
 The frontend needs **no** change — cards render from `capabilities`.
 
 ## Frontend rules

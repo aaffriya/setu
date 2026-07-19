@@ -114,6 +114,6 @@ cache key: WebKit rejects redirected cached navigation responses.
 
 - MAC is identity. Each device caches its resolved IP and **invalidates it on
   any send failure** → next call re-resolves: ARP table → brand discovery
-  (WiZ UDP broadcast) → config `ip` hint.
+  (WiZ UDP broadcast or Samsung SSDP + REST `wifiMac` verification).
 - Samsung WoL bypasses resolution entirely (broadcast by MAC) — don't gate any
   power-on path on `resolveIP`.
