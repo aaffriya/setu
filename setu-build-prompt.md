@@ -112,7 +112,7 @@ type Device interface {
 listen: ":8080"               # TCP; or "unix:/run/setu.sock" for tunnel-only
 auth:
   token: "CHANGE_ME"          # bearer token for /api and /ws
-poll_interval: 5s
+poll_interval: 45s
 devices: []                   # empty for now; real devices added later, e.g.:
   # - id: living_light
   #   brand: wiz

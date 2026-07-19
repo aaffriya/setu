@@ -23,8 +23,9 @@ auth:
   # Bearer token required on /api and /ws. CHANGE THIS before any real use.
   token: "CHANGE_ME"
 
-# How often to re-read device state (Go duration string, e.g. 5s, 500ms, 1m).
-poll_interval: 5s
+# Active-use cadence. With no app/device activity Setu backs off automatically
+# through 5m, 10m, 30m, 1h and 6h. App resume/manual refresh polls immediately.
+poll_interval: 45s
 
 # Configured devices. MAC is the PRIMARY, stable identity; IP is an optional
 # hint/fallback that Setu resolves from the MAC at runtime (ARP / brand discovery).
@@ -35,7 +36,6 @@ devices:
     series: "T8"               # product model / bulb shape; shown in the UI
     name: "T Beamer"
     mac: "98:77:d5:a2:34:f2"  # verified from getPilot/getSystemConfig
-    ip: 192.168.88.70         # hint; WiZ discovery still resolves by MAC
 
   - id: living_tv
     brand: Samsung

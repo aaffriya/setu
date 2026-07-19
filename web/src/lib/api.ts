@@ -59,7 +59,9 @@ export type CommandAction =
 
 const TOKEN_KEY = 'setu.token'
 const DEVICE_LIST_TIMEOUT_MS = 8000
+const ACTIVITY_SIGNAL_INTERVAL_MS = 30_000
 let activeDeviceListController: AbortController | undefined
+let lastActivitySignal = 0
 
 export function getToken(): string {
   try {
@@ -196,7 +198,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-export async function listDevices(): Promise<Device[]> {
+export async function listDevices(hardwareRefresh = false): Promise<Device[]> {
   // Only the newest snapshot request is useful. Abort an older one immediately
   // so a slow pre-resume/pre-token-change response cannot finish after it and
   // overwrite newer state in the store.
@@ -210,7 +212,8 @@ export async function listDevices(): Promise<Device[]> {
   }, DEVICE_LIST_TIMEOUT_MS)
 
   try {
-    return normalizeDevices(await request<unknown>('/api/devices', { signal: controller.signal }))
+    const path = hardwareRefresh ? '/api/devices?refresh=true' : '/api/devices'
+    return normalizeDevices(await request<unknown>(path, { signal: controller.signal }))
   } catch (err) {
     if (timedOut) throw new Error('Setu did not respond within 8 seconds.')
     throw err
@@ -218,6 +221,22 @@ export async function listDevices(): Promise<Device[]> {
     clearTimeout(timeout)
     if (activeDeviceListController === controller) activeDeviceListController = undefined
   }
+}
+
+// signalActivity is intentionally much cheaper than polling devices. Pointer
+// and keyboard bursts are throttled to one small authenticated hint every 30s;
+// the server uses it only to keep the active polling cadence warm.
+export function signalActivity(): void {
+  const token = getToken()
+  const now = Date.now()
+  if (!token || now - lastActivitySignal < ACTIVITY_SIGNAL_INTERVAL_MS) return
+  lastActivitySignal = now
+  void fetch('/api/activity', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => {
+    // Activity is only a cadence hint; normal refresh/WS paths own errors.
+  })
 }
 
 export function sendCommand(

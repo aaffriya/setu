@@ -135,7 +135,7 @@ listen:
   #   key:  /etc/setu/key.pem
 auth:
   token: "CHANGE_ME"     # bearer token required on /api and /ws — CHANGE THIS
-poll_interval: 5s        # how often to re-read device state (Go duration string)
+poll_interval: 45s       # active cadence; idle polling backs off automatically
 devices: []              # empty for now; see "Adding a device"
 ```
 
@@ -146,7 +146,7 @@ devices: []              # empty for now; see "Adding a device"
 | `listen.socket` | Optional Unix-domain socket path (e.g. `/run/setu.sock`) for tunnel-only, zero-open-port access. When set, it overrides `interface`/`port`. |
 | `listen.tls.cert` / `listen.tls.key` | Optional PEM cert + key. Set **both** to serve HTTPS (stdlib TLS, no proxy) — needed for the PWA's secure-context features. Omit both for plain HTTP (the default, unchanged). No ACME; bring your own cert (or use Tailscale). |
 | `auth.token` | Bearer token for `/api` and `/ws`. The server refuses to start with an empty token and warns if it's still `CHANGE_ME`. |
-| `poll_interval` | Duration like `5s`, `500ms`, `1m`. `0` disables polling. |
+| `poll_interval` | Active-use cadence (default `45s`). After 2m without app activity or device changes, polling backs off through `5m`, `10m`, `30m`, `1h`, then `6h`. Opening/using the app resets the cadence; foreground/manual refresh polls immediately. `0` disables only scheduled polling. |
 | `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `ip` (optional hint), `series` (optional friendly product/series name shown in the UI, e.g. `AU7700`). |
 
 ### HTTP / WebSocket API
@@ -155,7 +155,8 @@ All endpoints require `Authorization: Bearer <token>` (the WebSocket also accept
 
 | Method & path | Body | Result |
 | --- | --- | --- |
-| `GET /api/devices` | — | `[]DeviceView` (id, name, brand, model, `series` (optional), mac, capabilities, optional `color_temp_min`/`color_temp_max`, state) — `[]` when none |
+| `GET /api/devices` | — | Cached `[]DeviceView` (id, name, brand, model, `series` (optional), mac, capabilities, optional `color_temp_min`/`color_temp_max`, state) — `[]` when none. Add `?refresh=true` for a one-shot hardware poll first. |
+| `POST /api/activity` | — | Keeps the active polling cadence warm without polling hardware (`204`). |
 | `POST /api/devices/{id}/command` | `{"action":"on"}` / `{"action":"off"}` | updated `DeviceView` |
 | | `{"action":"set_brightness","value":70}` | (0–100) |
 | | `{"action":"set_color","value":{"r":255,"g":120,"b":0}}` | |

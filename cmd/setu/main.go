@@ -84,6 +84,7 @@ func run() error {
 	// --- HTTP server ---
 	srv := api.New(api.Options{
 		Manager: mgr,
+		Poller:  poller,
 		Bus:     bus,
 		Token:   cfg.Auth.Token,
 		Dist:    web.Dist(),

@@ -20,7 +20,7 @@
     command,
     type ConnectionStatus,
   } from './lib/store'
-  import { getToken, setToken } from './lib/api'
+  import { getToken, setToken, signalActivity } from './lib/api'
   import { getTheme, setTheme, type Theme } from './lib/theme'
   import { canInstall, isStandalone, isIOS, secureContext, promptInstall } from './lib/pwa'
   import DeviceCard from './lib/components/DeviceCard.svelte'
@@ -33,6 +33,7 @@
   let themeChoice = $state<Theme>(getTheme())
   let confirmReset = $state(false)
   let initialRefreshDone = $state(false)
+  let refreshing = $state(false)
   // Forget the reset confirmation whenever the dialog closes.
   $effect(() => {
     if (!showSettings) confirmReset = false
@@ -221,11 +222,21 @@
 
   function refreshDevices(after?: () => void) {
     initialRefreshDone = false
-    return refresh()
+    return refresh(true)
       .then(() => after?.())
       .finally(() => {
         initialRefreshDone = true
       })
+  }
+
+  async function manualRefresh() {
+    if (refreshing) return
+    refreshing = true
+    try {
+      await refresh(true)
+    } finally {
+      refreshing = false
+    }
   }
 
   // Manifest shortcuts (long-press / jump-list) launch the app at /?do=all_off|all_on.
@@ -284,6 +295,7 @@
     node.focus()
   }
   function onWindowKey(e: KeyboardEvent) {
+    signalActivity()
     if (e.key !== 'Escape') return
     if (showSettings) showSettings = false
     else if (searching) closeSearch()
@@ -311,7 +323,7 @@
   const skeletonCards = [0, 1, 2, 3]
 </script>
 
-<svelte:window onkeydown={onWindowKey} />
+<svelte:window onkeydown={onWindowKey} onpointerdown={signalActivity} />
 
 <div class="app-shell min-h-[100dvh] min-w-[320px]">
   <!-- One cohesive, full-width, sticky frosted app bar. -->
@@ -407,6 +419,21 @@
   </header>
 
   <div class="mx-auto max-w-3xl px-4 pb-16 pt-4 lg:max-w-5xl xl:max-w-7xl">
+    {#if hasDevices}
+      <div class="mb-3 flex justify-end">
+        <button
+          onclick={manualRefresh}
+          class="flex items-center gap-1.5 rounded-full bg-ink/5 px-3 py-1.5 text-xs font-medium text-ink/60 transition hover:bg-ink/10 hover:text-ink disabled:cursor-wait disabled:opacity-50"
+          disabled={refreshing}
+          aria-label="Refresh device status"
+        >
+          <svg class="h-4 w-4 {refreshing ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 11a8 8 0 10-2.3 5.7" /><path d="M20 4v7h-7" />
+          </svg>
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+    {/if}
     {#if needsToken}
       <div in:fade={{ duration: 200 }} class="mx-auto mt-12 w-full max-w-sm rounded-3xl border border-ink/10 bg-ink/[0.06] p-6 text-center backdrop-blur-xl">
         <div class="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-ink/10">
@@ -475,12 +502,20 @@
         <p class="mt-1.5 max-w-xs text-sm leading-relaxed text-ink/50">
           {$lastError || 'The Setu server isn’t responding. Check that it’s running and that you’re on the same network.'}
         </p>
-        <button
-          onclick={resume}
-          class="mt-4 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
-        >
-          Retry
-        </button>
+        <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <button
+            onclick={resume}
+            class="rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
+          >
+            Retry
+          </button>
+          <a
+            href="/api/recover"
+            class="rounded-full border border-ink/10 bg-ink/5 px-3 py-2 text-xs font-medium text-ink/60 transition hover:bg-ink/10 hover:text-ink"
+          >
+            Fix app cache
+          </a>
+        </div>
       </div>
     {:else if $devices.length === 0}
       <div in:fade={{ duration: 200 }} class="flex flex-1 flex-col items-center justify-center py-20 text-center">

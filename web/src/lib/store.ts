@@ -137,10 +137,10 @@ function setError(msg: string): void {
 
 let refreshGeneration = 0
 
-export async function refresh(): Promise<void> {
+export async function refresh(hardwareRefresh = false): Promise<void> {
   const generation = ++refreshGeneration
   try {
-    const next = await listDevices()
+    const next = await listDevices(hardwareRefresh)
     if (generation !== refreshGeneration) return
     devices.set(next)
     connection.set('online')
@@ -414,7 +414,9 @@ export function disconnect(): void {
 // foreground (mobile OSes often suspend or kill backgrounded tabs). The command
 // path never waits on this: actions fire against the cached list immediately.
 export function resume(): void {
-  void refresh()
+  // Foregrounding after an idle/frozen period must not wait for the backed-off
+  // schedule: perform a real hardware refresh before reconciling the cache.
+  void refresh(true)
   backoff = 1000 // foreground again — retry eagerly, not at the backed-off pace
   // A backgrounded socket can go *half-open*: the mobile OS / NAT drops the TCP
   // link without the socket ever leaving readyState OPEN. Since the client never

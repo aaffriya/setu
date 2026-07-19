@@ -8,7 +8,8 @@ nothing about it.
 - Translates uniform commands → capability calls via type assertions.
 
 ## Routes
-- `GET /api/devices` → `manager.Snapshot()`.
+- `GET /api/devices` → cached `manager.Snapshot()`; `?refresh=true` performs a one-shot hardware poll and overlays its successful states first.
+- `POST /api/activity` → reset the adaptive poller's idle backoff without touching hardware.
 - `GET /api/recover` → self-contained service-worker/cache recovery page; preserves token and UI preferences.
 - `POST /api/devices/{id}/command` → `dispatch`: `on`/`off`, `set_brightness`, `set_color`, `set_color_temp`, `set_scene`, `set_scene_speed`, `volume_up`/`volume_down`/`set_volume`/`mute`, `key`, `key_down`/`key_up` (press-and-hold), `send_text`, `launch_app`.
 - `GET /ws` → per-connection bus subscription; pushes `snapshot` (on connect) then `state_changed`.

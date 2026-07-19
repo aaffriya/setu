@@ -43,6 +43,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.CloseNow()
+	if s.poller != nil {
+		s.poller.Activity()
+	}
 
 	// CloseRead discards any client→server frames and returns a context that is
 	// cancelled when the client disconnects.

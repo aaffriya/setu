@@ -103,3 +103,139 @@ func TestPollerRace(t *testing.T) {
 		}
 	}
 }
+
+func TestAdaptiveInterval(t *testing.T) {
+	const base = 45 * time.Second
+	tests := []struct {
+		name string
+		idle time.Duration
+		want time.Duration
+	}{
+		{"active", time.Minute, base},
+		{"short idle", 2 * time.Minute, 5 * time.Minute},
+		{"idle", 15 * time.Minute, 10 * time.Minute},
+		{"long idle", time.Hour, 30 * time.Minute},
+		{"very long idle", 6 * time.Hour, time.Hour},
+		{"day idle", 24 * time.Hour, 6 * time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := adaptiveInterval(base, tt.idle); got != tt.want {
+				t.Fatalf("adaptiveInterval(%v, %v) = %v, want %v", base, tt.idle, got, tt.want)
+			}
+		})
+	}
+
+	// A configured cadence slower than an idle stage remains the floor.
+	if got := adaptiveInterval(20*time.Minute, 3*time.Minute); got != 20*time.Minute {
+		t.Fatalf("slow configured floor = %v, want 20m", got)
+	}
+}
+
+func TestManualRefreshWhenScheduledPollingDisabled(t *testing.T) {
+	bus := events.NewBus()
+	dev := &fakeDevice{id: "manual"}
+	m := New(bus, []device.Device{dev})
+	defer m.Close()
+
+	p := NewPoller(m, bus, 0, testLogger())
+	runCtx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.Run(runCtx)
+		close(done)
+	}()
+
+	refreshCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	states, err := p.Refresh(refreshCtx)
+	if err != nil {
+		cancel()
+		stop()
+		<-done
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := states[dev.ID()].Brightness; got != 1 {
+		t.Errorf("refreshed brightness = %d, want 1", got)
+	}
+	states, err = p.Refresh(refreshCtx)
+	cancel()
+	if err != nil {
+		stop()
+		<-done
+		t.Fatalf("second Refresh: %v", err)
+	}
+	if got := states[dev.ID()].Brightness; got != 1 {
+		t.Errorf("reused brightness = %d, want 1", got)
+	}
+	if got := dev.polls.Load(); got != 1 {
+		t.Errorf("back-to-back refreshes ran %d hardware polls, want 1", got)
+	}
+
+	stop()
+	<-done
+}
+
+func TestRefreshReusesInFlightInitialPoll(t *testing.T) {
+	bus := events.NewBus()
+	dev := &fakeDevice{id: "startup", delay: 50 * time.Millisecond}
+	m := New(bus, []device.Device{dev})
+	defer m.Close()
+
+	p := NewPoller(m, bus, time.Hour, testLogger())
+	runCtx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.Run(runCtx)
+		close(done)
+	}()
+
+	refreshCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	states, err := p.Refresh(refreshCtx)
+	cancel()
+	if err != nil {
+		stop()
+		<-done
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := states[dev.ID()].Brightness; got != 1 {
+		t.Errorf("startup brightness = %d, want 1", got)
+	}
+	if got := dev.polls.Load(); got != 1 {
+		t.Errorf("startup refresh ran %d hardware polls, want 1", got)
+	}
+
+	stop()
+	<-done
+}
+
+func TestActivityDoesNotPostponeActivePolls(t *testing.T) {
+	bus := events.NewBus()
+	dev := &fakeDevice{id: "active"}
+	m := New(bus, []device.Device{dev})
+	defer m.Close()
+
+	p := NewPoller(m, bus, 20*time.Millisecond, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.After(140 * time.Millisecond)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			p.Activity()
+		case <-deadline:
+			cancel()
+			<-done
+			if got := dev.polls.Load(); got < 4 {
+				t.Fatalf("continuous activity postponed polling: got %d polls, want at least 4", got)
+			}
+			return
+		}
+	}
+}

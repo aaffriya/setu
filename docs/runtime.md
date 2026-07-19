@@ -40,8 +40,14 @@ recovery path, by design.
 - **Polling is concurrent per tick** (`poller.pollOnce`): cycle cost = slowest
   device, not the sum. Worst cases to keep in mind: off TV ≈ 4 s REST connect
   timeout; unreachable WiZ ≈ 3.5 s (ARP miss → 1.5 s broadcast discovery → 2 s
-  rpc). `Wait()` prevents overlapping polls of the same device; an overrun
-  cycle just drops ticks.
+  rpc). The configured `poll_interval` is the active cadence (default 45 s).
+  After 2m without app activity or device changes it backs off to 5m → 10m →
+  30m → 1h → 6h. UI pointer/keyboard activity is signalled at most every 30s;
+  foreground/manual refresh performs a one-shot hardware poll and resets the
+  cadence. Refreshes arriving during or within 5s of a completed cycle reuse
+  that result, so startup and multiple clients cannot cause back-to-back polls.
+  The poll coordinator serializes cycles, so a device is never polled twice at
+  once.
 - **Server WS writes are bounded** (`wsWriteTimeout`, 10 s): a phone that
   suspended mid-connection leaves a half-open socket; the deadline drops it at
   the next event instead of waiting ~15 min for kernel TCP timeout.

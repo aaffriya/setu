@@ -26,7 +26,7 @@ type Config struct {
 	Listen ListenConfig `yaml:"listen"`
 	// Auth holds the bearer token required on /api and /ws.
 	Auth AuthConfig `yaml:"auth"`
-	// PollInterval is how often the state poller re-reads device state.
+	// PollInterval is the active state-poll cadence; idle polling backs off.
 	PollInterval Duration `yaml:"poll_interval"`
 	// Devices is the list of configured devices (empty until devices are added).
 	Devices []DeviceSpec `yaml:"devices"`
@@ -101,7 +101,7 @@ type DeviceSpec struct {
 
 const (
 	defaultPort         = 80
-	defaultPollInterval = 5 * time.Second
+	defaultPollInterval = 45 * time.Second
 )
 
 // Load reads and parses the config file at path, applying defaults first so a

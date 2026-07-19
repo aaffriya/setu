@@ -60,6 +60,9 @@ listen:
 	if got := cfg.Listen.String(); got != "192.168.1.10:80" {
 		t.Errorf("listen = %q, want 192.168.1.10:80", got)
 	}
+	if got := cfg.PollInterval.Duration(); got != 45*time.Second {
+		t.Errorf("default poll interval = %v, want 45s", got)
+	}
 
 	// explicit interface + port.
 	cfg, err = Load(write(t, `

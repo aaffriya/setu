@@ -7,7 +7,7 @@
 2. Build the event `Bus`, the `ARPResolver`, and a device `Factory`.
 3. **Register brands** — one `<brand>.Register(factory)` line each.
 4. `factory.BuildAll(cfg.Devices, …)` → the `Manager`.
-5. Start the `Poller` (immediate poll, then on `poll_interval`).
+5. Start the adaptive `Poller` (immediate poll, active `poll_interval`, then idle backoff).
 6. Start the HTTP server; serve until `SIGINT`/`SIGTERM`, then graceful shutdown.
 
 ## Where to edit

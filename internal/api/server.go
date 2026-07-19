@@ -20,16 +20,18 @@ import (
 
 // Server wires the manager and event bus to HTTP handlers.
 type Server struct {
-	mgr   *manager.Manager
-	bus   *events.Bus
-	token string
-	dist  fs.FS // embedded frontend, rooted at the dist dir
-	log   *slog.Logger
+	mgr    *manager.Manager
+	poller *manager.Poller
+	bus    *events.Bus
+	token  string
+	dist   fs.FS // embedded frontend, rooted at the dist dir
+	log    *slog.Logger
 }
 
 // Options configures a Server.
 type Options struct {
 	Manager *manager.Manager
+	Poller  *manager.Poller
 	Bus     *events.Bus
 	Token   string
 	Dist    fs.FS
@@ -39,11 +41,12 @@ type Options struct {
 // New returns a Server.
 func New(o Options) *Server {
 	return &Server{
-		mgr:   o.Manager,
-		bus:   o.Bus,
-		token: o.Token,
-		dist:  o.Dist,
-		log:   o.Logger,
+		mgr:    o.Manager,
+		poller: o.Poller,
+		bus:    o.Bus,
+		token:  o.Token,
+		dist:   o.Dist,
+		log:    o.Logger,
 	}
 }
 
@@ -60,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 
 	// JSON API (token-protected). Go 1.22+ method+pattern routing.
 	mux.Handle("GET /api/devices", s.auth(http.HandlerFunc(s.handleListDevices)))
+	mux.Handle("POST /api/activity", s.auth(http.HandlerFunc(s.handleActivity)))
 	mux.Handle("POST /api/devices/{id}/command", s.auth(http.HandlerFunc(s.handleCommand)))
 
 	// WebSocket (token-protected; token may also be passed as ?token= for
