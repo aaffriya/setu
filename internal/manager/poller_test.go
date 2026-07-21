@@ -175,6 +175,33 @@ func TestManualRefreshWhenScheduledPollingDisabled(t *testing.T) {
 	<-done
 }
 
+func TestReadyClosesAfterInitialBaseline(t *testing.T) {
+	bus := events.NewBus()
+	dev := &fakeDevice{id: "baseline", delay: 40 * time.Millisecond}
+	m := New(bus, []device.Device{dev})
+	defer m.Close()
+	p := NewPoller(m, bus, time.Hour, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+
+	select {
+	case <-p.Ready():
+		t.Fatal("Ready closed before the delayed initial poll completed")
+	case <-time.After(10 * time.Millisecond):
+	}
+	select {
+	case <-p.Ready():
+	case <-time.After(time.Second):
+		t.Fatal("Ready did not close after the initial poll")
+	}
+	if dev.polls.Load() != 1 {
+		t.Fatalf("initial polls = %d, want 1", dev.polls.Load())
+	}
+	cancel()
+	<-done
+}
+
 func TestRefreshReusesInFlightInitialPoll(t *testing.T) {
 	bus := events.NewBus()
 	dev := &fakeDevice{id: "startup", delay: 50 * time.Millisecond}

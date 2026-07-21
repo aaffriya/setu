@@ -11,7 +11,7 @@ It is a **single static Go binary**. That one binary serves the embedded web app
 API, and a WebSocket for live updates. No NGINX, no separate web server, no process
 supervisor.
 
-> **Status.** The full architecture is in place, plus two real device integrations —
+> **Status.** The full architecture is in place, including bounded local automation, plus two real device integrations —
 > **Philips WiZ** bulbs and **Samsung Tizen** TVs (see [Supported devices](#supported-devices)).
 > Add more one at a time, by brand and model, following the `example` template and the two
 > real packages. See [Adding a device](#adding-a-device).
@@ -32,16 +32,16 @@ supervisor.
                          │   commands │              │ state-change events                         │
                          │            ▼              │                                              │
                          │        devices ──────▶ event bus (Go channels) ◀── state poller         │
-                         │            │                       ▲                                     │
-                         │   MAC→IP   ▼                       └── (future: automation engine)      │
+                         │            │                       └── automation (time/device/webhook)  │
+                         │   MAC→IP   ▼                                                             │
                          │        resolver (ARP / brand discovery → IP)                            │
                          └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Event-driven core.** Commands flow *in* (HTTP → manager → device); state-change events
 flow *out* (device/poller → event bus → WebSocket → browser). The event bus is a tiny
-channel-based pub/sub. This powers the live UI today and is the seam where an automation
-engine plugs in later — without touching device code.
+channel-based pub/sub. This powers both the live UI and the automation engine without putting
+rule behavior in device code.
 
 **Interfaces only at the real seams** (idiomatic Go: composition, not inheritance):
 
@@ -58,6 +58,8 @@ setu/
 ├── cmd/setu/main.go        # composition root: load config, wire deps, register devices, serve
 ├── internal/
 │   ├── api/                # http handlers, ws hub, bearer auth, routing, static embed serving
+│   ├── automation/         # bounded schedules, device relations, incoming webhook triggers
+│   ├── control/            # shared validated command execution (API + automation)
 │   ├── manager/            # device registry, command routing, event-driven state snapshot, poller
 │   ├── events/             # channel-based pub/sub bus + event types
 │   ├── device/             # capability interfaces + Device + Color/State
@@ -151,7 +153,8 @@ devices: []              # empty for now; see "Adding a device"
 
 ### HTTP / WebSocket API
 
-All endpoints require `Authorization: Bearer <token>` (the WebSocket also accepts `?token=`).
+Admin endpoints require `Authorization: Bearer <token>` (the WebSocket also accepts `?token=`).
+An incoming automation hook accepts only its separate per-rule bearer token.
 
 | Method & path | Body | Result |
 | --- | --- | --- |
@@ -169,6 +172,11 @@ All endpoints require `Authorization: Bearer <token>` (the WebSocket also accept
 | | `{"action":"key_down","value":"KEY_RIGHT"}` / `{"action":"key_up","value":"KEY_RIGHT"}` | press-and-hold a key (the device auto-releases a hold the client never ends) |
 | | `{"action":"send_text","value":"breaking bad"}` | type into the device's focused text field |
 | `GET /ws` | — | WebSocket; pushes `{type,device_id,state}` (`snapshot` on connect, then `state_changed`) |
+| `GET` / `PUT /api/automations` | complete revisioned rule state | list or atomically replace automations |
+| `GET /api/automations/export` | — | backup form (hashed webhook secrets only) |
+| `POST /api/automations/{id}/run` | — | queue a manual run |
+| `POST /api/automations/{id}/token` | — | rotate and return a webhook token once |
+| `POST /api/automation-hooks/{id}` | optional body (max 4 KB, ignored) | trigger one predefined rule with its per-rule bearer token |
 
 The command body is **uniform and device-agnostic**. The API checks capability support with
 type assertions and returns `400` if a device doesn't support an action (e.g. brightness on a
@@ -176,6 +184,27 @@ plain switch), `404` for an unknown device, `502` for a device/IO failure. Capab
 today: `switch`, `brightness`, `color`, `color_temp`, `scene`, `volume`, `key`, `key_hold`,
 `app`, `text`. A device that has `scene` also lists its presets in the `scenes` field of
 `GET /api/devices`.
+
+---
+
+## Lightweight automation and backup
+
+The Settings automation editor supports one trigger per rule: a minute-level schedule, a
+device power-state edge, or an incoming webhook. Rules have up to four simple AND conditions
+and sixteen ordered, idempotent actions. The runtime is deliberately bounded: 64 rules, two
+fixed workers, a 32-entry queue, and the last 20 results in RAM only. Device relations that
+form a power cycle are rejected. The event subscriber can request one snapshot resync after
+overflow, so it needs no reconciliation ticker.
+
+Webhook tokens are generated independently for each rule. The plaintext is returned only
+when created/rotated; Setu stores a SHA-256 hash. Call the shown URL with
+`Authorization: Bearer <webhook-token>` and optionally an `Idempotency-Key`. Keep Setu on a
+trusted LAN/VPN or HTTPS tunnel; never expose it raw to the internet.
+
+Settings creates one versioned JSON backup. Export checkboxes select favourites, rooms,
+manual scenes, layout/theme, and/or automations. Restore has one action: every section present
+in the file replaces that type; omitted sections stay untouched. Access tokens, live device
+state/cache, IP/MAC configuration, pairing-token plaintext, and run history are never exported.
 
 ---
 
@@ -358,7 +387,7 @@ reported `capabilities`.
 
 ### Not yet (by design)
 
-- No automation/rules engine — only the event-bus seam it will subscribe to.
+- No scripting, generic nested rules, outbound webhooks, MQTT, or persistent automation history.
 - No HomeKit — but the front-end-protocol seam (the `api` package over the manager/bus) keeps it
   addable later without touching device code.
 - A TV's power state is read from REST `device.PowerState` (on vs. standby), volume/mute over
@@ -370,7 +399,8 @@ reported `capabilities`.
 ## Deployment notes
 
 **General.** Setu must share the **host network** (LAN reachability, ARP, and future UDP
-broadcast / mDNS). Mount your `config.yaml` (and a writable dir if you use a unix socket).
+broadcast / mDNS). Mount your `config.yaml`. Set `SETU_STATE_DIR` to a writable persistent
+directory for automations and Samsung pairing tokens; otherwise the OS temp directory is used.
 
 **MikroTik RouterOS (container).** Build the `linux/arm64` (or your arch) image, import it into
 the `container` package, attach it to a veth on your LAN bridge, and mount a config volume.
@@ -400,7 +430,7 @@ Kept deliberately minimal (standard library does the rest):
 - **`github.com/coder/websocket`** — small, context-aware, zero-dependency WebSocket library.
 - **`gopkg.in/yaml.v3`** — human-friendly config with comments and `5s`-style durations.
 - **Frontend:** Svelte 5 (tiny runtime → small JS heap, important on mobile), Vite, Tailwind.
-  No heavy UI kit. The production bundle is ~24 KB gzipped.
+  No heavy UI kit.
 
 ## License
 

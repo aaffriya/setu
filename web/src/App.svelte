@@ -25,19 +25,31 @@
   import { canInstall, isStandalone, isIOS, secureContext, promptInstall } from './lib/pwa'
   import DeviceCard from './lib/components/DeviceCard.svelte'
   import Scenes from './lib/components/Scenes.svelte'
+  import Automations from './lib/components/Automations.svelte'
+  import BackupRestore from './lib/components/BackupRestore.svelte'
+  import { trapFocus } from './lib/focus-trap'
   import { masonry } from './lib/masonry'
 
   let token = $state(getToken())
   let tokenDraft = $state(getToken())
   let showSettings = $state(false)
+  let activeSettingsTool = $state<'scenes' | 'automations' | ''>('')
   let themeChoice = $state<Theme>(getTheme())
   let confirmReset = $state(false)
   let initialRefreshDone = $state(false)
   let refreshing = $state(false)
   // Forget the reset confirmation whenever the dialog closes.
   $effect(() => {
-    if (!showSettings) confirmReset = false
+    if (!showSettings) {
+      confirmReset = false
+      activeSettingsTool = ''
+    }
   })
+
+  function setSettingsTool(tool: 'scenes' | 'automations', open: boolean) {
+    if (open) activeSettingsTool = tool
+    else if (activeSettingsTool === tool) activeSettingsTool = ''
+  }
 
   const themes: Theme[] = ['system', 'light', 'dark']
   function chooseTheme(t: Theme) {
@@ -297,7 +309,7 @@
   function onWindowKey(e: KeyboardEvent) {
     signalActivity()
     if (e.key !== 'Escape') return
-    if (showSettings) showSettings = false
+    if (showSettings && !activeSettingsTool) showSettings = false
     else if (searching) closeSearch()
     else if (organizing) organizing = false
   }
@@ -317,8 +329,6 @@
 
   const iconBtn =
     'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink/5 text-ink/70 transition hover:bg-ink/10 hover:text-ink disabled:cursor-wait disabled:opacity-50 min-[360px]:h-9 min-[360px]:w-9'
-  const iconBtnActive =
-    'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-indigo-500/15 text-indigo-500 transition dark:text-indigo-300 min-[360px]:h-9 min-[360px]:w-9'
   const chip = 'shrink-0 rounded-full px-3 py-1 text-xs font-medium transition'
   const skeletonCards = [0, 1, 2, 3]
 </script>
@@ -385,17 +395,6 @@
               <button onclick={() => (searching = true)} class={iconBtn} aria-label="Search devices">
                 <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
                   <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
-                </svg>
-              </button>
-              <Scenes disabled={$connection !== 'online'} />
-              <button
-                onclick={() => (organizing = !organizing)}
-                class={organizing ? iconBtnActive : iconBtn}
-                aria-pressed={organizing}
-                aria-label="Arrange &amp; group devices"
-              >
-                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
                 </svg>
               </button>
             {/if}
@@ -621,10 +620,12 @@
     onclick={(e) => e.target === e.currentTarget && (showSettings = false)}
   >
     <div
-      class="w-full max-w-sm rounded-3xl border border-ink/10 bg-panel p-6 shadow-2xl"
+      class="max-h-[92dvh] w-full max-w-sm overflow-y-auto rounded-3xl border border-ink/10 bg-panel p-6 shadow-2xl"
       role="dialog"
-      aria-modal="true"
+      aria-modal={activeSettingsTool === ''}
       aria-label="Settings"
+      tabindex="-1"
+      use:trapFocus={activeSettingsTool === ''}
     >
       <h2 class="text-lg font-semibold">Settings</h2>
       <label class="mt-4 block text-sm text-ink/60" for="token-input">Access token</label>
@@ -649,6 +650,39 @@
             {t}
           </button>
         {/each}
+      </div>
+
+      <span class="mt-4 block text-sm text-ink/60">Device tools</span>
+      <div class="mt-1.5 space-y-1.5">
+        <Scenes
+          disabled={$connection !== 'online'}
+          onmodalchange={(open) => setSettingsTool('scenes', open)}
+        />
+        <Automations
+          disabled={$connection !== 'online'}
+          onmodalchange={(open) => setSettingsTool('automations', open)}
+        />
+        <button
+          type="button"
+          onclick={() => {
+            organizing = !organizing
+            showSettings = false
+          }}
+          disabled={!hasDevices}
+          aria-pressed={organizing}
+          class="flex w-full items-center gap-3 rounded-xl bg-ink/5 px-3 py-2.5 text-left transition hover:bg-ink/10 disabled:opacity-40"
+        >
+          <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-indigo-500/10 text-indigo-500 dark:text-indigo-300">
+            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+            </svg>
+          </span>
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm font-medium text-ink/75">{organizing ? 'Finish arranging' : 'Arrange devices'}</span>
+            <span class="block text-xs text-ink/40">Order devices and assign rooms</span>
+          </span>
+          <span class="text-lg text-ink/30" aria-hidden="true">›</span>
+        </button>
       </div>
 
       {#if !isStandalone}
@@ -676,6 +710,8 @@
           </p>
         {/if}
       {/if}
+
+      <BackupRestore />
 
       <div class="mt-5 flex gap-2">
         <button

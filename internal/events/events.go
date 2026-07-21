@@ -2,9 +2,8 @@
 // on Go channels. It is the backbone of Setu's event-driven core: devices and
 // the state poller publish StateChanged events; the WebSocket hub subscribes to
 // push them to browsers, and the manager subscribes to keep a fast state
-// snapshot. A future automation/rules engine will subscribe at this same seam —
-// with no change to the publishers. (This is the documented seam referenced in
-// principle 6; the engine itself is intentionally not built yet.)
+// snapshot. The automation engine uses the recoverable subscription at this
+// same seam, without changing publishers.
 package events
 
 import (
@@ -37,14 +36,14 @@ type Event struct {
 // publishers (see Publish).
 type Bus struct {
 	mu     sync.RWMutex
-	subs   map[chan Event]struct{}
-	buffer int // per-subscriber channel buffer, sized for brief bursts
+	subs   map[chan Event]chan struct{}
+	buffer int // per-subscriber event buffer, sized for brief bursts
 }
 
 // NewBus returns a ready-to-use Bus.
 func NewBus() *Bus {
 	return &Bus{
-		subs:   make(map[chan Event]struct{}),
+		subs:   make(map[chan Event]chan struct{}),
 		buffer: 16,
 	}
 }
@@ -54,9 +53,35 @@ func NewBus() *Bus {
 // finished, or the subscription leaks. unsubscribe is safe to call more than
 // once.
 func (b *Bus) Subscribe() (<-chan Event, func()) {
-	ch := make(chan Event, b.buffer)
+	events, _, unsubscribe := b.subscribe(false)
+	return events, unsubscribe
+}
+
+// SubscribeRecoverable registers a subscriber that also receives a coalesced
+// resync signal if its event buffer overflows. State consumers can then read one
+// fresh manager snapshot instead of running a periodic reconciliation ticker.
+func (b *Bus) SubscribeRecoverable() (<-chan Event, <-chan struct{}, func()) {
+	return b.subscribe(true)
+}
+
+// Resync pauses publication while a recoverable subscriber discards its stale
+// buffer and reads authoritative device state. Device methods update state
+// before publishing, so a concurrent change is either in that snapshot or is
+// delivered as a normal event immediately afterwards.
+func (b *Bus) Resync(snapshot func()) {
 	b.mu.Lock()
-	b.subs[ch] = struct{}{}
+	defer b.mu.Unlock()
+	snapshot()
+}
+
+func (b *Bus) subscribe(recoverable bool) (<-chan Event, <-chan struct{}, func()) {
+	ch := make(chan Event, b.buffer)
+	var resync chan struct{}
+	if recoverable {
+		resync = make(chan struct{}, 1)
+	}
+	b.mu.Lock()
+	b.subs[ch] = resync
 	b.mu.Unlock()
 
 	var once sync.Once
@@ -66,9 +91,12 @@ func (b *Bus) Subscribe() (<-chan Event, func()) {
 			delete(b.subs, ch)
 			b.mu.Unlock()
 			close(ch)
+			if resync != nil {
+				close(resync)
+			}
 		})
 	}
-	return ch, unsubscribe
+	return ch, resync, unsubscribe
 }
 
 // Publish delivers an event to all current subscribers. Delivery is
@@ -84,11 +112,18 @@ func (b *Bus) Publish(e Event) {
 	// unsubscribe, so a channel is never closed while we might send to it.
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	for ch := range b.subs {
+	for ch, resync := range b.subs {
 		select {
 		case ch <- e:
 		default:
-			// subscriber is full; drop rather than block.
+			// The event is dropped rather than blocking publishers. Recoverable
+			// subscribers get at most one pending snapshot hint for the burst.
+			if resync != nil {
+				select {
+				case resync <- struct{}{}:
+				default:
+				}
+			}
 		}
 	}
 }

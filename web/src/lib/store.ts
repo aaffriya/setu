@@ -21,6 +21,7 @@ import {
   type Color,
   type CommandAction,
 } from './api'
+import { isFavoritesSection, isScenesSection } from './backup-validation'
 
 const CACHE_KEY = 'setu.devices'
 
@@ -62,15 +63,6 @@ function recordOrEmpty<T>(value: unknown): Record<string, T> {
     : {}
 }
 
-function recordOfArraysOrEmpty<T>(value: unknown): Record<string, T[]> {
-  const raw = recordOrEmpty<unknown>(value)
-  const out: Record<string, T[]> = {}
-  for (const [key, item] of Object.entries(raw)) {
-    if (Array.isArray(item)) out[key] = item as T[]
-  }
-  return out
-}
-
 function stringRecordOrEmpty(value: unknown): Record<string, string> {
   const raw = recordOrEmpty<unknown>(value)
   const out: Record<string, string> = {}
@@ -87,10 +79,6 @@ function booleanRecordOrEmpty(value: unknown): Record<string, boolean> {
     if (typeof item === 'boolean') out[key] = item
   }
   return out
-}
-
-function arrayOrEmpty<T>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : []
 }
 
 function stringArrayOrEmpty(value: unknown): string[] {
@@ -260,7 +248,7 @@ export type Favorite = {
 export const favorites = persisted<Record<string, Favorite[]>>(
   'setu.favorites',
   {},
-  recordOfArraysOrEmpty<Favorite>,
+  (value) => (isFavoritesSection(value) ? value : {}),
 )
 
 export function addFavorite(deviceId: string, fav: Omit<Favorite, 'id'>): void {
@@ -434,10 +422,10 @@ export function resume(): void {
 
 // --- scenes: manual multi-device presets (snapshot + replay) -----------------
 // A scene is a *manual* tile that fires several existing commands at once ("Movie
-// mode" = TV on + lamp warm-dim). It's user-triggered only — nothing time- or
-// event-driven (that would be the out-of-scope automation engine). The editor
-// picks which devices to include and snapshots their current look; stored in
-// localStorage like every other UI pref.
+// mode" = TV on + lamp warm-dim). It remains user-triggered; scheduled and
+// event-driven behavior belongs to the separate bounded automation engine. The
+// editor picks which devices to include and snapshots their current look;
+// stored in localStorage like every other UI pref.
 
 export type SceneCommand = {
   deviceId: string
@@ -446,7 +434,9 @@ export type SceneCommand = {
 }
 export type Scene = { id: string; name: string; commands: SceneCommand[] }
 
-export const scenes = persisted<Scene[]>('setu.scenes', [], arrayOrEmpty<Scene>)
+export const scenes = persisted<Scene[]>('setu.scenes', [], (value) =>
+  isScenesSection(value) ? value : [],
+)
 
 // snapshotCommands turns a device's current state into the commands that would
 // reproduce its look — power first, then (if on) brightness and whichever colour

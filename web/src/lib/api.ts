@@ -57,6 +57,71 @@ export type CommandAction =
   | 'launch_app'
   | 'wake'
 
+export type AutomationActionName =
+  | 'on'
+  | 'off'
+  | 'set_brightness'
+  | 'set_color'
+  | 'set_color_temp'
+  | 'set_scene'
+  | 'set_scene_speed'
+  | 'set_volume'
+  | 'launch_app'
+  | 'wake'
+
+export type AutomationAction = {
+  device_id: string
+  action: AutomationActionName
+  value?: number | string | Color
+  delay_seconds?: number
+}
+
+export type AutomationCondition = { device_id: string; on: boolean }
+export type AutomationTrigger =
+  | {
+      type: 'schedule'
+      schedule: { time: string; weekdays: number[]; utc_offset_minutes: number }
+    }
+  | {
+      type: 'device_state'
+      device: { device_id: string; on: boolean; stable_seconds?: number }
+    }
+  | { type: 'webhook'; webhook: { has_secret?: boolean; secret_hash?: string } }
+
+export type AutomationRule = {
+  id: string
+  name: string
+  enabled: boolean
+  trigger: AutomationTrigger
+  conditions?: AutomationCondition[]
+  actions: AutomationAction[]
+  cooldown_seconds?: number
+}
+
+export type AutomationState = {
+  version: number
+  revision: number
+  paused: boolean
+  items: AutomationRule[]
+}
+
+export type AutomationRun = {
+  id: string
+  rule_id: string
+  rule_name: string
+  source: string
+  started_at: string
+  duration_ms: number
+  ok: boolean
+  results: Array<{ device_id: string; action: string; ok: boolean; error?: string }>
+}
+
+export type AutomationSnapshot = AutomationState & { runs: AutomationRun[] }
+export type AutomationUpdate = {
+  state: AutomationState
+  generated_tokens?: Record<string, string>
+}
+
 const TOKEN_KEY = 'setu.token'
 const DEVICE_LIST_TIMEOUT_MS = 8000
 const ACTIVITY_SIGNAL_INTERVAL_MS = 30_000
@@ -249,6 +314,32 @@ export function sendCommand(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, value }),
   })
+}
+
+export function getAutomations(): Promise<AutomationSnapshot> {
+  return request<AutomationSnapshot>('/api/automations')
+}
+
+export function exportAutomations(): Promise<AutomationState> {
+  return request<AutomationState>('/api/automations/export')
+}
+
+export function saveAutomations(state: AutomationState): Promise<AutomationUpdate> {
+  return request<AutomationUpdate>('/api/automations', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state),
+  })
+}
+
+export function runAutomation(id: string): Promise<{ run_id?: string; status: string }> {
+  return request(`/api/automations/${encodeURIComponent(id)}/run`, { method: 'POST' })
+}
+
+export function rotateAutomationToken(
+  id: string,
+): Promise<{ token: string; state: AutomationState }> {
+  return request(`/api/automations/${encodeURIComponent(id)}/token`, { method: 'POST' })
 }
 
 // wsURL builds the WebSocket URL (same origin). The token rides as a query

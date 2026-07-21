@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"setu/internal/api"
+	"setu/internal/automation"
 	"setu/internal/config"
 	"setu/internal/devices/example"
 	"setu/internal/devices/samsung"
@@ -81,18 +82,31 @@ func run() error {
 	poller := manager.NewPoller(mgr, bus, cfg.PollInterval.Duration(), log)
 	go poller.Run(ctx)
 
+	automationPath, temporaryAutomationState := automation.DefaultPath()
+	if temporaryAutomationState {
+		log.Warn("SETU_STATE_DIR is unset; automations may not survive a reboot", "path", automationPath)
+	}
+	automations, err := automation.New(mgr, bus, automation.NewStore(automationPath), log)
+	if err != nil {
+		return err
+	}
+	go automations.Run(ctx, poller.Ready())
+	log.Info("loaded automations", "count", len(automations.Snapshot().Items))
+
 	// --- HTTP server ---
 	srv := api.New(api.Options{
-		Manager: mgr,
-		Poller:  poller,
-		Bus:     bus,
-		Token:   cfg.Auth.Token,
-		Dist:    web.Dist(),
-		Logger:  log,
+		Manager:    mgr,
+		Poller:     poller,
+		Bus:        bus,
+		Automation: automations,
+		Token:      cfg.Auth.Token,
+		Dist:       web.Dist(),
+		Logger:     log,
 	})
 	httpServer := &http.Server{
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    16 * 1024,
 	}
 
 	ln, err := listen(cfg.Listen)

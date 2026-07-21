@@ -14,39 +14,43 @@ import (
 	"log/slog"
 	"net/http"
 
+	"setu/internal/automation"
 	"setu/internal/events"
 	"setu/internal/manager"
 )
 
 // Server wires the manager and event bus to HTTP handlers.
 type Server struct {
-	mgr    *manager.Manager
-	poller *manager.Poller
-	bus    *events.Bus
-	token  string
-	dist   fs.FS // embedded frontend, rooted at the dist dir
-	log    *slog.Logger
+	mgr        *manager.Manager
+	poller     *manager.Poller
+	bus        *events.Bus
+	automation *automation.Engine
+	token      string
+	dist       fs.FS // embedded frontend, rooted at the dist dir
+	log        *slog.Logger
 }
 
 // Options configures a Server.
 type Options struct {
-	Manager *manager.Manager
-	Poller  *manager.Poller
-	Bus     *events.Bus
-	Token   string
-	Dist    fs.FS
-	Logger  *slog.Logger
+	Manager    *manager.Manager
+	Poller     *manager.Poller
+	Bus        *events.Bus
+	Automation *automation.Engine
+	Token      string
+	Dist       fs.FS
+	Logger     *slog.Logger
 }
 
 // New returns a Server.
 func New(o Options) *Server {
 	return &Server{
-		mgr:    o.Manager,
-		poller: o.Poller,
-		bus:    o.Bus,
-		token:  o.Token,
-		dist:   o.Dist,
-		log:    o.Logger,
+		mgr:        o.Manager,
+		poller:     o.Poller,
+		bus:        o.Bus,
+		automation: o.Automation,
+		token:      o.Token,
+		dist:       o.Dist,
+		log:        o.Logger,
 	}
 }
 
@@ -65,6 +69,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/devices", s.auth(http.HandlerFunc(s.handleListDevices)))
 	mux.Handle("POST /api/activity", s.auth(http.HandlerFunc(s.handleActivity)))
 	mux.Handle("POST /api/devices/{id}/command", s.auth(http.HandlerFunc(s.handleCommand)))
+	if s.automation != nil {
+		mux.Handle("GET /api/automations", s.auth(http.HandlerFunc(s.handleAutomations)))
+		mux.Handle("PUT /api/automations", s.auth(http.HandlerFunc(s.handleReplaceAutomations)))
+		mux.Handle("GET /api/automations/export", s.auth(http.HandlerFunc(s.handleAutomationExport)))
+		mux.Handle("POST /api/automations/{id}/run", s.auth(http.HandlerFunc(s.handleRunAutomation)))
+		mux.Handle("POST /api/automations/{id}/token", s.auth(http.HandlerFunc(s.handleRotateWebhook)))
+		mux.HandleFunc("POST /api/automation-hooks/{id}", s.handleAutomationWebhook)
+	}
 
 	// WebSocket (token-protected; token may also be passed as ?token= for
 	// browsers, which cannot set an Authorization header on a WebSocket).

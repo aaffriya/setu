@@ -23,10 +23,12 @@ type Poller struct {
 	interval time.Duration
 	log      *slog.Logger
 
-	mu       sync.Mutex // guards last/results: pollOnce polls devices concurrently
-	last     map[string]device.State
-	activity chan struct{}
-	refresh  chan refreshRequest
+	mu        sync.Mutex // guards last/results: pollOnce polls devices concurrently
+	last      map[string]device.State
+	activity  chan struct{}
+	refresh   chan refreshRequest
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 type refreshRequest struct {
@@ -57,8 +59,14 @@ func NewPoller(mgr *Manager, bus *events.Bus, interval time.Duration, log *slog.
 		last:     make(map[string]device.State),
 		activity: make(chan struct{}, 1),
 		refresh:  make(chan refreshRequest),
+		ready:    make(chan struct{}),
 	}
 }
+
+// Ready closes after the initial hardware baseline has completed, or
+// immediately when scheduled polling is disabled. State-triggered automation
+// uses it to avoid treating startup discovery as a real transition.
+func (p *Poller) Ready() <-chan struct{} { return p.ready }
 
 // Run polls until ctx is cancelled. The configured interval is the active
 // cadence. With no app activity or physical state changes, it progressively
@@ -88,6 +96,7 @@ func (p *Poller) Run(ctx context.Context) {
 		// user must still be able to request a one-shot hardware refresh.
 		p.log.Info("scheduled state polling disabled (poll_interval <= 0)")
 	}
+	p.readyOnce.Do(func() { close(p.ready) })
 
 	for {
 		select {

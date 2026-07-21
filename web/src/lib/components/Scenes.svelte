@@ -1,34 +1,22 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { devices, scenes, createScene, removeScene, runScene, type ScenePick } from '../store'
   import { haptics } from '../haptics'
   import { fade, fly } from 'svelte/transition'
+  import { trapFocus } from '../focus-trap'
 
-  // Scenes live behind a labelled popover button. A scene is a one-tap snapshot
+  // Scenes live behind a Settings row and popover. A scene is a one-tap snapshot
   // of the devices you choose (power, brightness, colour, volume) that you can
   // restore later. Creating opens an editor where you pick which devices to
   // include and, for a TV, optionally a source/app to switch to (the TV's input
   // isn't in device state, so it can't be captured — you choose it here).
-  let { disabled = false }: { disabled?: boolean } = $props()
+  let {
+    disabled = false,
+    onmodalchange = () => {},
+  }: { disabled?: boolean; onmodalchange?: (open: boolean) => void } = $props()
 
   let open = $state(false)
   let editing = $state(false)
-  let rootEl: HTMLElement | undefined
-  let buttonEl: HTMLButtonElement | undefined
-  // The popover is positioned `fixed` and clamped to the viewport: it prefers to
-  // sit under the button's right edge, but its left edge and width are pinned
-  // inside a small margin so it can never be clipped on either side — on any
-  // window width. (Previously, right-anchoring let it run off the left edge.)
-  let menuStyle = $state('')
-  function position() {
-    if (!buttonEl) return
-    const m = 8 // viewport margin
-    const r = buttonEl.getBoundingClientRect()
-    const width = Math.min(288, window.innerWidth - m * 2) // 288 = w-72
-    let left = r.right - width // right edge under the button
-    left = Math.min(left, window.innerWidth - m - width) // keep inside right margin
-    left = Math.max(left, m) // …and inside left margin
-    menuStyle = `top:${Math.round(r.bottom + 8)}px; left:${Math.round(left)}px; width:${Math.round(width)}px;`
-  }
 
   // --- creation editor (modal) ---
   let creating = $state(false)
@@ -72,61 +60,60 @@
     node.focus()
   }
 
-  // Position on open, reposition on resize/scroll, and close on outside
-  // pointerdown / Escape (the modal handles its own).
+  $effect(() => onmodalchange(open || creating))
+  onDestroy(() => onmodalchange(false))
+
+  // Consume Escape here so the parent Settings dialog remains open.
   $effect(() => {
-    if (!open) return
-    position()
-    const onDown = (e: PointerEvent) => {
-      if (rootEl && !rootEl.contains(e.target as Node)) open = false
-    }
+    if (!open && !creating) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') open = false
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      if (creating) creating = false
+      else open = false
     }
-    document.addEventListener('pointerdown', onDown)
     document.addEventListener('keydown', onKey)
-    window.addEventListener('resize', position)
     return () => {
-      document.removeEventListener('pointerdown', onDown)
       document.removeEventListener('keydown', onKey)
-      window.removeEventListener('resize', position)
     }
   })
 </script>
 
-<div class="relative" bind:this={rootEl}>
+<div class="w-full">
   <button
     type="button"
-    bind:this={buttonEl}
     onclick={() => {
       haptics.tap()
       open = !open
     }}
-    aria-label="Scenes"
     aria-expanded={open}
-    class="relative grid h-8 w-8 place-items-center rounded-full transition min-[360px]:h-9 min-[360px]:w-9
-           {open ? 'bg-indigo-500/15 text-indigo-500 dark:text-indigo-300' : 'bg-ink/5 text-ink/70 hover:bg-ink/10 hover:text-ink'}"
+    class="relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition
+           {open ? 'bg-indigo-500/15' : 'bg-ink/5 hover:bg-ink/10'}"
   >
-    <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M12 2l1.6 4.6L18 8l-4.4 1.4L12 14l-1.6-4.6L6 8l4.4-1.4L12 2z" />
-      <path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z" opacity="0.7" />
-    </svg>
-    {#if $scenes.length}
-      <span class="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-indigo-500 px-1 text-[10px] font-semibold leading-none text-white">{$scenes.length}</span>
-    {/if}
+    <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-indigo-500/10 text-indigo-500 dark:text-indigo-300">
+      <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12 2l1.6 4.6L18 8l-4.4 1.4L12 14l-1.6-4.6L6 8l4.4-1.4L12 2z" />
+        <path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z" opacity="0.7" />
+      </svg>
+    </span>
+    <span class="min-w-0 flex-1">
+      <span class="block text-sm font-medium text-ink/75">Scenes</span>
+      <span class="block text-xs text-ink/40">Save and run device presets</span>
+    </span>
+    {#if $scenes.length}<span class="rounded-full bg-indigo-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">{$scenes.length}</span>{/if}
+    <span class="text-lg text-ink/30" aria-hidden="true">›</span>
   </button>
 
   {#if open}
-    <div
-      transition:fly={{ y: -6, duration: 150 }}
-      class="fixed z-40 rounded-2xl border border-ink/10 bg-panel p-3 shadow-2xl"
-      style={menuStyle}
-      role="dialog"
-      aria-label="Scenes"
-    >
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="fixed inset-0 z-40 grid place-items-center bg-black/50 p-4 backdrop-blur-sm" transition:fade={{ duration: 150 }} onclick={(event) => event.target === event.currentTarget && (open = false)}>
+      <div transition:fly={{ y: 6, duration: 150 }} class="flex max-h-[85dvh] w-full max-w-sm flex-col rounded-2xl border border-ink/10 bg-panel p-3 shadow-2xl" role="dialog" aria-modal="true" aria-label="Scenes" tabindex="-1" use:trapFocus>
       <div class="flex items-center justify-between px-1">
         <h3 class="text-sm font-semibold">Scenes</h3>
-        {#if $scenes.length}
+        <div class="flex items-center gap-2">
+          {#if $scenes.length}
           <button
             type="button"
             onclick={() => (editing = !editing)}
@@ -135,14 +122,16 @@
           >
             {editing ? 'Done' : 'Edit'}
           </button>
-        {/if}
+          {/if}
+          <button type="button" onclick={() => (open = false)} class="grid h-7 w-7 place-items-center rounded-full bg-ink/5 text-ink/50" aria-label="Close scenes">×</button>
+        </div>
       </div>
       <p class="mt-1 px-1 text-xs leading-relaxed text-ink/45">
         Save the look of the devices you choose, then restore it later with one tap.
       </p>
 
       {#if $scenes.length}
-        <div class="mt-2 space-y-0.5">
+        <div class="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto">
           {#each $scenes as scene (scene.id)}
             <div class="flex items-center gap-1">
               <button
@@ -186,6 +175,7 @@
           New scene
         </button>
       </div>
+      </div>
     </div>
   {/if}
 </div>
@@ -198,7 +188,7 @@
     transition:fade={{ duration: 150 }}
     onclick={(e) => e.target === e.currentTarget && (creating = false)}
   >
-    <div class="flex max-h-[85vh] w-full max-w-sm flex-col rounded-3xl border border-ink/10 bg-panel p-5 shadow-2xl" role="dialog" aria-modal="true" aria-label="New scene">
+    <div class="flex max-h-[85vh] w-full max-w-sm flex-col rounded-3xl border border-ink/10 bg-panel p-5 shadow-2xl" role="dialog" aria-modal="true" aria-label="New scene" tabindex="-1" use:trapFocus>
       <h2 class="text-lg font-semibold">New scene</h2>
       <p class="mt-1 text-xs text-ink/50">Pick the devices to include — their current look is saved now.</p>
 
