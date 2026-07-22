@@ -19,9 +19,11 @@ export function trapFocus(node: HTMLElement, enabled = true) {
     )
   }
 
-  function focusFirst() {
+  function focusDialog() {
     queueMicrotask(() => {
-      if (active && !node.contains(document.activeElement)) (items()[0] ?? node).focus()
+      // Focus the dialog container first. Focusing its first field makes mobile
+      // browsers open the software keyboard as soon as Settings appears.
+      if (active && !node.contains(document.activeElement)) node.focus()
     })
   }
 
@@ -35,7 +37,11 @@ export function trapFocus(node: HTMLElement, enabled = true) {
     }
     const first = list[0]
     const last = list[list.length - 1]
-    if (event.shiftKey && document.activeElement === first) {
+    if (document.activeElement === node) {
+      event.preventDefault()
+      const target = event.shiftKey ? last : first
+      target.focus()
+    } else if (event.shiftKey && document.activeElement === first) {
       event.preventDefault()
       last.focus()
     } else if (!event.shiftKey && document.activeElement === last) {
@@ -45,13 +51,13 @@ export function trapFocus(node: HTMLElement, enabled = true) {
   }
 
   node.addEventListener('keydown', onKeydown)
-  if (active) focusFirst()
+  if (active) focusDialog()
 
   return {
     update(next: boolean) {
       const wasActive = active
       active = next
-      if (!wasActive && active) focusFirst()
+      if (!wasActive && active) focusDialog()
     },
     destroy() {
       node.removeEventListener('keydown', onKeydown)

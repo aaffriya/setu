@@ -18,12 +18,16 @@ const (
 	MaxConditions = 4
 	MaxActions    = 16
 	MaxDelay      = 60
+	MaxNesting    = 8
+	MaxRunActions = MaxActions * MaxNesting
+	MaxRunDelay   = MaxActions * MaxDelay
 )
 
 const (
 	TriggerSchedule    = "schedule"
 	TriggerDeviceState = "device_state"
 	TriggerWebhook     = "webhook"
+	ActionAutomation   = "run_automation"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -79,6 +83,7 @@ type Condition struct {
 
 type Action struct {
 	DeviceID     string          `json:"device_id"`
+	AutomationID string          `json:"automation_id,omitempty"`
 	Action       string          `json:"action"`
 	Value        json.RawMessage `json:"value,omitempty"`
 	DelaySeconds int             `json:"delay_seconds,omitempty"`
@@ -89,10 +94,11 @@ func (a Action) request() control.Request {
 }
 
 type ActionResult struct {
-	DeviceID string `json:"device_id"`
-	Action   string `json:"action"`
-	OK       bool   `json:"ok"`
-	Error    string `json:"error,omitempty"`
+	DeviceID     string `json:"device_id,omitempty"`
+	AutomationID string `json:"automation_id,omitempty"`
+	Action       string `json:"action"`
+	OK           bool   `json:"ok"`
+	Error        string `json:"error,omitempty"`
 }
 
 type Run struct {
@@ -114,7 +120,7 @@ type Snapshot struct {
 var safeActions = map[string]struct{}{
 	"on": {}, "off": {}, "set_brightness": {}, "set_color": {},
 	"set_color_temp": {}, "set_scene": {}, "set_scene_speed": {},
-	"set_volume": {}, "launch_app": {}, "wake": {},
+	"set_volume": {}, "launch_app": {}, "wake": {}, ActionAutomation: {},
 }
 
 func validateState(state State, mgr *manager.Manager) error {
@@ -172,6 +178,18 @@ func validateState(state State, mgr *manager.Manager) error {
 			if _, allowed := safeActions[action.Action]; !allowed {
 				return fmt.Errorf("automation %q action %q is not safe for automatic execution", rule.ID, action.Action)
 			}
+			if action.Action == ActionAutomation {
+				if !idPattern.MatchString(action.AutomationID) {
+					return fmt.Errorf("automation %q has an invalid nested automation id", rule.ID)
+				}
+				if action.DeviceID != "" || len(action.Value) != 0 {
+					return fmt.Errorf("automation %q nested action must contain only an automation id", rule.ID)
+				}
+				continue
+			}
+			if action.AutomationID != "" {
+				return fmt.Errorf("automation %q device action cannot reference another automation", rule.ID)
+			}
 			if !rule.Enabled {
 				continue
 			}
@@ -184,7 +202,72 @@ func validateState(state State, mgr *manager.Manager) error {
 			}
 		}
 	}
+	if err := validateAutomationCalls(state.Items); err != nil {
+		return err
+	}
 	return validatePowerCycles(state.Items)
+}
+
+func validateAutomationCalls(rules []Rule) error {
+	byID := make(map[string]Rule, len(rules))
+	for _, rule := range rules {
+		byID[rule.ID] = rule
+	}
+	graph := make(map[string][]string)
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		for _, action := range rule.Actions {
+			if action.Action != ActionAutomation {
+				continue
+			}
+			target, ok := byID[action.AutomationID]
+			if !ok {
+				return fmt.Errorf("automation %q references unknown automation %q", rule.ID, action.AutomationID)
+			}
+			if !target.Enabled {
+				return fmt.Errorf("automation %q references disabled automation %q", rule.ID, action.AutomationID)
+			}
+			graph[rule.ID] = append(graph[rule.ID], target.ID)
+		}
+	}
+
+	visiting := make(map[string]bool)
+	depths := make(map[string]int)
+	var walk func(string) (int, error)
+	walk = func(id string) (int, error) {
+		if visiting[id] {
+			return 0, fmt.Errorf("nested automations contain a cycle")
+		}
+		if depth := depths[id]; depth > 0 {
+			return depth, nil
+		}
+		visiting[id] = true
+		depth := 1
+		for _, next := range graph[id] {
+			childDepth, err := walk(next)
+			if err != nil {
+				return 0, err
+			}
+			if childDepth+1 > depth {
+				depth = childDepth + 1
+			}
+		}
+		visiting[id] = false
+		depths[id] = depth
+		return depth, nil
+	}
+	for id := range graph {
+		depth, err := walk(id)
+		if err != nil {
+			return err
+		}
+		if depth > MaxNesting {
+			return fmt.Errorf("nested automation chain exceeds %d rules", MaxNesting)
+		}
+	}
+	return nil
 }
 
 func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.Manager) error {
@@ -247,33 +330,76 @@ func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.
 // were enabled and can no longer bind safely are made inert.
 func disableInvalidRules(state *State, mgr *manager.Manager) []string {
 	var disabled []string
-	for i := range state.Items {
-		if !state.Items[i].Enabled {
-			continue
+	for {
+		byID := make(map[string]Rule, len(state.Items))
+		for _, rule := range state.Items {
+			byID[rule.ID] = rule
 		}
-		single := State{Version: state.Version, Items: []Rule{state.Items[i]}}
-		if err := validateState(single, mgr); err != nil {
-			state.Items[i].Enabled = false
-			disabled = append(disabled, state.Items[i].ID)
+		changed := false
+		for i := range state.Items {
+			if !state.Items[i].Enabled {
+				continue
+			}
+			if err := ruleBindingError(state.Items[i], byID, mgr); err != nil {
+				state.Items[i].Enabled = false
+				disabled = append(disabled, state.Items[i].ID)
+				changed = true
+			}
+		}
+		if !changed {
+			break
 		}
 	}
 	return disabled
 }
 
+func ruleBindingError(rule Rule, rules map[string]Rule, mgr *manager.Manager) error {
+	if err := validateTrigger(rule.ID, true, rule.Trigger, mgr); err != nil {
+		return err
+	}
+	for _, condition := range rule.Conditions {
+		dev, ok := mgr.Device(condition.DeviceID)
+		if !ok {
+			return fmt.Errorf("missing condition device")
+		}
+		if _, ok := dev.(device.Switchable); !ok {
+			return fmt.Errorf("condition device has no power state")
+		}
+	}
+	for _, action := range rule.Actions {
+		if action.Action == ActionAutomation {
+			target, ok := rules[action.AutomationID]
+			if !ok || !target.Enabled {
+				return fmt.Errorf("nested automation is unavailable")
+			}
+			continue
+		}
+		dev, ok := mgr.Device(action.DeviceID)
+		if !ok {
+			return fmt.Errorf("missing action device")
+		}
+		if err := control.Validate(dev, action.request()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Reject cycles made from power-changing device relations. Non-power actions
 // cannot retrigger an on/off edge and therefore do not belong in this graph.
 func validatePowerCycles(rules []Rule) error {
+	byID := make(map[string]Rule, len(rules))
+	for _, rule := range rules {
+		byID[rule.ID] = rule
+	}
 	graph := make(map[string][]string)
+	powerMemo := make(map[string][]string)
 	for _, rule := range rules {
 		if !rule.Enabled || rule.Trigger.Type != TriggerDeviceState || rule.Trigger.Device == nil {
 			continue
 		}
 		from := rule.Trigger.Device.DeviceID
-		for _, action := range rule.Actions {
-			if action.Action == "on" || action.Action == "off" {
-				graph[from] = append(graph[from], action.DeviceID)
-			}
-		}
+		graph[from] = append(graph[from], nestedPowerTargets(rule, byID, powerMemo)...)
 	}
 	visiting := make(map[string]bool)
 	visited := make(map[string]bool)
@@ -301,6 +427,37 @@ func validatePowerCycles(rules []Rule) error {
 		}
 	}
 	return nil
+}
+
+// nestedPowerTargets treats an inline automation call as part of its caller.
+// validateAutomationCalls has already made the enabled call graph acyclic and
+// bounded, so this small recursive walk cannot loop indefinitely.
+func nestedPowerTargets(rule Rule, byID map[string]Rule, memo map[string][]string) []string {
+	if targets, ok := memo[rule.ID]; ok {
+		return targets
+	}
+	var targets []string
+	seen := make(map[string]bool)
+	for _, action := range rule.Actions {
+		switch action.Action {
+		case "on", "off":
+			if !seen[action.DeviceID] {
+				seen[action.DeviceID] = true
+				targets = append(targets, action.DeviceID)
+			}
+		case ActionAutomation:
+			if target, ok := byID[action.AutomationID]; ok && target.Enabled {
+				for _, deviceID := range nestedPowerTargets(target, byID, memo) {
+					if !seen[deviceID] {
+						seen[deviceID] = true
+						targets = append(targets, deviceID)
+					}
+				}
+			}
+		}
+	}
+	memo[rule.ID] = targets
+	return targets
 }
 
 func cloneState(state State) State {

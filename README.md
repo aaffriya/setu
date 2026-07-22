@@ -195,6 +195,9 @@ and sixteen ordered, idempotent actions. The runtime is deliberately bounded: 64
 fixed workers, a 32-entry queue, and the last 20 results in RAM only. Device relations that
 form a power cycle are rejected. The event subscriber can request one snapshot resync after
 overflow, so it needs no reconciliation ticker.
+An action can run another automation inline while preserving action order; nested call graphs
+must be acyclic, may be at most eight rules deep, and share 128-action / 960-second delay
+budgets per run.
 
 Webhook tokens are generated independently for each rule. The plaintext is returned only
 when created/rotated; Setu stores a SHA-256 hash. Call the shown URL with

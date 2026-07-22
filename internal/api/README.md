@@ -16,7 +16,7 @@ nothing about it.
 - `GET /api/automations/export` → backup form, including webhook hashes but never plaintext tokens.
 - `POST /api/automations/{id}/run` → manual run; `POST .../{id}/token` → rotate a webhook token and return it once.
 - `POST /api/automation-hooks/{id}` → incoming trigger authenticated before reading its ignored payload; 4 KB body cap and a 10 s read deadline.
-- `GET /ws` → per-connection bus subscription; pushes `snapshot` (on connect) then `state_changed`.
+- `GET /ws` → per-connection recoverable bus subscription; pushes `snapshot` (on connect) then `state_changed`. A client that falls behind is closed so its automatic reconnect receives a fresh snapshot.
 - `/` → embedded `web/dist` with SPA fallback (a built-in placeholder if the UI isn't built).
 
 ## Files
@@ -24,6 +24,7 @@ nothing about it.
 
 ## Gotchas
 - ws.go: every write has a 10 s deadline (`wsWriteTimeout`) — half-open mobile sockets must die at the next event, not at kernel TCP timeout (~15 min of leaked goroutine + bus subscription).
+- Device commands go through manager `Command()`, which serializes them with polling for that device and updates the read model before returning. A `502` may include a reconciled `device` view when the command result was ambiguous but the follow-up read succeeded.
 - static.go: `/assets/*` is served `immutable, max-age=1y` (Vite content-hashes the names); `service-worker.js` is `no-cache`. The embedded FS has zero modtimes → no Last-Modified/ETag, so these explicit headers are the only caching signal browsers get.
 - static.go: unknown non-asset paths return 200 + index.html (SPA fallback); missing `/assets/*` paths return 404 so HTML cannot masquerade as stale JS/CSS.
 

@@ -124,13 +124,30 @@ function setError(msg: string): void {
 // --- data loading -----------------------------------------------------------
 
 let refreshGeneration = 0
+// Incremented only for server-provided state (REST, command responses, or WS).
+// An optimistic command can then tell whether its pre-command snapshot is still
+// safe to restore after an error.
+const authoritativeVersions = new Map<string, number>()
+
+function noteAuthoritative(id: string): void {
+  authoritativeVersions.set(id, (authoritativeVersions.get(id) ?? 0) + 1)
+}
+
+function replaceAuthoritativeDevices(next: Device[]): void {
+  const present = new Set(next.map((device) => device.id))
+  for (const id of authoritativeVersions.keys()) {
+    if (!present.has(id)) authoritativeVersions.delete(id)
+  }
+  for (const device of next) noteAuthoritative(device.id)
+  devices.set(next)
+}
 
 export async function refresh(hardwareRefresh = false): Promise<void> {
   const generation = ++refreshGeneration
   try {
     const next = await listDevices(hardwareRefresh)
     if (generation !== refreshGeneration) return
-    devices.set(next)
+    replaceAuthoritativeDevices(next)
     connection.set('online')
     lastUpdated.set(Date.now())
     setError('')
@@ -152,6 +169,30 @@ export async function refresh(hardwareRefresh = false): Promise<void> {
 
 // --- commands (optimistic, reconciled by the response + WS) ------------------
 
+// Per-device queues preserve user invocation order at the hardware, while
+// generations stop an intermediate response from replacing a newer optimistic
+// intent. Both maps are bounded by the configured device count.
+const commandGenerations = new Map<string, number>()
+const commandQueues = new Map<string, Promise<void>>()
+
+function sendCommandInOrder(
+  id: string,
+  action: CommandAction,
+  value?: number | Color | string,
+): Promise<Device> {
+  const previous = commandQueues.get(id) ?? Promise.resolve()
+  const current = previous.then(() => sendCommand(id, action, value))
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  )
+  commandQueues.set(id, tail)
+  void tail.then(() => {
+    if (commandQueues.get(id) === tail) commandQueues.delete(id)
+  })
+  return current
+}
+
 // Returns true when the command reached the device, false on failure — callers
 // can use this for one-shot feedback (e.g. the WoL "Sent" pulse). Existing
 // callers that ignore the result are unaffected.
@@ -160,6 +201,9 @@ export async function command(
   action: CommandAction,
   value?: number | Color | string,
 ): Promise<boolean> {
+  const generation = (commandGenerations.get(id) ?? 0) + 1
+  commandGenerations.set(id, generation)
+  const authoritativeVersion = authoritativeVersions.get(id) ?? 0
   // Snapshot only the TARGET device, not the whole list: while this command is
   // on the wire, WS events and other in-flight commands keep updating other
   // devices, and a whole-list revert on failure would wind those back too
@@ -169,17 +213,25 @@ export async function command(
     list.map((d) => (d.id === id ? { ...d, state: applyOptimistic(d.state, action, value) } : d)),
   )
   try {
-    const updated = await sendCommand(id, action, value)
-    devices.update((list) => list.map((d) => (d.id === id ? updated : d)))
+    const updated = await sendCommandInOrder(id, action, value)
+    if (commandGenerations.get(id) === generation) {
+      noteAuthoritative(id)
+      devices.update((list) => list.map((d) => (d.id === id ? updated : d)))
+    }
     return true
   } catch (err) {
-    if (prev) {
-      // Revert just this device's optimistic change. If a newer WS state for
-      // it raced in, the next event/poll re-corrects — same as before, but the
-      // blast radius is one device instead of all of them.
-      devices.update((list) => list.map((d) => (d.id === id ? prev : d)))
+    if (commandGenerations.get(id) === generation) {
+      if (err instanceof ApiError && err.device?.id === id) {
+        // The device command failed at the transport boundary, but the server
+        // successfully re-polled this device and returned its actual state.
+        noteAuthoritative(id)
+        devices.update((list) => list.map((d) => (d.id === id ? err.device! : d)))
+      } else if (prev && (authoritativeVersions.get(id) ?? 0) === authoritativeVersion) {
+        // No newer REST/WS state arrived, so this command's own snapshot is safe.
+        devices.update((list) => list.map((d) => (d.id === id ? prev : d)))
+      }
+      setError(err instanceof Error ? err.message : 'command failed')
     }
-    setError(err instanceof Error ? err.message : 'command failed')
     return false
   }
 }
@@ -354,6 +406,7 @@ function openSocket(): void {
     if (ws !== sock) return
     try {
       const msg = JSON.parse(ev.data as string) as WsMessage
+      noteAuthoritative(msg.device_id)
       devices.update((list) =>
         list.map((d) => (d.id === msg.device_id ? { ...d, state: msg.state } : d)),
       )

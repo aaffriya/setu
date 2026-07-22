@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -295,6 +296,133 @@ func TestPowerRelationCycleIsRejected(t *testing.T) {
 	}
 }
 
+func TestNestedAutomationRunsInlineInActionOrder(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	child := webhookRule("child", target.id)
+	child.Name = "Turn target on"
+	parent := Rule{
+		ID:      "parent",
+		Name:    "Run child then turn off",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}},
+		Actions: []Action{
+			{Action: ActionAutomation, AutomationID: child.ID},
+			{DeviceID: target.id, Action: "off"},
+		},
+	}
+	replaceRules(t, engine, child, parent)
+	result, err := engine.RunNow(parent.ID)
+	if err != nil || result.Status != "queued" {
+		t.Fatalf("run parent = %+v, %v", result, err)
+	}
+	waitFor(t, func() bool { return len(engine.Snapshot().Runs) >= 2 })
+	if target.State().On {
+		t.Fatal("parent continued before nested automation completed")
+	}
+	runs := engine.Snapshot().Runs
+	if !runs[0].OK || runs[0].RuleID != parent.ID {
+		t.Fatalf("parent run = %+v", runs[0])
+	}
+	if !runs[1].OK || runs[1].RuleID != child.ID || runs[1].Source != "automation:"+parent.ID {
+		t.Fatalf("nested run = %+v", runs[1])
+	}
+}
+
+func TestNestedAutomationCycleIsRejected(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	rules := []Rule{
+		{ID: "first", Name: "First", Enabled: true, Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}}, Actions: []Action{{Action: ActionAutomation, AutomationID: "second"}}},
+		{ID: "second", Name: "Second", Enabled: true, Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}}, Actions: []Action{{Action: ActionAutomation, AutomationID: "first"}}},
+	}
+	_, err := engine.Replace(State{Version: FormatVersion, Revision: 0, Items: rules})
+	var invalid ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("nested cycle error = %v, want ValidationError", err)
+	}
+}
+
+func TestEnabledAutomationCannotCallDisabledTarget(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	child := webhookRule("child", target.id)
+	child.Enabled = false
+	parent := Rule{
+		ID:      "parent",
+		Name:    "Parent",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}},
+		Actions: []Action{{Action: ActionAutomation, AutomationID: child.ID}},
+	}
+
+	_, err := engine.Replace(State{Version: FormatVersion, Revision: 0, Items: []Rule{child, parent}})
+	var invalid ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("disabled nested target error = %v, want ValidationError", err)
+	}
+}
+
+func TestNestedPowerRelationCycleIsRejected(t *testing.T) {
+	a := &testSwitch{id: "a"}
+	b := &testSwitch{id: "b"}
+	engine := newTestEngine(t, a, b)
+	rules := []Rule{
+		{ID: "turn_b_on", Name: "Turn B on", Enabled: true, Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}}, Actions: []Action{{DeviceID: "b", Action: "on"}}},
+		{ID: "a_to_b", Name: "A to B", Enabled: true, Trigger: Trigger{Type: TriggerDeviceState, Device: &DeviceTrigger{DeviceID: "a", On: true}}, Actions: []Action{{Action: ActionAutomation, AutomationID: "turn_b_on"}}},
+		{ID: "b_to_a", Name: "B to A", Enabled: true, Trigger: Trigger{Type: TriggerDeviceState, Device: &DeviceTrigger{DeviceID: "b", On: true}}, Actions: []Action{{DeviceID: "a", Action: "on"}}},
+	}
+	_, err := engine.Replace(State{Version: FormatVersion, Revision: 0, Items: rules})
+	var invalid ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("nested power cycle error = %v, want ValidationError", err)
+	}
+}
+
+func TestNestedAutomationExecutionHasBoundedActionBudget(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	leaf := Rule{ID: "leaf", Name: "Leaf", Enabled: true, Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}}, Actions: []Action{{DeviceID: target.id, Action: "on"}}}
+	middleActions := make([]Action, MaxActions)
+	rootActions := make([]Action, MaxActions)
+	for i := 0; i < MaxActions; i++ {
+		middleActions[i] = Action{Action: ActionAutomation, AutomationID: leaf.ID}
+		rootActions[i] = Action{Action: ActionAutomation, AutomationID: "middle"}
+	}
+	middle := Rule{ID: "middle", Name: "Middle", Enabled: true, Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}}, Actions: middleActions}
+	root := Rule{ID: "root", Name: "Root", Enabled: true, Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}}, Actions: rootActions}
+	replaceRules(t, engine, leaf, middle, root)
+	if result, err := engine.RunNow(root.ID); err != nil || result.Status != "queued" {
+		t.Fatalf("run root = %+v, %v", result, err)
+	}
+	waitFor(t, func() bool {
+		runs := engine.Snapshot().Runs
+		return len(runs) > 0 && runs[0].RuleID == root.ID
+	})
+	if engine.Snapshot().Runs[0].OK {
+		t.Fatal("expanding nested run exceeded its action budget without failing")
+	}
+	if target.onCount() >= MaxRunActions {
+		t.Fatalf("executed %d device actions with a total budget of %d", target.onCount(), MaxRunActions)
+	}
+}
+
+func TestNestedAutomationExecutionHasBoundedDelayBudget(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	rule := webhookRule("delayed", target.id)
+	rule.Actions[0].DelaySeconds = 1
+	remaining := MaxRunActions
+	remainingDelay := 0
+	run := engine.executeRequest(context.Background(), runRequest{id: "run", rule: rule, source: "test"}, 1, &remaining, &remainingDelay)
+	if run.OK || target.onCount() != 0 {
+		t.Fatalf("delay-budget run = %+v, on count = %d", run, target.onCount())
+	}
+	if len(run.Results) != 1 || run.Results[0].Error != fmt.Sprintf("nested delay limit exceeds %d seconds", MaxRunDelay) {
+		t.Fatalf("delay-budget result = %+v", run.Results)
+	}
+}
+
 func TestDisabledMissingDeviceRuleIsPortable(t *testing.T) {
 	target := &testSwitch{id: "target"}
 	engine := newTestEngine(t, target)
@@ -350,6 +478,36 @@ func TestNewDisablesRuleAfterDeviceCapabilityChanges(t *testing.T) {
 	}
 	if persisted.Items[0].Enabled {
 		t.Fatal("disabled rule was not persisted")
+	}
+}
+
+func TestNewCascadeDisablesCallerOfInvalidTarget(t *testing.T) {
+	bus := events.NewBus()
+	target := &testSwitch{id: "target", bus: bus}
+	mgr := manager.New(bus, []device.Device{target})
+	defer mgr.Close()
+	path := filepath.Join(t.TempDir(), stateFileName)
+	child := webhookRule("missing_child", "missing")
+	parent := Rule{
+		ID:      "parent",
+		Name:    "Parent",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}},
+		Actions: []Action{{Action: ActionAutomation, AutomationID: child.ID}},
+	}
+	store := NewStore(path)
+	if err := store.Save(State{Version: FormatVersion, Items: []Rule{child, parent}}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine, err := New(mgr, bus, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	for _, rule := range engine.Snapshot().Items {
+		if rule.Enabled {
+			t.Fatalf("dependent automation %q remained enabled", rule.ID)
+		}
 	}
 }
 

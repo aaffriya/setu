@@ -38,6 +38,7 @@
   let confirmReset = $state(false)
   let initialRefreshDone = $state(false)
   let refreshing = $state(false)
+  const manualRefreshFeedbackMs = 300
   // Forget the reset confirmation whenever the dialog closes.
   $effect(() => {
     if (!showSettings) {
@@ -245,7 +246,12 @@
     if (refreshing) return
     refreshing = true
     try {
-      await refresh(true)
+      // A fast/no-poll refresh can finish before the browser paints one frame.
+      // Keep only the visual feedback alive briefly; the backend remains instant.
+      await Promise.all([
+        refresh(true),
+        new Promise<void>((resolve) => setTimeout(resolve, manualRefreshFeedbackMs)),
+      ])
     } finally {
       refreshing = false
     }
@@ -380,37 +386,54 @@
           </span>
 
           <div class="ml-auto flex items-center gap-1 min-[360px]:gap-1.5">
-            {#if hasDevices}
+            {#if organizing}
               <button
-                onclick={manualRefresh}
-                class={iconBtn}
-                disabled={refreshing}
-                aria-label={refreshing ? 'Refreshing device status' : 'Refresh device status'}
-                title={refreshing ? 'Refreshing…' : 'Refresh'}
+                type="button"
+                onclick={() => (organizing = false)}
+                class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-indigo-500 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-600"
+                aria-label="Done arranging devices"
               >
-                <svg class="h-5 w-5 {refreshing ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M20 11a8 8 0 10-2.3 5.7" /><path d="M20 4v7h-7" />
-                </svg>
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+                Done
               </button>
-              <button onclick={() => (searching = true)} class={iconBtn} aria-label="Search devices">
-                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-                  <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+            {:else}
+              {#if hasDevices}
+                <button
+                  onclick={manualRefresh}
+                  class={iconBtn}
+                  disabled={refreshing}
+                  aria-label={refreshing ? 'Refreshing device status' : 'Refresh device status'}
+                  title={refreshing ? 'Refreshing…' : 'Refresh'}
+                >
+                  {#if refreshing}
+                    <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                      <circle class="opacity-20" cx="12" cy="12" r="8" />
+                      <path d="M12 4a8 8 0 0 1 8 8" />
+                    </svg>
+                  {:else}
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7" /><path d="M20 4v7h-7" /></svg>
+                  {/if}
+                </button>
+                <button onclick={() => (searching = true)} class={iconBtn} aria-label="Search devices">
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+                  </svg>
+                </button>
+              {/if}
+              <button
+                onclick={() => {
+                  tokenDraft = token
+                  showSettings = true
+                }}
+                class={iconBtn}
+                aria-label="Settings"
+              >
+                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" />
                 </svg>
               </button>
             {/if}
-            <button
-              onclick={() => {
-                tokenDraft = token
-                showSettings = true
-              }}
-              class={iconBtn}
-              aria-label="Settings"
-            >
-              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" />
-              </svg>
-            </button>
           </div>
         {/if}
       </div>
@@ -627,7 +650,10 @@
       tabindex="-1"
       use:trapFocus={activeSettingsTool === ''}
     >
-      <h2 class="text-lg font-semibold">Settings</h2>
+      <div class="flex items-center gap-2">
+        <h2 class="min-w-0 flex-1 text-lg font-semibold">Settings</h2>
+        <button type="button" onclick={() => (showSettings = false)} class="grid h-8 w-8 place-items-center rounded-full bg-ink/5 text-ink/60 transition hover:bg-ink/10" aria-label="Close settings">×</button>
+      </div>
       <label class="mt-4 block text-sm text-ink/60" for="token-input">Access token</label>
       <input
         id="token-input"
@@ -665,7 +691,7 @@
         <button
           type="button"
           onclick={() => {
-            organizing = !organizing
+            organizing = true
             showSettings = false
           }}
           disabled={!hasDevices}
@@ -678,7 +704,7 @@
             </svg>
           </span>
           <span class="min-w-0 flex-1">
-            <span class="block text-sm font-medium text-ink/75">{organizing ? 'Finish arranging' : 'Arrange devices'}</span>
+            <span class="block text-sm font-medium text-ink/75">Arrange devices</span>
             <span class="block text-xs text-ink/40">Order devices and assign rooms</span>
           </span>
           <span class="text-lg text-ink/30" aria-hidden="true">›</span>

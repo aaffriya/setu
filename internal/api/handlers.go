@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"setu/internal/control"
-	"setu/internal/manager"
 )
 
 // handleListDevices returns all devices with capabilities and current state. A
@@ -62,19 +61,22 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		s.poller.Activity()
 	}
 	id := r.PathValue("id")
-	dev, ok := s.mgr.Device(id)
-	if !ok {
+	if _, ok := s.mgr.Device(id); !ok {
 		writeError(w, http.StatusNotFound, "unknown device")
 		return
 	}
-
 	var req commandRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if err := control.Execute(dev, req); err != nil {
+	view, found, err := s.mgr.Command(id, req)
+	if !found {
+		writeError(w, http.StatusNotFound, "unknown device")
+		return
+	}
+	if err != nil {
 		// Distinguish client errors (unsupported capability / bad input) from
 		// device or I/O failures (upstream).
 		var ce control.InputError
@@ -83,10 +85,14 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.log.Warn("command failed", "device", id, "action", req.Action, "err", err)
-		writeError(w, http.StatusBadGateway, "device command failed")
+		if view.ID != "" {
+			writeDeviceError(w, http.StatusBadGateway, "device command failed", view)
+		} else {
+			writeError(w, http.StatusBadGateway, "device command failed")
+		}
 		return
 	}
 	// Return the device's fresh view so the client can reconcile its optimistic
 	// update immediately; the WebSocket will also broadcast the change.
-	writeJSON(w, http.StatusOK, manager.ViewOf(dev))
+	writeJSON(w, http.StatusOK, view)
 }

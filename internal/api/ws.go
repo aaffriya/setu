@@ -51,7 +51,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// cancelled when the client disconnects.
 	ctx := c.CloseRead(r.Context())
 
-	sub, unsubscribe := s.bus.Subscribe()
+	sub, resync, unsubscribe := s.bus.SubscribeRecoverable()
 	defer unsubscribe()
 
 	// Send an initial snapshot so a freshly-connected client is immediately
@@ -75,6 +75,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			if err := writeMsg(ctx, c, msg); err != nil {
 				return
 			}
+		case _, ok := <-resync:
+			if !ok {
+				return
+			}
+			// This client fell behind and therefore no longer has a complete event
+			// history. Close it; the lightweight client reconnects and receives one
+			// fresh snapshot instead of displaying a permanently stale state.
+			return
 		}
 	}
 }

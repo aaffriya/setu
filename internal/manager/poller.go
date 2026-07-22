@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"setu/internal/device"
-	"setu/internal/events"
 )
 
 // Poller periodically re-reads the state of every device.Pollable device and
@@ -19,12 +18,9 @@ import (
 // no per-brand knowledge.
 type Poller struct {
 	mgr      *Manager
-	bus      *events.Bus
 	interval time.Duration
 	log      *slog.Logger
 
-	mu        sync.Mutex // guards last/results: pollOnce polls devices concurrently
-	last      map[string]device.State
 	activity  chan struct{}
 	refresh   chan refreshRequest
 	ready     chan struct{}
@@ -50,13 +46,11 @@ const (
 
 // NewPoller creates a Poller. A non-positive interval disables scheduled
 // polling; Refresh still performs a user-requested one-shot poll.
-func NewPoller(mgr *Manager, bus *events.Bus, interval time.Duration, log *slog.Logger) *Poller {
+func NewPoller(mgr *Manager, interval time.Duration, log *slog.Logger) *Poller {
 	return &Poller{
 		mgr:      mgr,
-		bus:      bus,
 		interval: interval,
 		log:      log,
-		last:     make(map[string]device.State),
 		activity: make(chan struct{}, 1),
 		refresh:  make(chan refreshRequest),
 		ready:    make(chan struct{}),
@@ -218,39 +212,27 @@ func adaptiveInterval(base, idle time.Duration) time.Duration {
 // never polled twice at once; the next delay starts after the cycle completes.
 func (p *Poller) pollOnce() (map[string]device.State, bool) {
 	var wg sync.WaitGroup
+	var resultMu sync.Mutex
 	states := make(map[string]device.State)
 	changedAny := false
 	for _, d := range p.mgr.Devices() {
-		pd, ok := d.(device.Pollable)
-		if !ok {
-			continue
-		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			state, err := pd.Poll()
+			state, pollable, changed, err := p.mgr.Poll(d.ID())
+			if !pollable {
+				return
+			}
 			if err != nil {
 				p.log.Debug("poll failed", "device", d.ID(), "err", err)
 				return
 			}
-			// State is a comparable struct, so a plain == detects changes
-			// without extra bookkeeping.
-			p.mu.Lock()
+			resultMu.Lock()
 			states[d.ID()] = state
-			prev, seen := p.last[d.ID()]
-			changed := !seen || prev != state
 			if changed {
-				p.last[d.ID()] = state
 				changedAny = true
 			}
-			p.mu.Unlock()
-			if changed {
-				p.bus.Publish(events.Event{
-					Type:     events.StateChanged,
-					DeviceID: d.ID(),
-					State:    state,
-				})
-			}
+			resultMu.Unlock()
 		}()
 	}
 	wg.Wait()

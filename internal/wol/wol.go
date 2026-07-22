@@ -12,8 +12,14 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+	"time"
 
 	"setu/internal/resolver"
+)
+
+const (
+	sendRepeats = 3
+	repeatDelay = 20 * time.Millisecond
 )
 
 // Send broadcasts a Wake-on-LAN magic packet to mac. It sprays the limited
@@ -22,20 +28,9 @@ import (
 // 255.255.255.255 for same-subnet WoL. It returns an error if mac is malformed
 // or no broadcast target could be reached.
 func Send(mac string) error {
-	norm, err := resolver.NormalizeMAC(mac)
+	packet, err := magicPacket(mac)
 	if err != nil {
 		return err
-	}
-	hw, err := hex.DecodeString(norm)
-	if err != nil || len(hw) != 6 {
-		return fmt.Errorf("bad mac %q", mac)
-	}
-	packet := make([]byte, 0, 6+16*6)
-	for i := 0; i < 6; i++ {
-		packet = append(packet, 0xff)
-	}
-	for i := 0; i < 16; i++ {
-		packet = append(packet, hw...)
 	}
 
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
@@ -48,11 +43,16 @@ func Send(mac string) error {
 	}
 
 	sent := 0
-	for _, ip := range broadcastIPs() {
-		for _, port := range []int{9, 7} {
-			if _, err := conn.WriteToUDP(packet, &net.UDPAddr{IP: ip, Port: port}); err == nil {
-				sent++
+	for attempt := 0; attempt < sendRepeats; attempt++ {
+		for _, ip := range broadcastIPs() {
+			for _, port := range []int{9, 7} {
+				if _, err := conn.WriteToUDP(packet, &net.UDPAddr{IP: ip, Port: port}); err == nil {
+					sent++
+				}
 			}
+		}
+		if attempt+1 < sendRepeats {
+			time.Sleep(repeatDelay)
 		}
 	}
 	if sent == 0 {
@@ -61,10 +61,31 @@ func Send(mac string) error {
 	return nil
 }
 
+func magicPacket(mac string) ([]byte, error) {
+	norm, err := resolver.NormalizeMAC(mac)
+	if err != nil {
+		return nil, err
+	}
+	hw, err := hex.DecodeString(norm)
+	if err != nil || len(hw) != 6 {
+		return nil, fmt.Errorf("bad mac %q", mac)
+	}
+	packet := make([]byte, 0, 6+16*6)
+	for i := 0; i < 6; i++ {
+		packet = append(packet, 0xff)
+	}
+	for i := 0; i < 16; i++ {
+		packet = append(packet, hw...)
+	}
+
+	return packet, nil
+}
+
 // broadcastIPs returns the limited broadcast plus each non-loopback IPv4
 // interface's directed broadcast address (host bits set to 1).
 func broadcastIPs() []net.IP {
 	out := []net.IP{net.IPv4bcast}
+	seen := map[string]bool{net.IPv4bcast.String(): true}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return out
@@ -85,9 +106,13 @@ func broadcastIPs() []net.IP {
 		if len(mask) != 4 {
 			continue
 		}
-		out = append(out, net.IP{
+		broadcast := net.IP{
 			ip4[0] | ^mask[0], ip4[1] | ^mask[1], ip4[2] | ^mask[2], ip4[3] | ^mask[3],
-		})
+		}
+		if !seen[broadcast.String()] {
+			seen[broadcast.String()] = true
+			out = append(out, broadcast)
+		}
 	}
 	return out
 }

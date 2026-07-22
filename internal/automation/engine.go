@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"setu/internal/control"
 	"setu/internal/events"
 	"setu/internal/manager"
 )
@@ -524,17 +523,34 @@ func (e *Engine) execute(ctx context.Context, request runRequest) {
 	delete(e.pending, request.rule.ID)
 	e.running[request.rule.ID] = true
 	e.mu.Unlock()
+	remaining := MaxRunActions
+	remainingDelay := MaxRunDelay
+	e.executeRequest(ctx, request, 1, &remaining, &remainingDelay)
+}
 
+func (e *Engine) executeRequest(ctx context.Context, request runRequest, depth int, remaining, remainingDelay *int) Run {
 	started := time.Now()
 	results := make([]ActionResult, 0, len(request.rule.Actions))
 	allOK := true
 	for _, action := range request.rule.Actions {
+		if *remaining <= 0 {
+			allOK = false
+			results = append(results, actionFailure(action, fmt.Sprintf("nested action limit exceeds %d", MaxRunActions)))
+			break
+		}
+		*remaining = *remaining - 1
 		if ctx.Err() != nil {
 			allOK = false
-			results = append(results, ActionResult{DeviceID: action.DeviceID, Action: action.Action, Error: "shutting down"})
+			results = append(results, actionFailure(action, "shutting down"))
 			break
 		}
 		if action.DelaySeconds > 0 {
+			if action.DelaySeconds > *remainingDelay {
+				allOK = false
+				results = append(results, actionFailure(action, fmt.Sprintf("nested delay limit exceeds %d seconds", MaxRunDelay)))
+				break
+			}
+			*remainingDelay -= action.DelaySeconds
 			timer := time.NewTimer(time.Duration(action.DelaySeconds) * time.Second)
 			select {
 			case <-ctx.Done():
@@ -542,20 +558,27 @@ func (e *Engine) execute(ctx context.Context, request runRequest) {
 					<-timer.C
 				}
 				allOK = false
-				results = append(results, ActionResult{DeviceID: action.DeviceID, Action: action.Action, Error: "shutting down"})
+				results = append(results, actionFailure(action, "shutting down"))
 				goto done
 			case <-timer.C:
 			}
 		}
-		result := ActionResult{DeviceID: action.DeviceID, Action: action.Action}
-		dev, ok := e.mgr.Device(action.DeviceID)
-		if !ok {
-			result.Error = "device is no longer configured"
-			allOK = false
-		} else if err := control.Execute(dev, action.request()); err != nil {
+		result := ActionResult{DeviceID: action.DeviceID, AutomationID: action.AutomationID, Action: action.Action}
+		var err error
+		if action.Action == ActionAutomation {
+			err = e.runNested(ctx, action.AutomationID, request.rule.ID, depth+1, remaining, remainingDelay)
+		} else {
+			_, found, commandErr := e.mgr.Command(action.DeviceID, action.request())
+			if !found {
+				err = fmt.Errorf("device is no longer configured")
+			} else {
+				err = commandErr
+			}
+		}
+		if err != nil {
 			result.Error = err.Error()
 			allOK = false
-			e.log.Warn("automation action failed", "automation", request.rule.ID, "device", action.DeviceID, "action", action.Action, "err", err)
+			e.log.Warn("automation action failed", "automation", request.rule.ID, "target", actionTarget(action), "action", action.Action, "err", err)
 		} else {
 			result.OK = true
 		}
@@ -580,6 +603,83 @@ done:
 		e.runs = e.runs[:maxRuns]
 	}
 	e.mu.Unlock()
+	return run
+}
+
+func actionFailure(action Action, message string) ActionResult {
+	return ActionResult{
+		DeviceID: action.DeviceID, AutomationID: action.AutomationID,
+		Action: action.Action, Error: message,
+	}
+}
+
+func actionTarget(action Action) string {
+	if action.Action == ActionAutomation {
+		return action.AutomationID
+	}
+	return action.DeviceID
+}
+
+// runNested executes a referenced rule inline so its actions preserve the
+// parent's declared order. Configuration validation rejects cycles and caps the
+// chain depth; the runtime checks remain as defence against an edit racing a run.
+func (e *Engine) runNested(ctx context.Context, id, parentID string, depth int, remaining, remainingDelay *int) error {
+	if depth > MaxNesting {
+		return fmt.Errorf("nested automation depth exceeds %d", MaxNesting)
+	}
+
+	e.mu.Lock()
+	if e.state.Paused {
+		e.mu.Unlock()
+		return ErrPaused
+	}
+	var rule *Rule
+	for i := range e.state.Items {
+		if e.state.Items[i].ID == id {
+			copy := e.state.Items[i]
+			rule = &copy
+			break
+		}
+	}
+	if rule == nil {
+		e.mu.Unlock()
+		return ErrNotFound
+	}
+	if !rule.Enabled {
+		e.mu.Unlock()
+		return ErrDisabled
+	}
+	if e.pending[id] || e.running[id] {
+		e.mu.Unlock()
+		return fmt.Errorf("automation is already running")
+	}
+	now := time.Now()
+	if cooldown := time.Duration(rule.CooldownSeconds) * time.Second; cooldown > 0 && now.Sub(e.lastTriggered[id]) < cooldown {
+		e.mu.Unlock()
+		return fmt.Errorf("automation is in cooldown")
+	}
+	if !e.conditionsMet(rule.Conditions) {
+		e.mu.Unlock()
+		return fmt.Errorf("automation conditions are not met")
+	}
+	runID, err := newRunID()
+	if err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	e.running[id] = true
+	e.lastTriggered[id] = now
+	request := runRequest{
+		id: runID, rule: cloneState(State{Items: []Rule{*rule}}).Items[0],
+		source: "automation:" + parentID,
+	}
+	e.mu.Unlock()
+
+	run := e.executeRequest(ctx, request, depth, remaining, remainingDelay)
+	if !run.OK {
+		return fmt.Errorf("nested automation failed")
+	}
+	return nil
 }
 
 func (e *Engine) readPower() map[string]bool {

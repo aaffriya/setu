@@ -47,8 +47,13 @@
   })
 
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const AUTOMATION_TARGET = '@automation'
   let switchDevices = $derived($devices.filter((device) => device.capabilities.includes('switch')))
   let actionDevices = $derived($devices.filter((device) => actionOptions(device).length > 0))
+  let callableRules = $derived(
+    (snapshot?.items ?? []).filter((rule) => rule.id !== draft?.id && rule.enabled),
+  )
+  let canAddAction = $derived(actionDevices.length > 0 || callableRules.length > 0)
 
   function uid(): string {
     const bytes = new Uint8Array(9)
@@ -69,6 +74,18 @@
     return { device_id: device?.id ?? '', action }
   }
 
+  function firstAutomationAction(): AutomationAction {
+    return {
+      device_id: '',
+      action: 'run_automation',
+      automation_id: callableRules[0]?.id ?? '',
+    }
+  }
+
+  function firstDraftAction(): AutomationAction {
+    return actionDevices.length ? firstAction(actionDevices[0]) : firstAutomationAction()
+  }
+
   function newRule() {
     const device = actionDevices[0]
     draft = {
@@ -84,7 +101,7 @@
         },
       },
       conditions: [],
-      actions: [firstAction(device)],
+      actions: [device ? firstAction(device) : firstAutomationAction()],
       cooldown_seconds: 2,
     }
     message = ''
@@ -153,7 +170,11 @@
   async function removeRule(id: string) {
     if (!snapshot) return
     try {
-      await persist(snapshot.items.filter((rule) => rule.id !== id).map(cloneRule))
+      await persist(
+        cascadeUnavailableCallers(
+          snapshot.items.filter((rule) => rule.id !== id).map(cloneRule),
+        ),
+      )
     } catch {
       // persist owns the message
     }
@@ -161,14 +182,38 @@
 
   async function toggleRule(rule: AutomationRule) {
     if (!snapshot) return
-    const items = snapshot.items.map((item) =>
-      item.id === rule.id ? { ...cloneRule(item), enabled: !item.enabled } : cloneRule(item),
+    const items = cascadeUnavailableCallers(
+      snapshot.items.map((item) =>
+        item.id === rule.id ? { ...cloneRule(item), enabled: !item.enabled } : cloneRule(item),
+      ),
     )
     try {
       await persist(items)
     } catch {
       // persist owns the message
     }
+  }
+
+  function cascadeUnavailableCallers(items: AutomationRule[]): AutomationRule[] {
+    let changed = true
+    while (changed) {
+      changed = false
+      const enabled = new Set(items.filter((item) => item.enabled).map((item) => item.id))
+      for (const item of items) {
+        if (
+          item.enabled &&
+          item.actions.some(
+            (action) =>
+              action.action === 'run_automation' &&
+              (!action.automation_id || !enabled.has(action.automation_id)),
+          )
+        ) {
+          item.enabled = false
+          changed = true
+        }
+      }
+    }
+    return items
   }
 
   async function togglePause() {
@@ -240,8 +285,8 @@
   }
 
   function addAction() {
-    if (!draft || !actionDevices.length || draft.actions.length >= 16) return
-    draft.actions = [...draft.actions, firstAction(actionDevices[0])]
+    if (!draft || !canAddAction || draft.actions.length >= 16) return
+    draft.actions = [...draft.actions, firstDraftAction()]
   }
 
   function deviceFor(id: string): Device | undefined {
@@ -265,6 +310,7 @@
 
   function resetAction(action: AutomationAction, deviceID?: string) {
     if (deviceID !== undefined) action.device_id = deviceID
+    delete action.automation_id
     const options = actionOptions(deviceFor(action.device_id))
     if (!options.some((option) => option.value === action.action)) action.action = options[0]?.value ?? 'on'
     switch (action.action) {
@@ -294,6 +340,23 @@
     resetAction(action)
   }
 
+  function actionTarget(action: AutomationAction): string {
+    return action.action === 'run_automation' ? AUTOMATION_TARGET : action.device_id
+  }
+
+  function setActionTarget(action: AutomationAction, value: string) {
+    if (value === AUTOMATION_TARGET) {
+      action.device_id = ''
+      action.action = 'run_automation'
+      action.automation_id = callableRules[0]?.id ?? ''
+      delete action.value
+      return
+    }
+    action.device_id = value
+    action.action = actionOptions(deviceFor(value))[0]?.value ?? 'on'
+    resetAction(action)
+  }
+
   function setNumber(action: AutomationAction, value: string) {
     action.value = Number(value)
   }
@@ -311,9 +374,28 @@
 
   function missingDevices(rule: AutomationRule): string[] {
     const available = new Set($devices.map((device) => device.id))
-    const ids = [...(rule.conditions ?? []).map((condition) => condition.device_id), ...rule.actions.map((action) => action.device_id)]
+    const ids = [
+      ...(rule.conditions ?? []).map((condition) => condition.device_id),
+      ...rule.actions
+        .filter((action) => action.action !== 'run_automation')
+        .map((action) => action.device_id),
+    ]
     if (rule.trigger.type === 'device_state') ids.push(rule.trigger.device.device_id)
     return [...new Set(ids.filter((id) => !available.has(id)))]
+  }
+
+  function unavailableAutomations(rule: AutomationRule): string[] {
+    const available = new Set(
+      snapshot?.items.filter((item) => item.enabled).map((item) => item.id) ?? [],
+    )
+    return [
+      ...new Set(
+        rule.actions
+          .filter((action) => action.action === 'run_automation')
+          .map((action) => action.automation_id ?? '')
+          .filter((id) => id && !available.has(id)),
+      ),
+    ]
   }
 
   function webhookURL(id: string): string {
@@ -428,19 +510,29 @@
           </div>
 
           <div>
-            <div class="flex items-center justify-between"><span class="text-xs text-ink/55">Actions (in order)</span><button type="button" onclick={addAction} disabled={draft.actions.length >= 16 || !actionDevices.length} class="text-xs font-medium text-indigo-500 disabled:opacity-40">+ Add</button></div>
+            <div class="flex items-center justify-between"><span class="text-xs text-ink/55">Actions (in order)</span><button type="button" onclick={addAction} disabled={draft.actions.length >= 16 || !canAddAction} class="text-xs font-medium text-indigo-500 disabled:opacity-40">+ Add</button></div>
             <div class="mt-1 space-y-2">
               {#each draft.actions as action, index (index)}
                 <div class="rounded-xl bg-ink/[0.03] p-2">
                   <div class="flex gap-1">
-                    <select value={action.device_id} onchange={(event) => resetAction(action, event.currentTarget.value)} class="min-w-0 flex-1 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each actionDevices as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}</select>
-                    <select value={action.action} onchange={(event) => setAction(action, event.currentTarget.value)} class="min-w-0 flex-1 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each actionOptions(deviceFor(action.device_id)) as option (option.value)}<option value={option.value}>{option.label}</option>{/each}</select>
+                    <select value={actionTarget(action)} onchange={(event) => setActionTarget(action, event.currentTarget.value)} aria-label="Action target" class="min-w-0 flex-1 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">
+                      {#each actionDevices as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}
+                      <option value={AUTOMATION_TARGET} disabled={!callableRules.length && action.action !== 'run_automation'}>Automation</option>
+                    </select>
+                    {#if action.action === 'run_automation'}
+                      <select bind:value={action.automation_id} aria-label="Automation to run" class="min-w-0 flex-1 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">
+                        {#if action.automation_id && !callableRules.some((rule) => rule.id === action.automation_id)}<option value={action.automation_id}>Missing: {action.automation_id}</option>{/if}
+                        {#each callableRules as rule (rule.id)}<option value={rule.id}>{rule.name}{rule.enabled ? '' : ' (disabled)'}</option>{/each}
+                      </select>
+                    {:else}
+                      <select value={action.action} onchange={(event) => setAction(action, event.currentTarget.value)} aria-label="Device action" class="min-w-0 flex-1 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each actionOptions(deviceFor(action.device_id)) as option (option.value)}<option value={option.value}>{option.label}</option>{/each}</select>
+                    {/if}
                     <button type="button" onclick={() => draft && (draft.actions = draft.actions.filter((_, item) => item !== index))} disabled={draft.actions.length === 1} class="h-8 w-8 rounded-lg text-rose-500 disabled:opacity-30">×</button>
                   </div>
                   {#if action.action === 'set_color'}
                     <input type="color" value={colorHex(action.value)} onchange={(event) => setColor(action, event.currentTarget.value)} class="mt-2 h-8 w-full rounded-lg bg-transparent" aria-label="Automation color" />
                   {:else if action.action === 'set_scene'}
-                    <select value={String(action.value ?? '')} onchange={(event) => setNumber(action, event.currentTarget.value)} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each deviceFor(action.device_id)?.scenes ?? [] as scene (scene.id)}<option value={scene.id}>{scene.name}</option>{/each}</select>
+                    <select bind:value={action.value} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each deviceFor(action.device_id)?.scenes ?? [] as scene (scene.id)}<option value={scene.id}>{scene.name}</option>{/each}</select>
                   {:else if action.action === 'launch_app'}
                     <select bind:value={action.value} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each deviceFor(action.device_id)?.apps ?? [] as app (app.id)}<option value={app.id}>{app.name}</option>{/each}</select>
                   {:else if ['set_brightness', 'set_color_temp', 'set_volume'].includes(action.action)}
@@ -468,7 +560,7 @@
       {:else}
         <div class="mt-4 flex items-center gap-2">
           <button type="button" onclick={togglePause} disabled={saving || !snapshot} class="rounded-xl px-3 py-2 text-xs font-medium {snapshot?.paused ? 'bg-amber-500 text-white' : 'bg-ink/5 text-ink/65'}">{snapshot?.paused ? 'Resume all' : 'Pause all'}</button>
-          <button type="button" onclick={newRule} disabled={!snapshot || !actionDevices.length} class="ml-auto rounded-xl bg-indigo-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">+ New automation</button>
+          <button type="button" onclick={newRule} disabled={!snapshot || !canAddAction} class="ml-auto rounded-xl bg-indigo-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">+ New automation</button>
         </div>
 
         <div class="mt-3 min-h-0 flex-1 space-y-1.5 overflow-y-auto">
@@ -477,14 +569,16 @@
           {:else}
             {#each snapshot.items as rule (rule.id)}
               {@const missing = missingDevices(rule)}
+              {@const unavailableAutomation = unavailableAutomations(rule)}
               <div class="rounded-2xl border border-ink/10 bg-ink/[0.025] p-3" in:fly={{ y: 5, duration: 120 }}>
                 <div class="flex items-center gap-2">
-                  <button type="button" onclick={() => toggleRule(rule)} disabled={saving || missing.length > 0} aria-label={rule.enabled ? `Disable ${rule.name}` : `Enable ${rule.name}`} class="h-5 w-9 rounded-full p-0.5 transition {rule.enabled ? 'bg-emerald-500' : 'bg-ink/15'} disabled:opacity-40"><span class="block h-4 w-4 rounded-full bg-white shadow transition {rule.enabled ? 'translate-x-4' : ''}"></span></button>
+                  <button type="button" onclick={() => toggleRule(rule)} disabled={saving || missing.length > 0 || unavailableAutomation.length > 0} aria-label={rule.enabled ? `Disable ${rule.name}` : `Enable ${rule.name}`} class="h-5 w-9 rounded-full p-0.5 transition {rule.enabled ? 'bg-emerald-500' : 'bg-ink/15'} disabled:opacity-40"><span class="block h-4 w-4 rounded-full bg-white shadow transition {rule.enabled ? 'translate-x-4' : ''}"></span></button>
                   <button type="button" onclick={() => (draft = cloneRule(rule))} class="min-w-0 flex-1 text-left"><span class="block truncate text-sm font-medium">{rule.name}</span><span class="block text-[11px] text-ink/40">{rule.trigger.type.replace('_', ' ')} · {rule.actions.length} action{rule.actions.length === 1 ? '' : 's'}</span></button>
-                  <button type="button" onclick={() => run(rule)} disabled={saving || snapshot?.paused || !rule.enabled || missing.length > 0} class="rounded-lg bg-indigo-500/10 px-2 py-1.5 text-[11px] font-medium text-indigo-600 disabled:opacity-30 dark:text-indigo-300">Run</button>
+                  <button type="button" onclick={() => run(rule)} disabled={saving || snapshot?.paused || !rule.enabled || missing.length > 0 || unavailableAutomation.length > 0} class="rounded-lg bg-indigo-500/10 px-2 py-1.5 text-[11px] font-medium text-indigo-600 disabled:opacity-30 dark:text-indigo-300">Run</button>
                   <button type="button" onclick={() => removeRule(rule.id)} disabled={saving} class="grid h-8 w-8 place-items-center rounded-lg text-rose-500">×</button>
                 </div>
                 {#if missing.length}<p class="mt-1 text-[11px] text-amber-600 dark:text-amber-300">Missing device: {missing.join(', ')}. Kept disabled after restore.</p>{/if}
+                {#if unavailableAutomation.length}<p class="mt-1 text-[11px] text-amber-600 dark:text-amber-300">Unavailable automation: {unavailableAutomation.join(', ')}. Enable its target first.</p>{/if}
                 {#if rule.trigger.type === 'webhook'}
                   <div class="mt-2 flex items-center gap-2 rounded-lg bg-ink/[0.03] px-2 py-1.5"><code class="min-w-0 flex-1 truncate text-[10px] text-ink/45">{webhookURL(rule.id)}</code><button type="button" onclick={() => rotate(rule)} disabled={saving} class="text-[10px] font-medium text-indigo-500">New token</button></div>
                 {/if}

@@ -56,7 +56,7 @@ func TestPollOnceConcurrent(t *testing.T) {
 	m := New(bus, devs)
 	defer m.Close()
 
-	p := NewPoller(m, bus, time.Second, testLogger())
+	p := NewPoller(m, time.Second, testLogger())
 	start := time.Now()
 	p.pollOnce()
 	elapsed := time.Since(start)
@@ -84,7 +84,7 @@ func TestPollerRace(t *testing.T) {
 	m := New(bus, devs)
 	defer m.Close()
 
-	p := NewPoller(m, bus, time.Millisecond, testLogger())
+	p := NewPoller(m, time.Millisecond, testLogger())
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	done := make(chan struct{})
@@ -138,7 +138,7 @@ func TestManualRefreshWhenScheduledPollingDisabled(t *testing.T) {
 	m := New(bus, []device.Device{dev})
 	defer m.Close()
 
-	p := NewPoller(m, bus, 0, testLogger())
+	p := NewPoller(m, 0, testLogger())
 	runCtx, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -180,7 +180,7 @@ func TestReadyClosesAfterInitialBaseline(t *testing.T) {
 	dev := &fakeDevice{id: "baseline", delay: 40 * time.Millisecond}
 	m := New(bus, []device.Device{dev})
 	defer m.Close()
-	p := NewPoller(m, bus, time.Hour, testLogger())
+	p := NewPoller(m, time.Hour, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { p.Run(ctx); close(done) }()
@@ -208,7 +208,7 @@ func TestRefreshReusesInFlightInitialPoll(t *testing.T) {
 	m := New(bus, []device.Device{dev})
 	defer m.Close()
 
-	p := NewPoller(m, bus, time.Hour, testLogger())
+	p := NewPoller(m, time.Hour, testLogger())
 	runCtx, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -241,7 +241,7 @@ func TestActivityDoesNotPostponeActivePolls(t *testing.T) {
 	m := New(bus, []device.Device{dev})
 	defer m.Close()
 
-	p := NewPoller(m, bus, 20*time.Millisecond, testLogger())
+	p := NewPoller(m, 20*time.Millisecond, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

@@ -220,7 +220,11 @@ function supportsAction(device: Device, action: AutomationAction): boolean {
   return false
 }
 
-function ruleMatchesDevices(rule: AutomationRule, devices: Map<string, Device>): boolean {
+function ruleMatchesInstall(
+  rule: AutomationRule,
+  devices: Map<string, Device>,
+  enabledAutomationIDs: Set<string>,
+): boolean {
   if (rule.trigger.type === 'device_state') {
     const source = devices.get(rule.trigger.device.device_id)
     if (!source?.capabilities.includes('switch')) return false
@@ -229,6 +233,12 @@ function ruleMatchesDevices(rule: AutomationRule, devices: Map<string, Device>):
     if (!devices.get(condition.device_id)?.capabilities.includes('switch')) return false
   }
   return rule.actions.every((action) => {
+    if (action.action === 'run_automation') {
+      return (
+        typeof action.automation_id === 'string' &&
+        enabledAutomationIDs.has(action.automation_id)
+      )
+    }
     const device = devices.get(action.device_id)
     return device !== undefined && supportsAction(device, action)
   })
@@ -237,8 +247,18 @@ function ruleMatchesDevices(rule: AutomationRule, devices: Map<string, Device>):
 function portableAutomations(state: AutomationState, devices: Device[]): AutomationState {
   const available = new Map(devices.map((device) => [device.id, device]))
   const copy = JSON.parse(JSON.stringify(state)) as AutomationState
-  for (const rule of copy.items) {
-    if (!ruleMatchesDevices(rule, available)) rule.enabled = false
+  let changed = true
+  while (changed) {
+    changed = false
+    const enabledAutomationIDs = new Set(
+      copy.items.filter((rule) => rule.enabled).map((rule) => rule.id),
+    )
+    for (const rule of copy.items) {
+      if (rule.enabled && !ruleMatchesInstall(rule, available, enabledAutomationIDs)) {
+        rule.enabled = false
+        changed = true
+      }
+    }
   }
   return copy
 }

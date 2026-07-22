@@ -79,7 +79,7 @@ func run() error {
 	defer stop()
 
 	// state poller
-	poller := manager.NewPoller(mgr, bus, cfg.PollInterval.Duration(), log)
+	poller := manager.NewPoller(mgr, cfg.PollInterval.Duration(), log)
 	go poller.Run(ctx)
 
 	automationPath, temporaryAutomationState := automation.DefaultPath()

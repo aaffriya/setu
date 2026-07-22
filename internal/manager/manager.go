@@ -4,8 +4,10 @@
 package manager
 
 import (
+	"errors"
 	"sync"
 
+	"setu/internal/control"
 	"setu/internal/device"
 	"setu/internal/events"
 )
@@ -21,6 +23,7 @@ type Manager struct {
 	order   []string                 // device ids in config order
 	devices map[string]device.Device // id → device
 	latest  map[string]device.State  // id → most recent state (event-driven)
+	ops     map[string]*sync.Mutex   // one command/poll operation at a time per device
 
 	unsubscribe func()
 	done        chan struct{}
@@ -33,22 +36,24 @@ func New(bus *events.Bus, devices []device.Device) *Manager {
 		bus:     bus,
 		devices: make(map[string]device.Device, len(devices)),
 		latest:  make(map[string]device.State, len(devices)),
+		ops:     make(map[string]*sync.Mutex, len(devices)),
 		done:    make(chan struct{}),
 	}
 	for _, d := range devices {
 		m.order = append(m.order, d.ID())
 		m.devices[d.ID()] = d
 		m.latest[d.ID()] = d.State() // seed cache from initial device state
+		m.ops[d.ID()] = &sync.Mutex{}
 	}
 
-	sub, unsub := bus.Subscribe()
+	sub, resync, unsub := bus.SubscribeRecoverable()
 	m.unsubscribe = unsub
-	go m.consume(sub)
+	go m.consume(sub, resync)
 	return m
 }
 
 // consume keeps the latest-state cache current from the event bus.
-func (m *Manager) consume(sub <-chan events.Event) {
+func (m *Manager) consume(sub <-chan events.Event, resync <-chan struct{}) {
 	for {
 		select {
 		case ev, ok := <-sub:
@@ -62,9 +67,49 @@ func (m *Manager) consume(sub <-chan events.Event) {
 				}
 				m.mu.Unlock()
 			}
+		case _, ok := <-resync:
+			if !ok {
+				return
+			}
+			// A full subscriber buffer is no longer a complete history. Discard
+			// those stale entries and replace the cache with each device's current
+			// in-memory state while publication is paused, so an older event cannot
+			// overwrite the recovery snapshot afterwards.
+			alive := true
+			m.bus.Resync(func() {
+				alive = drainPendingEvents(sub)
+				if alive {
+					m.resyncLatest()
+				}
+			})
+			if !alive {
+				return
+			}
 		case <-m.done:
 			return
 		}
+	}
+}
+
+func drainPendingEvents(stream <-chan events.Event) bool {
+	for range cap(stream) {
+		select {
+		case _, ok := <-stream:
+			if !ok {
+				return false
+			}
+		default:
+			return true
+		}
+	}
+	return true
+}
+
+func (m *Manager) resyncLatest() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, dev := range m.devices {
+		m.latest[id] = dev.State()
 	}
 }
 
@@ -82,6 +127,86 @@ func (m *Manager) Device(id string) (device.Device, bool) {
 	defer m.mu.RUnlock()
 	d, ok := m.devices[id]
 	return d, ok
+}
+
+// Command serializes a command with hardware polling for the same device. This
+// prevents a poll response that started before the command from arriving later
+// and replacing the successful command with stale state. Different devices are
+// still fully concurrent.
+func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, error) {
+	m.mu.RLock()
+	dev, ok := m.devices[id]
+	op := m.ops[id]
+	m.mu.RUnlock()
+	if !ok {
+		return DeviceView{}, false, nil
+	}
+
+	op.Lock()
+	defer op.Unlock()
+	if err := control.Execute(dev, req); err != nil {
+		// Invalid input never reached the transport, so there is nothing to
+		// reconcile. A transport error is ambiguous, though: the device may have
+		// applied the command and lost only its reply. Re-read this device while
+		// still holding its operation lock so callers can restore authoritative
+		// state instead of guessing from the HTTP failure.
+		var inputErr control.InputError
+		if !errors.As(err, &inputErr) {
+			state, pollable, _, pollErr := m.pollLocked(id, dev)
+			if pollable && pollErr == nil {
+				view := ViewOf(dev)
+				view.State = state
+				return view, true, err
+			}
+		}
+		return DeviceView{}, true, err
+	}
+	view := ViewOf(dev)
+	// Command events update this cache asynchronously too, but writing the fresh
+	// state here makes an immediate snapshot authoritative even if a subscriber
+	// was briefly backlogged.
+	m.mu.Lock()
+	m.latest[id] = view.State
+	m.mu.Unlock()
+	return view, true, nil
+}
+
+// Poll serializes one hardware read with commands for this device, updates the
+// read model synchronously, and publishes only when the authoritative state
+// changed. The returned pollable flag is false for devices without Pollable.
+func (m *Manager) Poll(id string) (state device.State, pollable, changed bool, err error) {
+	m.mu.RLock()
+	dev, ok := m.devices[id]
+	op := m.ops[id]
+	m.mu.RUnlock()
+	if !ok {
+		return device.State{}, false, false, nil
+	}
+	op.Lock()
+	defer op.Unlock()
+	return m.pollLocked(id, dev)
+}
+
+// pollLocked performs one authoritative read. The caller must hold this
+// device's operation lock so a command and poll cannot overlap.
+func (m *Manager) pollLocked(id string, dev device.Device) (state device.State, pollable, changed bool, err error) {
+	pd, ok := dev.(device.Pollable)
+	if !ok {
+		return device.State{}, false, false, nil
+	}
+	state, err = pd.Poll()
+	if err != nil {
+		return state, true, false, err
+	}
+	m.mu.Lock()
+	previous := m.latest[id]
+	changed = previous != state
+	m.latest[id] = state
+	m.mu.Unlock()
+	if changed {
+		m.bus.Publish(events.Event{Type: events.StateChanged, DeviceID: id, State: state})
+	}
+	return state, true, changed, nil
 }
 
 // Devices returns all devices in config order.

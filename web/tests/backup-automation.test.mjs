@@ -41,6 +41,12 @@ test('automation API keeps webhook trigger separate from admin rule endpoints', 
   assert.doesNotMatch(api, /automation-hooks.*getToken/)
 })
 
+test('automation backup keeps nested targets independent from device matching', () => {
+  assert.match(backup, /action\.action === 'run_automation'/)
+  assert.match(backup, /enabledAutomationIDs\.has\(action\.automation_id\)/)
+  assert.match(backup, /while \(changed\)/)
+})
+
 test('backup validation rejects malformed favourites and scenes before restore', () => {
   assert.equal(
     validation.isFavoritesSection({

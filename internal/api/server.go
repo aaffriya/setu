@@ -96,10 +96,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
+	Error  string              `json:"error"`
+	Device *manager.DeviceView `json:"device,omitempty"`
 }
 
 // writeError writes a clean JSON error body.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+// writeDeviceError includes an authoritative state obtained after an ambiguous
+// transport failure. Clients can reconcile without a second all-device poll.
+func writeDeviceError(w http.ResponseWriter, status int, msg string, view manager.DeviceView) {
+	writeJSON(w, status, errorResponse{Error: msg, Device: &view})
 }

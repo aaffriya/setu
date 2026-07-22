@@ -68,9 +68,11 @@ export type AutomationActionName =
   | 'set_volume'
   | 'launch_app'
   | 'wake'
+  | 'run_automation'
 
 export type AutomationAction = {
   device_id: string
+  automation_id?: string
   action: AutomationActionName
   value?: number | string | Color
   delay_seconds?: number
@@ -113,7 +115,13 @@ export type AutomationRun = {
   started_at: string
   duration_ms: number
   ok: boolean
-  results: Array<{ device_id: string; action: string; ok: boolean; error?: string }>
+  results: Array<{
+    device_id?: string
+    automation_id?: string
+    action: string
+    ok: boolean
+    error?: string
+  }>
 }
 
 export type AutomationSnapshot = AutomationState & { runs: AutomationRun[] }
@@ -148,6 +156,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public device?: Device,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -252,13 +261,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     let msg = res.statusText
+    let device: Device | undefined
     try {
-      const body = (await res.json()) as { error?: string }
-      if (body?.error) msg = body.error
+      const body = (await res.json()) as unknown
+      if (isRecord(body)) {
+        if (typeof body.error === 'string') msg = body.error
+        device = normalizeDevices([body.device])[0]
+      }
     } catch {
       // non-JSON error body — keep the status text
     }
-    throw new ApiError(res.status, msg)
+    throw new ApiError(res.status, msg, device)
   }
   return (await res.json()) as T
 }
