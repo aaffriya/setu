@@ -9,6 +9,8 @@ nothing about it.
 
 ## Routes
 - `GET /api/devices` → cached `manager.Snapshot()`; `?refresh=true` performs a one-shot hardware poll and overlays its successful states first.
+- `GET /api/diagnostics` → latest per-device poll/command outcomes from bounded backend RAM; no hardware I/O.
+- `POST /api/devices/{id}/refresh` → one serialized hardware read for that device; returns its refreshed view, including fallback state with a 502 when no live response arrives.
 - `POST /api/activity` → reset the adaptive poller's idle backoff without touching hardware.
 - `GET /api/recover` → self-contained service-worker/cache recovery page; preserves token and UI preferences.
 - `POST /api/devices/{id}/command` → shared control executor: `on`/`off`, `set_brightness`, `set_color`, `set_color_temp`, `set_scene`, `set_scene_speed`, `volume_up`/`volume_down`/`set_volume`/`mute`, `key`, `key_down`/`key_up` (press-and-hold), `send_text`, `launch_app`.

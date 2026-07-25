@@ -14,6 +14,7 @@
     --ink: 15 23 42; /* slate-900 — text, fills, borders (used with opacity) */
     --panel: 255 255 255; /* solid surface (modal) */
     --page: 247 248 252; /* page base behind the gradient */
+    --modal-backdrop: color-mix(in srgb, rgb(var(--page)) 50%, black 50%);
     --card-shadow: 0 12px 30px -16px rgba(2, 6, 23, 0.18);
     --glow-indigo: 0.18; /* gradient-glow strength (stronger in dark) */
     --glow-fuchsia: 0.14;
@@ -50,11 +51,11 @@
   /* A modal owns scrolling while it is open. `body` is fixed instead of only
      hidden because iOS can otherwise keep scrolling the page behind a dialog.
      Its standalone safe area can expose the root canvas below a fixed overlay,
-     so match that canvas to the overlay's black/50 backdrop while locked. */
+     so the root and overlay share one opaque, theme-aware backdrop. */
   html.setu-scroll-locked {
     overflow: hidden;
     overscroll-behavior: none;
-    background-color: color-mix(in srgb, rgb(var(--page)) 50%, black 50%);
+    background-color: var(--modal-backdrop);
   }
   html.setu-scroll-locked body {
     position: fixed;
@@ -64,6 +65,18 @@
     width: 100%;
     overflow: hidden;
     overscroll-behavior: none;
+  }
+
+  .settings-backdrop {
+    padding-top: max(1rem, calc(env(safe-area-inset-top, 0px) + 0.75rem));
+    padding-right: 1rem;
+    padding-bottom: max(1rem, calc(env(safe-area-inset-bottom, 0px) + 0.75rem));
+    padding-left: 1rem;
+    background-color: var(--modal-backdrop);
+  }
+
+  .settings-dialog {
+    max-height: min(92dvh, 100%);
   }
 
   body {

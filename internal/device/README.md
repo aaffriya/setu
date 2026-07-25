@@ -20,7 +20,7 @@ package: it imports nothing from Setu; everything else points here.
 - `KeyHold` — `PressKey` / `ReleaseKey` (hold a key down; **implementations must guarantee the release** — watchdog, supersede — a stuck press can freeze the device).
 - `TextInput` — `SendText(text)` (type into the device's focused field; `State.TextActive/TextValue` mirror it).
 - `AppControl` — `Apps() []App` + `LaunchApp(id)` (launch named apps, e.g. a TV's streaming apps).
-- `Pollable` — `Poll()` re-reads hardware (internal; used by the poller, **not** a UI capability).
+- `Pollable` — `Poll()` re-reads hardware (internal; used by the poller, **not** a UI capability). A driver may wrap `ErrPollNoResponse` when its fallback state remains meaningful without a live reply.
 - `State{Online,On,Brightness,Color,ColorTemp,Scene,SceneSpeed,Volume,Muted,TextActive,TextValue}`, `Color{R,G,B}`, `Scene{ID,Name,Dynamic}` (Dynamic = speed-adjustable), `App{ID,Name}`, capability constants `Cap*`.
 
 ## Design rule

@@ -2,6 +2,7 @@ package samsung
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"setu/internal/config"
+	"setu/internal/device"
 )
 
 type sequenceResolver struct {
@@ -55,6 +57,25 @@ func TestResolveIPCachesAndReresolvesAfterInvalidation(t *testing.T) {
 	}
 	if !second.Equal(net.ParseIP("192.168.1.11")) || discovery.calls != 2 {
 		t.Fatalf("resolve after invalidation = %v, calls = %d; want 192.168.1.11, 2", second, discovery.calls)
+	}
+}
+
+func TestPollReportsMissingLiveResponseWithoutDisablingWake(t *testing.T) {
+	tv := &TV{base: base{
+		id:    "tv",
+		mac:   "a0:d7:f3:9e:74:b2",
+		state: device.State{Online: true, On: true},
+	}}
+
+	state, err := tv.Poll()
+	if !errors.Is(err, device.ErrPollNoResponse) {
+		t.Fatalf("Poll() error = %v; want ErrPollNoResponse", err)
+	}
+	if !state.Online {
+		t.Fatal("missing live response disabled MAC-based wake availability")
+	}
+	if state.On {
+		t.Fatal("missing live response did not clear stale power state")
 	}
 }
 

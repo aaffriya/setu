@@ -1066,16 +1066,11 @@ func (t *TV) Poll() (device.State, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*t.timeout)
 	defer cancel()
 
-	// IP resolution only gates whether the live signals are *queried*; it does
-	// not decide Online (see the doc comment — an unresolvable TV is still
-	// wakeable by MAC, it just reads as powered off until it answers again).
-	_, err := t.resolveIP()
-	known := err == nil
-	var on bool
-	if known {
-		ps, _ := t.powerState(ctx)
-		on = ps == "on"
-	}
+	// A missing live response does not decide Online (see the doc comment — an
+	// unresolvable TV is still wakeable by MAC), but it must remain visible to
+	// diagnostics rather than being reported as a successful hardware check.
+	ps, reachable := t.powerState(ctx)
+	on := ps == "on"
 
 	vol, haveVol := 0, false
 	muted, haveMute := false, false
@@ -1108,7 +1103,11 @@ func (t *TV) Poll() (device.State, error) {
 			s.TextValue = ""
 		}
 	})
-	return t.State(), nil
+	state := t.State()
+	if !reachable {
+		return state, fmt.Errorf("samsung %s: %w", t.id, device.ErrPollNoResponse)
+	}
+	return state, nil
 }
 
 // New builds a Samsung TV from its config entry (matches config.Constructor).

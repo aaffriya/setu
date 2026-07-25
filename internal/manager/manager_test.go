@@ -2,9 +2,11 @@ package manager
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"setu/internal/control"
 	"setu/internal/device"
@@ -171,6 +173,63 @@ func TestCommandDoesNotPollAfterInputError(t *testing.T) {
 	}
 	if dev.polls != 0 {
 		t.Fatalf("input error triggered %d hardware polls", dev.polls)
+	}
+}
+
+func TestDiagnosticsKeepLatestPollAndCommandOutcome(t *testing.T) {
+	bus := events.NewBus()
+	dev := &uncertainCommandDevice{state: device.State{Online: true}}
+	mgr := New(bus, []device.Device{dev})
+	defer mgr.Close()
+
+	initial := mgr.Diagnostics()
+	if len(initial) != 1 || !initial[0].Pollable || initial[0].LastPollAt != 0 {
+		t.Fatalf("initial diagnostics = %+v", initial)
+	}
+
+	if _, _, _, err := mgr.Poll(dev.ID()); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	_, _, commandErr := mgr.Command(dev.ID(), control.Request{Action: "on"})
+	if commandErr == nil {
+		t.Fatal("command unexpectedly succeeded")
+	}
+
+	got := mgr.Diagnostics()[0]
+	if got.LastPollAt == 0 || got.LastPollError != "" {
+		t.Fatalf("poll diagnostics = %+v", got)
+	}
+	if got.LastCommandAt == 0 || got.LastCommandAction != "on" {
+		t.Fatalf("command diagnostics = %+v", got)
+	}
+	if got.LastCommandError != commandErr.Error() {
+		t.Fatalf("command error = %q, want %q", got.LastCommandError, commandErr)
+	}
+}
+
+func TestDiagnosticsBoundRetainedText(t *testing.T) {
+	bus := events.NewBus()
+	dev := &uncertainCommandDevice{state: device.State{Online: true}}
+	mgr := New(bus, []device.Device{dev})
+	defer mgr.Close()
+
+	action := strings.Repeat("界", 100)
+	if _, _, err := mgr.Command(dev.ID(), control.Request{Action: action}); err == nil {
+		t.Fatal("oversized unknown action unexpectedly succeeded")
+	}
+	got := mgr.Diagnostics()[0]
+	if len(got.LastCommandAction) > maxDiagnosticActionBytes ||
+		!utf8.ValidString(got.LastCommandAction) ||
+		!strings.HasSuffix(got.LastCommandAction, "…") {
+		t.Fatalf("bounded action = %q (%d bytes)", got.LastCommandAction, len(got.LastCommandAction))
+	}
+
+	longError := errors.New(strings.Repeat("x", maxDiagnosticErrorBytes+100))
+	boundedError := diagnosticError(longError)
+	if len(boundedError) > maxDiagnosticErrorBytes ||
+		!utf8.ValidString(boundedError) ||
+		!strings.HasSuffix(boundedError, "…") {
+		t.Fatalf("bounded error = %q (%d bytes)", boundedError, len(boundedError))
 	}
 }
 

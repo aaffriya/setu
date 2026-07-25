@@ -67,8 +67,10 @@ func (s *Server) Handler() http.Handler {
 
 	// JSON API (token-protected). Go 1.22+ method+pattern routing.
 	mux.Handle("GET /api/devices", s.auth(http.HandlerFunc(s.handleListDevices)))
+	mux.Handle("GET /api/diagnostics", s.auth(http.HandlerFunc(s.handleDiagnostics)))
 	mux.Handle("POST /api/activity", s.auth(http.HandlerFunc(s.handleActivity)))
 	mux.Handle("POST /api/devices/{id}/command", s.auth(http.HandlerFunc(s.handleCommand)))
+	mux.Handle("POST /api/devices/{id}/refresh", s.auth(http.HandlerFunc(s.handleRefreshDevice)))
 	if s.automation != nil {
 		mux.Handle("GET /api/automations", s.auth(http.HandlerFunc(s.handleAutomations)))
 		mux.Handle("PUT /api/automations", s.auth(http.HandlerFunc(s.handleReplaceAutomations)))

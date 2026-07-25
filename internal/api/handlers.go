@@ -46,6 +46,48 @@ func (s *Server) handleActivity(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleDiagnostics returns the latest bounded operation summary from RAM. It
+// never contacts hardware; explicit per-device refresh owns that cost.
+func (s *Server) handleDiagnostics(w http.ResponseWriter, _ *http.Request) {
+	if s.poller != nil {
+		s.poller.Activity()
+	}
+	writeJSON(w, http.StatusOK, s.mgr.Diagnostics())
+}
+
+// handleRefreshDevice performs one serialized hardware read for a single
+// device, avoiding the all-device cost when investigating one card.
+func (s *Server) handleRefreshDevice(w http.ResponseWriter, r *http.Request) {
+	if s.poller != nil {
+		s.poller.Activity()
+	}
+	id := r.PathValue("id")
+	if _, ok := s.mgr.Device(id); !ok {
+		writeError(w, http.StatusNotFound, "unknown device")
+		return
+	}
+	_, pollable, _, err := s.mgr.Poll(id)
+	if !pollable {
+		writeError(w, http.StatusBadRequest, "device does not support status refresh")
+		return
+	}
+	if err != nil {
+		s.log.Warn("device refresh failed", "device", id, "err", err)
+		if view, ok := s.mgr.View(id); ok {
+			writeDeviceError(w, http.StatusBadGateway, "device refresh failed", view)
+		} else {
+			writeError(w, http.StatusBadGateway, "device refresh failed")
+		}
+		return
+	}
+	view, ok := s.mgr.View(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown device")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 // commandRequest is the uniform, device-agnostic command body, e.g.
 //
 //	{"action":"on"}

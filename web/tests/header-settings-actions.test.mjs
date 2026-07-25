@@ -11,8 +11,17 @@ const automations = readFileSync(
   new URL('../src/lib/components/Automations.svelte', import.meta.url),
   'utf8',
 )
+const roomControls = readFileSync(
+  new URL('../src/lib/components/RoomControls.svelte', import.meta.url),
+  'utf8',
+)
+const diagnostics = readFileSync(
+  new URL('../src/lib/components/DeviceDiagnostics.svelte', import.meta.url),
+  'utf8',
+)
 const focusTrap = readFileSync(new URL('../src/lib/focus-trap.ts', import.meta.url), 'utf8')
 const store = readFileSync(new URL('../src/lib/store.ts', import.meta.url), 'utf8')
+const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8')
 const appCSS = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8')
 
 test('header keeps refresh and search while device tools live in Settings', () => {
@@ -26,21 +35,60 @@ test('header keeps refresh and search while device tools live in Settings', () =
   assert.match(settings, />Device tools</)
   assert.match(settings, /<Scenes\b/)
   assert.match(settings, /<Automations\b/)
+  assert.match(settings, /<RoomControls\b/)
+  assert.match(settings, /<DeviceDiagnostics\b/)
   assert.match(settings, /Arrange devices/)
 })
 
 test('moved tools use full-width Settings rows', () => {
   assert.match(scenes, /flex w-full items-center gap-3/)
   assert.match(automations, /flex w-full items-center gap-3/)
+  assert.match(roomControls, /flex w-full items-center gap-3/)
+  assert.match(diagnostics, /flex w-full items-center gap-3/)
 })
 
 test('child dialogs own Escape and keep Settings open', () => {
   assert.match(app, /showSettings\s*&&\s*!activeSettingsTool/)
   assert.match(scenes, /stopPropagation\(\)/)
   assert.match(automations, /stopPropagation\(\)/)
+  assert.match(roomControls, /stopPropagation\(\)/)
+  assert.match(diagnostics, /stopPropagation\(\)/)
   assert.match(app, /use:trapFocus/)
   assert.match(scenes, /use:trapFocus/)
   assert.match(automations, /use:trapFocus/)
+  assert.match(roomControls, /use:trapFocus/)
+  assert.match(diagnostics, /use:trapFocus/)
+})
+
+test('room controls stay browser-local and bound command fan-out', () => {
+  assert.match(roomControls, /import \{ devices, rooms, command \} from '\.\.\/store'/)
+  assert.match(roomControls, /capabilities\.includes\('switch'\)/)
+  assert.match(roomControls, /const maxConcurrentCommands = 4/)
+  assert.match(roomControls, /Math\.min\(maxConcurrentCommands, targets\.length\)/)
+  assert.match(roomControls, /busy \|\| disabled \|\| selectedDevices\.length === 0/)
+  assert.match(roomControls, /\$\{succeeded\} succeeded · \$\{failed\} failed/)
+  assert.match(roomControls, /await tick\(\)\s+if \(source\.isConnected\) source\.focus\(\)/)
+  assert.match(roomControls, /function closeDialog\(\)\s*\{\s*open = false\s*\}/)
+  assert.match(roomControls, /disabled=\{disabled \|\| busy \|\| roomNames\.length === 0\}/)
+  assert.doesNotMatch(roomControls, /if \(!busy\) open = false/)
+  assert.doesNotMatch(api, /\/api\/rooms/)
+})
+
+test('diagnostics use latest RAM status and a single-device refresh route', () => {
+  assert.match(api, /request<unknown>\('\/api\/diagnostics'\)/)
+  assert.match(api, /\/api\/devices\/\$\{encodeURIComponent\(id\)\}\/refresh/)
+  assert.match(store, /export async function refreshDevice\(id: string\): Promise<boolean>/)
+  assert.match(store, /err\.status === 401 \? 'unauthorized' : 'online'/)
+  assert.match(store, /authoritativeVersions\.get\(id\).*=== authoritativeVersion/)
+  assert.match(store, /err\.device\?\.id === id/)
+  assert.match(diagnostics, /Diagnostics stay in memory and reset when Setu restarts/)
+  assert.match(diagnostics, /Refresh this device/)
+  assert.match(diagnostics, /let loadGeneration = 0/)
+  assert.match(diagnostics, /generation !== loadGeneration/)
+  assert.match(diagnostics, /'No response'/)
+  assert.match(diagnostics, /function closeDialog\(\)/)
+  assert.match(diagnostics, /disabled \|\| Boolean\(refreshingID\) \|\| loading/)
+  assert.match(diagnostics, /await tick\(\)[\s\S]*?else if \(dialog\?\.isConnected\) dialog\.focus\(\)/)
 })
 
 test('automation delay keeps its seconds suffix clear of the number input', () => {
@@ -99,8 +147,16 @@ test('Settings locks background scroll and modal scrollers contain gestures', ()
   assert.match(app, /document\.documentElement\.classList\.add\('setu-scroll-locked'\)/)
   assert.match(app, /window\.scrollTo\(0, scrollY\)/)
   assert.match(app, /overflow-y-auto overscroll-contain/)
+  assert.match(app, /settings-backdrop/)
+  assert.match(app, /settings-dialog/)
+  assert.doesNotMatch(app, /settings-backdrop[^"]*bg-black\/50/)
+  assert.doesNotMatch(app, /settings-dialog[^"]*border/)
+  assert.match(app, /settings-dialog[^"]*outline-none/)
   assert.match(appCSS, /html\.setu-scroll-locked body/)
-  assert.match(appCSS, /color-mix\(in srgb, rgb\(var\(--page\)\) 50%, black 50%\)/)
+  assert.match(appCSS, /--modal-backdrop: color-mix\(in srgb, rgb\(var\(--page\)\) 50%, black 50%\)/)
+  assert.match(appCSS, /\.settings-backdrop[\s\S]*?safe-area-inset-top/)
+  assert.match(appCSS, /\.settings-backdrop[\s\S]*?safe-area-inset-bottom/)
+  assert.match(appCSS, /\.settings-dialog[\s\S]*?max-height: min\(92dvh, 100%\)/)
   assert.match(appCSS, /position: fixed/)
 })
 

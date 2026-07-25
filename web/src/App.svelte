@@ -26,6 +26,8 @@
   import DeviceCard from './lib/components/DeviceCard.svelte'
   import Scenes from './lib/components/Scenes.svelte'
   import Automations from './lib/components/Automations.svelte'
+  import RoomControls from './lib/components/RoomControls.svelte'
+  import DeviceDiagnostics from './lib/components/DeviceDiagnostics.svelte'
   import BackupRestore from './lib/components/BackupRestore.svelte'
   import { trapFocus } from './lib/focus-trap'
   import { masonry } from './lib/masonry'
@@ -33,7 +35,8 @@
   let token = $state(getToken())
   let tokenDraft = $state(getToken())
   let showSettings = $state(false)
-  let activeSettingsTool = $state<'scenes' | 'automations' | ''>('')
+  type SettingsTool = 'scenes' | 'automations' | 'rooms' | 'diagnostics'
+  let activeSettingsTool = $state<SettingsTool | ''>('')
   let themeChoice = $state<Theme>(getTheme())
   let confirmReset = $state(false)
   let initialRefreshDone = $state(false)
@@ -64,7 +67,7 @@
     }
   })
 
-  function setSettingsTool(tool: 'scenes' | 'automations', open: boolean) {
+  function setSettingsTool(tool: SettingsTool, open: boolean) {
     if (open) activeSettingsTool = tool
     else if (activeSettingsTool === tool) activeSettingsTool = ''
   }
@@ -672,12 +675,12 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed inset-0 z-30 grid place-items-center overflow-hidden overscroll-none bg-black/50 p-4 backdrop-blur-sm"
+    class="settings-backdrop fixed inset-0 z-30 grid place-items-center overflow-hidden overscroll-none"
     transition:fade={{ duration: 150 }}
     onclick={(e) => e.target === e.currentTarget && (showSettings = false)}
   >
     <div
-      class="max-h-[92dvh] w-full max-w-sm overflow-y-auto overscroll-contain rounded-3xl border border-ink/10 bg-panel p-6 shadow-2xl"
+      class="settings-dialog w-full max-w-sm overflow-y-auto overscroll-contain rounded-3xl bg-panel p-6 shadow-2xl outline-none"
       role="dialog"
       aria-modal={activeSettingsTool === ''}
       aria-label="Settings"
@@ -723,6 +726,14 @@
         <Automations
           disabled={$connection !== 'online'}
           onmodalchange={(open) => setSettingsTool('automations', open)}
+        />
+        <RoomControls
+          disabled={$connection !== 'online'}
+          onmodalchange={(open) => setSettingsTool('rooms', open)}
+        />
+        <DeviceDiagnostics
+          disabled={!hasDevices}
+          onmodalchange={(open) => setSettingsTool('diagnostics', open)}
         />
         <button
           type="button"

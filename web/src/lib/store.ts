@@ -11,6 +11,7 @@
 import { writable, get, type Writable } from 'svelte/store'
 import {
   listDevices,
+  refreshDevice as fetchDeviceRefresh,
   sendCommand,
   wsURL,
   getToken,
@@ -164,6 +165,45 @@ export async function refresh(hardwareRefresh = false): Promise<void> {
       connection.set('offline')
     }
     setError(err instanceof Error ? err.message : 'failed to load devices')
+  }
+}
+
+// Refresh one device for the diagnostics panel without polling every device.
+// The returned view follows the same authoritative reconciliation path as a
+// normal command response.
+export async function refreshDevice(id: string): Promise<boolean> {
+  const authoritativeVersion = authoritativeVersions.get(id) ?? 0
+  try {
+    const updated = await fetchDeviceRefresh(id)
+    // A WebSocket event or command response that arrived while this read was
+    // in flight is newer; do not replace it with the earlier refresh snapshot.
+    if ((authoritativeVersions.get(id) ?? 0) === authoritativeVersion) {
+      noteAuthoritative(id)
+      devices.update((list) => list.map((device) => (device.id === id ? updated : device)))
+    }
+    connection.set('online')
+    lastUpdated.set(Date.now())
+    setError('')
+    return true
+  } catch (err) {
+    if (err instanceof ApiError) {
+      if (
+        err.device?.id === id &&
+        (authoritativeVersions.get(id) ?? 0) === authoritativeVersion
+      ) {
+        noteAuthoritative(id)
+        devices.update((list) => list.map((device) => (device.id === id ? err.device! : device)))
+        lastUpdated.set(Date.now())
+      }
+      // A device-level 4xx/5xx still proves the Setu server is reachable. Only
+      // an auth rejection changes that status; transport failures can mark the
+      // app offline when no live socket contradicts them.
+      connection.set(err.status === 401 ? 'unauthorized' : 'online')
+    } else if (!ws || ws.readyState !== WebSocket.OPEN) {
+      connection.set('offline')
+    }
+    setError(err instanceof Error ? err.message : 'device refresh failed')
+    return false
   }
 }
 

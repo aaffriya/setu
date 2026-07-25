@@ -5,7 +5,10 @@ package manager
 
 import (
 	"errors"
+	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 
 	"setu/internal/control"
 	"setu/internal/device"
@@ -24,6 +27,7 @@ type Manager struct {
 	devices map[string]device.Device // id → device
 	latest  map[string]device.State  // id → most recent state (event-driven)
 	ops     map[string]*sync.Mutex   // one command/poll operation at a time per device
+	health  map[string]DeviceDiagnostics
 
 	unsubscribe func()
 	done        chan struct{}
@@ -37,6 +41,7 @@ func New(bus *events.Bus, devices []device.Device) *Manager {
 		devices: make(map[string]device.Device, len(devices)),
 		latest:  make(map[string]device.State, len(devices)),
 		ops:     make(map[string]*sync.Mutex, len(devices)),
+		health:  make(map[string]DeviceDiagnostics, len(devices)),
 		done:    make(chan struct{}),
 	}
 	for _, d := range devices {
@@ -44,6 +49,8 @@ func New(bus *events.Bus, devices []device.Device) *Manager {
 		m.devices[d.ID()] = d
 		m.latest[d.ID()] = d.State() // seed cache from initial device state
 		m.ops[d.ID()] = &sync.Mutex{}
+		_, pollable := d.(device.Pollable)
+		m.health[d.ID()] = DeviceDiagnostics{ID: d.ID(), Pollable: pollable}
 	}
 
 	sub, resync, unsub := bus.SubscribeRecoverable()
@@ -145,6 +152,7 @@ func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, err
 	op.Lock()
 	defer op.Unlock()
 	if err := control.Execute(dev, req); err != nil {
+		m.recordCommand(id, req.Action, err)
 		// Invalid input never reached the transport, so there is nothing to
 		// reconcile. A transport error is ambiguous, though: the device may have
 		// applied the command and lost only its reply. Re-read this device while
@@ -153,7 +161,7 @@ func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, err
 		var inputErr control.InputError
 		if !errors.As(err, &inputErr) {
 			state, pollable, _, pollErr := m.pollLocked(id, dev)
-			if pollable && pollErr == nil {
+			if pollable && (pollErr == nil || errors.Is(pollErr, device.ErrPollNoResponse)) {
 				view := ViewOf(dev)
 				view.State = state
 				return view, true, err
@@ -161,6 +169,7 @@ func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, err
 		}
 		return DeviceView{}, true, err
 	}
+	m.recordCommand(id, req.Action, nil)
 	view := ViewOf(dev)
 	// Command events update this cache asynchronously too, but writing the fresh
 	// state here makes an immediate snapshot authoritative even if a subscriber
@@ -195,7 +204,12 @@ func (m *Manager) pollLocked(id string, dev device.Device) (state device.State, 
 		return device.State{}, false, false, nil
 	}
 	state, err = pd.Poll()
-	if err != nil {
+	m.recordPoll(id, err)
+	// Some devices remain controllable without a live reply (for example, a TV
+	// that can still be woken by MAC). Their Poll returns a meaningful fallback
+	// state with ErrPollNoResponse: retain and publish that state, while the
+	// diagnostics record above still marks the contact failure.
+	if err != nil && !errors.Is(err, device.ErrPollNoResponse) {
 		return state, true, false, err
 	}
 	m.mu.Lock()
@@ -206,7 +220,89 @@ func (m *Manager) pollLocked(id string, dev device.Device) (state device.State, 
 	if changed {
 		m.bus.Publish(events.Event{Type: events.StateChanged, DeviceID: id, State: state})
 	}
-	return state, true, changed, nil
+	return state, true, changed, err
+}
+
+// DeviceDiagnostics is a bounded, in-memory summary of the latest hardware
+// operations for one device. It deliberately keeps no history and is reset when
+// Setu restarts.
+type DeviceDiagnostics struct {
+	ID                string `json:"id"`
+	Pollable          bool   `json:"pollable"`
+	LastPollAt        int64  `json:"last_poll_at,omitempty"`
+	LastPollError     string `json:"last_poll_error,omitempty"`
+	LastCommandAt     int64  `json:"last_command_at,omitempty"`
+	LastCommandAction string `json:"last_command_action,omitempty"`
+	LastCommandError  string `json:"last_command_error,omitempty"`
+}
+
+func (m *Manager) recordPoll(id string, err error) {
+	m.mu.Lock()
+	entry := m.health[id]
+	entry.LastPollAt = time.Now().UnixMilli()
+	entry.LastPollError = diagnosticError(err)
+	m.health[id] = entry
+	m.mu.Unlock()
+}
+
+func (m *Manager) recordCommand(id, action string, err error) {
+	m.mu.Lock()
+	entry := m.health[id]
+	entry.LastCommandAt = time.Now().UnixMilli()
+	entry.LastCommandAction = diagnosticText(action, maxDiagnosticActionBytes)
+	entry.LastCommandError = diagnosticError(err)
+	m.health[id] = entry
+	m.mu.Unlock()
+}
+
+// Diagnostics returns one bounded health record per configured device in
+// config order. Reading it performs no device I/O.
+func (m *Manager) Diagnostics() []DeviceDiagnostics {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]DeviceDiagnostics, 0, len(m.order))
+	for _, id := range m.order {
+		out = append(out, m.health[id])
+	}
+	return out
+}
+
+// View returns one cached device projection without touching the hardware.
+func (m *Manager) View(id string) (DeviceView, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	dev, ok := m.devices[id]
+	if !ok {
+		return DeviceView{}, false
+	}
+	view := metaView(dev)
+	view.State = m.latest[id]
+	return view, true
+}
+
+const (
+	maxDiagnosticActionBytes = 64
+	maxDiagnosticErrorBytes  = 240
+)
+
+func diagnosticError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return diagnosticText(err.Error(), maxDiagnosticErrorBytes)
+}
+
+func diagnosticText(message string, maxBytes int) string {
+	message = strings.ToValidUTF8(message, "�")
+	if len(message) <= maxBytes {
+		return message
+	}
+	const suffix = "…"
+	message = message[:maxBytes-len(suffix)]
+	for !utf8.ValidString(message) {
+		message = message[:len(message)-1]
+	}
+	return message + suffix
 }
 
 // Devices returns all devices in config order.

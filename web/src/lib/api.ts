@@ -38,6 +38,16 @@ export type Device = {
   state: DeviceState
 }
 
+export type DeviceDiagnostics = {
+  id: string
+  pollable: boolean
+  last_poll_at: number
+  last_poll_error: string
+  last_command_at: number
+  last_command_action: string
+  last_command_error: string
+}
+
 export type CommandAction =
   | 'on'
   | 'off'
@@ -327,6 +337,40 @@ export function sendCommand(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, value }),
   })
+}
+
+function normalizeDiagnostics(value: unknown): DeviceDiagnostics[] {
+  if (!Array.isArray(value)) return []
+  const out: DeviceDiagnostics[] = []
+  for (const item of value) {
+    if (!isRecord(item)) continue
+    const id = asString(item.id)
+    if (!id) continue
+    out.push({
+      id,
+      pollable: item.pollable === true,
+      last_poll_at: asNumber(item.last_poll_at),
+      last_poll_error: asString(item.last_poll_error),
+      last_command_at: asNumber(item.last_command_at),
+      last_command_action: asString(item.last_command_action),
+      last_command_error: asString(item.last_command_error),
+    })
+  }
+  return out
+}
+
+export async function getDiagnostics(): Promise<DeviceDiagnostics[]> {
+  return normalizeDiagnostics(await request<unknown>('/api/diagnostics'))
+}
+
+export async function refreshDevice(id: string): Promise<Device> {
+  const device = normalizeDevices([
+    await request<unknown>(`/api/devices/${encodeURIComponent(id)}/refresh`, {
+      method: 'POST',
+    }),
+  ])[0]
+  if (!device) throw new Error('Setu returned an invalid device status.')
+  return device
 }
 
 export function getAutomations(): Promise<AutomationSnapshot> {

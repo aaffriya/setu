@@ -11,6 +11,8 @@
 // interfaces only at the seams that actually vary.
 package device
 
+import "errors"
+
 // Capability identifiers reported by Device.Capabilities and sent to the
 // frontend so it knows which controls to render for a device. Keep these
 // constants in sync with the capability interfaces below.
@@ -209,6 +211,13 @@ type AppControl interface {
 // (see internal/manager) to detect out-of-band changes — e.g. someone flipping
 // a physical switch — and is deliberately NOT a user-facing capability, so it
 // is not reported by Capabilities. Devices that can't be polled simply omit it.
+//
+// ErrPollNoResponse may be wrapped when a driver has a meaningful fallback
+// state (for example, a TV that remains wakeable by MAC) but received no live
+// reply. The manager retains that state while diagnostics still report the
+// failed contact.
+var ErrPollNoResponse = errors.New("device did not respond")
+
 type Pollable interface {
 	// Poll queries the device for its current state and returns it. The
 	// implementation should also refresh its own cached State so that State()
