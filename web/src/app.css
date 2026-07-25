@@ -48,10 +48,13 @@
   }
 
   /* A modal owns scrolling while it is open. `body` is fixed instead of only
-     hidden because iOS can otherwise keep scrolling the page behind a dialog. */
+     hidden because iOS can otherwise keep scrolling the page behind a dialog.
+     Its standalone safe area can expose the root canvas below a fixed overlay,
+     so match that canvas to the overlay's black/50 backdrop while locked. */
   html.setu-scroll-locked {
     overflow: hidden;
     overscroll-behavior: none;
+    background-color: color-mix(in srgb, rgb(var(--page)) 50%, black 50%);
   }
   html.setu-scroll-locked body {
     position: fixed;

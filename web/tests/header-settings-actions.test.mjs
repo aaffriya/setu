@@ -100,6 +100,7 @@ test('Settings locks background scroll and modal scrollers contain gestures', ()
   assert.match(app, /window\.scrollTo\(0, scrollY\)/)
   assert.match(app, /overflow-y-auto overscroll-contain/)
   assert.match(appCSS, /html\.setu-scroll-locked body/)
+  assert.match(appCSS, /color-mix\(in srgb, rgb\(var\(--page\)\) 50%, black 50%\)/)
   assert.match(appCSS, /position: fixed/)
 })
 
