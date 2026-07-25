@@ -108,6 +108,7 @@ test('automation mobile layout and form focus stay inside their bounds', () => {
   assert.match(automations, /overflow-x-hidden overflow-y-auto overscroll-contain/)
   assert.match(automations, /overflow-hidden rounded-lg[\s\S]*?whitespace-nowrap/)
   assert.match(appCSS, /:focus-visible/)
+  assert.match(appCSS, /:not\(\[type='search'\]\)/)
   assert.match(appCSS, /box-shadow: inset 0 0 0 2px/)
 })
 

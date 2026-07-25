@@ -3,7 +3,7 @@
 `web/` · the frontend, built to `web/dist` and embedded into the Go binary by `embed.go`.
 
 ## Stack
-- Svelte 5 (runes) + Vite + Tailwind v3. Static output, no SSR. ~24 KB gzipped JS.
+- Svelte 5 (runes) + Vite + Tailwind v4. Static output, no SSR.
 
 ## Key files
 - `index.html` — also carries the pre-app **splash**: an inline (framework-free) animated loader shown from the first paint until the processed app CSS and Svelte shell are ready, plus a static "Can't reach Setu" card a watchdog reveals if the app never mounts. `main.ts` loads `app.css` asynchronously so production CSS cannot block that first paint; mounted-but-offline shows the richer in-app screen instead.

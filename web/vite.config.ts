@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import tailwindcss from '@tailwindcss/vite'
 
 // public/ files are copied to dist verbatim, so Vite cannot inject the hashed
 // JS/CSS names into service-worker.js for us. Finish the worker after bundling:
@@ -71,7 +72,7 @@ function stampServiceWorker(): Plugin {
 // shipped binary defaults to port 80; for sudo-free hot-reload dev, run the
 // backend with `listen.port: 8080` to match this proxy (see README).
 export default defineConfig({
-  plugins: [svelte(), stampServiceWorker()],
+  plugins: [tailwindcss(), svelte(), stampServiceWorker()],
   build: {
     outDir: 'dist',
     emptyOutDir: true,

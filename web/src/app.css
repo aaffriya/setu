@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
 
 @layer base {
   /* Light is the default. The OS theme is followed by pure CSS
@@ -92,7 +91,7 @@
 :where(
     input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='file']):not(
         [type='range']
-      ),
+      ):not([type='search']),
     textarea,
     select
   ):focus-visible {
