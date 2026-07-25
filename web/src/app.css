@@ -48,6 +48,22 @@
     touch-action: manipulation;
   }
 
+  /* A modal owns scrolling while it is open. `body` is fixed instead of only
+     hidden because iOS can otherwise keep scrolling the page behind a dialog. */
+  html.setu-scroll-locked {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  html.setu-scroll-locked body {
+    position: fixed;
+    top: var(--setu-scroll-lock-top, 0);
+    right: 0;
+    left: 0;
+    width: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   body {
     @apply min-h-[100dvh] antialiased;
     color: rgb(var(--ink));
@@ -69,6 +85,20 @@
     -webkit-user-select: text;
     user-select: text;
   }
+}
+
+/* Draw form focus inside the control. This explicitly wins over older
+   `focus:ring-2` utilities that would restore a clipped outer ring. */
+:where(
+    input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='file']):not(
+        [type='range']
+      ),
+    textarea,
+    select
+  ):focus-visible {
+  outline: none;
+  border-color: rgb(99 102 241 / 0.55);
+  box-shadow: inset 0 0 0 2px rgb(129 140 248 / 0.65) !important;
 }
 
 @layer components {

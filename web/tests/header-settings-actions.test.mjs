@@ -13,6 +13,7 @@ const automations = readFileSync(
 )
 const focusTrap = readFileSync(new URL('../src/lib/focus-trap.ts', import.meta.url), 'utf8')
 const store = readFileSync(new URL('../src/lib/store.ts', import.meta.url), 'utf8')
+const appCSS = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8')
 
 test('header keeps refresh and search while device tools live in Settings', () => {
   const [beforeSettings, settings] = app.split('{#if showSettings}')
@@ -49,11 +50,26 @@ test('automation delay keeps its seconds suffix clear of the number input', () =
 })
 
 test('Settings starts on its dialog and exposes an immediate close action', () => {
-  assert.match(focusTrap, /node\.focus\(\)/)
+  assert.match(app, /function focusSettingsOnMount\(node: HTMLElement\)/)
+  assert.match(app, /if \(node\.isConnected\) node\.focus\(\{ preventScroll: true \}\)/)
+  assert.match(app, /use:focusSettingsOnMount/)
   assert.doesNotMatch(focusTrap, /items\(\)\[0\].*\.focus\(\)/)
   assert.match(focusTrap, /document\.activeElement === node/)
   assert.match(focusTrap, /event\.shiftKey \? last : first/)
   assert.match(app, /aria-label="Close settings"/)
+  assert.match(app, /id="token-input"[\s\S]*?autocomplete="off"/)
+})
+
+test('shared dialog focus preserves intentional field autofocus', () => {
+  assert.match(focusTrap, /active && !node\.contains\(document\.activeElement\)/)
+  assert.doesNotMatch(focusTrap, /focusDialog\(true\)|\bforce\b/)
+  assert.match(
+    focusTrap,
+    /node\.contains\(document\.activeElement\) \|\| document\.activeElement === document\.body/,
+  )
+  assert.match(focusTrap, /if \(stillOwnsFocus && previous\?\.isConnected\) previous\.focus\(\)/)
+  assert.match(scenes, /function focusOnMount\(node: HTMLInputElement\)[\s\S]*?node\.focus\(\)/)
+  assert.match(scenes, /aria-label="New scene"[\s\S]*?use:focusOnMount/)
 })
 
 test('arrange mode has a visible Done action outside Settings', () => {
@@ -62,13 +78,37 @@ test('arrange mode has a visible Done action outside Settings', () => {
   assert.match(app, /organizing = true\s+showSettings = false/)
 })
 
-test('refresh swaps its icon for one spinner while active', () => {
+test('refresh keeps the same symbol and rotates it while active', () => {
   assert.match(app, /\{#if refreshing\}[\s\S]*?animate-spin[\s\S]*?\{:else\}/)
-  assert.match(app, /<circle class="opacity-20" cx="12" cy="12" r="8" \/>/)
-  assert.match(app, /<path d="M12 4a8 8 0 0 1 8 8" \/>/)
-  assert.doesNotMatch(app, /h-5 w-5 \{refreshing \? 'animate-spin'/)
+  assert.equal(app.split('<path d="M20 11a8 8 0 10-2.3 5.7" />').length - 1, 2)
+  assert.equal(app.split('<path d="M20 4v7h-7" />').length - 1, 2)
+  assert.doesNotMatch(app, /<circle class="opacity-20"/)
   assert.match(app, /manualRefreshFeedbackMs = 300/)
   assert.match(app, /Promise\.all\(\[/)
+})
+
+test('device cards use fixed portrait widths through the smallest viewport', () => {
+  assert.match(app, /repeat\(auto-fit,288px\)/)
+  assert.match(app, /min-\[352px\]:\[grid-template-columns:repeat\(auto-fit,320px\)\]/)
+  assert.doesNotMatch(app, /grid-template-columns:repeat\(auto-fit,minmax\(min\(320px,100%\),320px\)\)/)
+})
+
+test('Settings locks background scroll and modal scrollers contain gestures', () => {
+  assert.match(app, /onpointerdown=\{rememberSettingsScroll\}/)
+  assert.match(app, /if \(event\.detail === 0\) rememberSettingsScroll\(\)/)
+  assert.match(app, /document\.documentElement\.classList\.add\('setu-scroll-locked'\)/)
+  assert.match(app, /window\.scrollTo\(0, scrollY\)/)
+  assert.match(app, /overflow-y-auto overscroll-contain/)
+  assert.match(appCSS, /html\.setu-scroll-locked body/)
+  assert.match(appCSS, /position: fixed/)
+})
+
+test('automation mobile layout and form focus stay inside their bounds', () => {
+  assert.match(automations, /max-w-lg flex-col overflow-hidden/)
+  assert.match(automations, /overflow-x-hidden overflow-y-auto overscroll-contain/)
+  assert.match(automations, /overflow-hidden rounded-lg[\s\S]*?whitespace-nowrap/)
+  assert.match(appCSS, /:focus-visible/)
+  assert.match(appCSS, /box-shadow: inset 0 0 0 2px/)
 })
 
 test('automation editor preserves typed catalog values and supports nested rules', () => {

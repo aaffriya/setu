@@ -38,7 +38,24 @@
   let confirmReset = $state(false)
   let initialRefreshDone = $state(false)
   let refreshing = $state(false)
+  let settingsScrollY = 0
   const manualRefreshFeedbackMs = 300
+
+  // Keep the app behind Settings exactly where it is. Locking the page also
+  // stops touch/wheel gestures that begin on dialog padding from scrolling the
+  // device list underneath (notably in iOS standalone mode).
+  $effect(() => {
+    if (!showSettings) return
+    const scrollY = settingsScrollY
+    document.body.style.setProperty('--setu-scroll-lock-top', `${-scrollY}px`)
+    document.documentElement.classList.add('setu-scroll-locked')
+    return () => {
+      document.documentElement.classList.remove('setu-scroll-locked')
+      document.body.style.removeProperty('--setu-scroll-lock-top')
+      window.scrollTo(0, scrollY)
+    }
+  })
+
   // Forget the reset confirmation whenever the dialog closes.
   $effect(() => {
     if (!showSettings) {
@@ -305,6 +322,26 @@
     connect()
   }
 
+  function rememberSettingsScroll() {
+    settingsScrollY = window.scrollY
+  }
+
+  function openSettings(event: MouseEvent) {
+    tokenDraft = token
+    // Pointer activation captures on pointerdown, before focus can move the
+    // viewport. Keyboard/programmatic activation has no pointerdown.
+    if (event.detail === 0) rememberSettingsScroll()
+    showSettings = true
+  }
+
+  function focusSettingsOnMount(node: HTMLElement) {
+    // Settings deliberately starts on its dialog so the access-token field
+    // never opens the mobile keyboard. Other dialogs keep their own autofocus.
+    queueMicrotask(() => {
+      if (node.isConnected) node.focus({ preventScroll: true })
+    })
+  }
+
   function closeSearch() {
     searching = false
     query = ''
@@ -336,6 +373,10 @@
   const iconBtn =
     'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink/5 text-ink/70 transition hover:bg-ink/10 hover:text-ink disabled:cursor-wait disabled:opacity-50 min-[360px]:h-9 min-[360px]:w-9'
   const chip = 'shrink-0 rounded-full px-3 py-1 text-xs font-medium transition'
+  // Cards use two fixed, usable widths rather than stretching continuously with
+  // portrait windows: 288px at the 320px minimum viewport, then 320px.
+  const deviceGrid =
+    'grid justify-center gap-4 [grid-template-columns:repeat(auto-fit,288px)] min-[352px]:[grid-template-columns:repeat(auto-fit,320px)]'
   const skeletonCards = [0, 1, 2, 3]
 </script>
 
@@ -406,10 +447,7 @@
                   title={refreshing ? 'Refreshing…' : 'Refresh'}
                 >
                   {#if refreshing}
-                    <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-                      <circle class="opacity-20" cx="12" cy="12" r="8" />
-                      <path d="M12 4a8 8 0 0 1 8 8" />
-                    </svg>
+                    <svg class="h-5 w-5 origin-center animate-spin motion-reduce:animate-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7" /><path d="M20 4v7h-7" /></svg>
                   {:else}
                     <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7" /><path d="M20 4v7h-7" /></svg>
                   {/if}
@@ -421,10 +459,8 @@
                 </button>
               {/if}
               <button
-                onclick={() => {
-                  tokenDraft = token
-                  showSettings = true
-                }}
+                onpointerdown={rememberSettingsScroll}
+                onclick={openSettings}
                 class={iconBtn}
                 aria-label="Settings"
               >
@@ -480,7 +516,7 @@
       <!-- Cold start with no cache: paint card-shaped placeholders immediately. -->
       <main
         in:fade={{ duration: 180 }}
-        class="grid grid-cols-1 gap-4 sm:justify-center sm:[grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),320px))]"
+        class={deviceGrid}
         aria-label="Loading devices"
         aria-busy="true"
       >
@@ -563,16 +599,14 @@
         </button>
       </div>
     {:else}
-      <!-- Phones: one full-width card per row. From sm up, cards take a FIXED
-           320px width and only the column *count* changes — leftover space is
-           centered margin, so a card never stretches or shrinks as the desktop
-           window resizes. The page also has a 320px min-width so it can't
-           collapse below a usable size.
+      <!-- Cards stay fixed while the window changes: 288px at the app's 320px
+           minimum viewport, and 320px once there is room for the regular card.
+           Only the column count changes after that.
            `use:masonry` packs cards tightly column-by-column so an expanded
            (tall) card doesn't leave a gap beside the short ones — see masonry.ts.
            (The action owns grid-auto-rows, so without it this stays a normal grid.) -->
       <main
-        class="grid grid-cols-1 gap-4 sm:justify-center sm:[grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),320px))]"
+        class={deviceGrid}
         use:masonry
       >
         {#each displayDevices as device, i (device.id)}
@@ -638,16 +672,17 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed inset-0 z-30 grid place-items-center bg-black/50 p-4 backdrop-blur-sm"
+    class="fixed inset-0 z-30 grid place-items-center overflow-hidden overscroll-none bg-black/50 p-4 backdrop-blur-sm"
     transition:fade={{ duration: 150 }}
     onclick={(e) => e.target === e.currentTarget && (showSettings = false)}
   >
     <div
-      class="max-h-[92dvh] w-full max-w-sm overflow-y-auto rounded-3xl border border-ink/10 bg-panel p-6 shadow-2xl"
+      class="max-h-[92dvh] w-full max-w-sm overflow-y-auto overscroll-contain rounded-3xl border border-ink/10 bg-panel p-6 shadow-2xl"
       role="dialog"
       aria-modal={activeSettingsTool === ''}
       aria-label="Settings"
       tabindex="-1"
+      use:focusSettingsOnMount
       use:trapFocus={activeSettingsTool === ''}
     >
       <div class="flex items-center gap-2">
@@ -659,6 +694,7 @@
         id="token-input"
         class="mt-1.5 w-full rounded-xl border border-ink/10 bg-ink/5 px-4 py-2.5 outline-none ring-indigo-400/50 focus:ring-2"
         type="password"
+        autocomplete="off"
         placeholder="access token"
         bind:value={tokenDraft}
         onkeydown={(e) => e.key === 'Enter' && saveToken()}

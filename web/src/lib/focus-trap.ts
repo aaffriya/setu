@@ -21,9 +21,11 @@ export function trapFocus(node: HTMLElement, enabled = true) {
 
   function focusDialog() {
     queueMicrotask(() => {
-      // Focus the dialog container first. Focusing its first field makes mobile
-      // browsers open the software keyboard as soon as Settings appears.
-      if (active && !node.contains(document.activeElement)) node.focus()
+      // Start on the dialog only when one of its children has not deliberately
+      // focused itself (for example, the name field in the New Scene editor).
+      if (active && !node.contains(document.activeElement)) {
+        node.focus({ preventScroll: true })
+      }
     })
   }
 
@@ -61,7 +63,12 @@ export function trapFocus(node: HTMLElement, enabled = true) {
     },
     destroy() {
       node.removeEventListener('keydown', onKeydown)
-      if (previous?.isConnected) previous.focus()
+      // An outgoing dialog can overlap its successor during a transition.
+      // Restore the opener only while this dialog still owns focus; otherwise
+      // leave deliberate focus in the newly opened dialog untouched.
+      const stillOwnsFocus =
+        node.contains(document.activeElement) || document.activeElement === document.body
+      if (stillOwnsFocus && previous?.isConnected) previous.focus()
     },
   }
 }
