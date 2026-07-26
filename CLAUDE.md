@@ -29,9 +29,11 @@ megabyte as precious.
 
 ## The 3 seams (the only place new interfaces belong)
 - **Capabilities** — `internal/device` (`Switchable`, `Dimmable`, `ColorControl`,
-  `ColorTempControl`, `SceneControl`, `Volume`, `KeyControl`). New feature = one small interface
-  + a `dispatch` case in `internal/api`. The API checks support via type assertions; never
-  fatten devices that lack a capability.
+  `ColorTempControl`, `SceneControl`, `SpeedControl`, `SleepMode`, `TimerControl`, `LightSwitch`, `Volume`,
+  `KeyControl`). New feature = one small interface + a case in `internal/control`'s command
+  switch (shared by the API and automations). Support is checked by type assertion; never
+  fatten devices that lack a capability. A **new** capability also needs UI work — see
+  "Adding a device" in the root `README.md` for the full list.
 - **Address resolution** — `internal/resolver` (`Resolver`: ARP now; per-brand discovery; DHCP later).
   Same seam, other direction: `Scanner` lists devices not added yet (UI's device scan →
   `POST /api/discovery/scan`); adding one is a separate `POST /api/devices` (`internal/inventory`).
@@ -52,7 +54,9 @@ megabyte as precious.
    If the brand can enumerate its devices, implement `Scan` on its discoverer and add it to the
    `scanners` slice there too.
 5. Add the device from Settings → Devices (scan or by hand). The driver resolves IP at runtime.
-The frontend needs **no** change — cards render from `capabilities`.
+The frontend needs **no** change *when the device reuses existing capabilities* — cards render from
+`capabilities`. A brand-new capability does reach the UI: see "Adding a device" in the root
+`README.md`, and note it must join one of `DeviceCard`'s groups or its controls are unreachable.
 
 ## Frontend rules
 - Svelte 5 runes; small JS heap (the reason we use Svelte). Render from device data/capabilities,

@@ -302,6 +302,10 @@
     if (caps.has('color_temp')) out.push({ value: 'set_color_temp', label: 'White temperature' })
     if (caps.has('color')) out.push({ value: 'set_color', label: 'Color' })
     if (caps.has('scene')) out.push({ value: 'set_scene', label: 'Device scene' })
+    if (caps.has('speed')) out.push({ value: 'set_speed', label: 'Fan speed' })
+    if (caps.has('sleep')) out.push({ value: 'set_sleep', label: 'Sleep mode' })
+    if (caps.has('timer')) out.push({ value: 'set_timer', label: 'Timer' })
+    if (caps.has('light')) out.push({ value: 'set_light', label: 'Light' })
     if (caps.has('volume')) out.push({ value: 'set_volume', label: 'Volume' })
     if (caps.has('app') && (device.apps?.length ?? 0) > 0) out.push({ value: 'launch_app', label: 'Launch app' })
     if (caps.has('wol')) out.push({ value: 'wake', label: 'Wake' })
@@ -326,6 +330,18 @@
         break
       case 'set_scene':
         action.value = deviceFor(action.device_id)?.scenes?.[0]?.id ?? 1
+        break
+      case 'set_speed':
+        action.value = deviceFor(action.device_id)?.speed_min ?? 1
+        break
+      case 'set_sleep':
+      case 'set_light':
+        action.value = true
+        break
+      case 'set_timer':
+        // Default to the first real duration rather than 0, which would make
+        // the action cancel a timer instead of setting one.
+        action.value = deviceFor(action.device_id)?.timer_options?.find((h) => h > 0) ?? 1
         break
       case 'launch_app':
         action.value = deviceFor(action.device_id)?.apps?.[0]?.id ?? ''
@@ -359,6 +375,30 @@
 
   function setNumber(action: AutomationAction, value: string) {
     action.value = Number(value)
+  }
+
+  // A <select> hands back strings, so booleans need converting on the way in.
+  function setBool(action: AutomationAction, value: string) {
+    action.value = value === 'true'
+  }
+
+  // Numeric actions that take a plain number input, and the bounds each one
+  // accepts. Kept as functions rather than inline ternaries because three
+  // different ranges in one attribute is unreadable.
+  const NUMERIC_ACTIONS = ['set_brightness', 'set_color_temp', 'set_volume', 'set_speed']
+
+  function actionMin(action: AutomationAction): number {
+    const device = deviceFor(action.device_id)
+    if (action.action === 'set_color_temp') return device?.color_temp_min ?? 1000
+    if (action.action === 'set_speed') return device?.speed_min ?? 1
+    return 0
+  }
+
+  function actionMax(action: AutomationAction): number {
+    const device = deviceFor(action.device_id)
+    if (action.action === 'set_color_temp') return device?.color_temp_max ?? 10000
+    if (action.action === 'set_speed') return device?.speed_max ?? 6
+    return 100
   }
 
   function colorHex(value: AutomationAction['value']): string {
@@ -535,8 +575,12 @@
                     <select bind:value={action.value} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each deviceFor(action.device_id)?.scenes ?? [] as scene (scene.id)}<option value={scene.id}>{scene.name}</option>{/each}</select>
                   {:else if action.action === 'launch_app'}
                     <select bind:value={action.value} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each deviceFor(action.device_id)?.apps ?? [] as app (app.id)}<option value={app.id}>{app.name}</option>{/each}</select>
-                  {:else if ['set_brightness', 'set_color_temp', 'set_volume'].includes(action.action)}
-                    <input type="number" value={Number(action.value ?? 0)} oninput={(event) => setNumber(action, event.currentTarget.value)} min={action.action === 'set_color_temp' ? deviceFor(action.device_id)?.color_temp_min ?? 1000 : 0} max={action.action === 'set_color_temp' ? deviceFor(action.device_id)?.color_temp_max ?? 10000 : 100} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs" />
+                  {:else if action.action === 'set_timer'}
+                    <select value={Number(action.value ?? 0)} onchange={(event) => setNumber(action, event.currentTarget.value)} aria-label="Timer duration" class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each deviceFor(action.device_id)?.timer_options ?? [0] as hours (hours)}<option value={hours}>{hours === 0 ? 'Off' : `${hours} hour${hours > 1 ? 's' : ''}`}</option>{/each}</select>
+                  {:else if action.action === 'set_sleep' || action.action === 'set_light'}
+                    <select value={String(action.value ?? true)} onchange={(event) => setBool(action, event.currentTarget.value)} aria-label={action.action === 'set_light' ? 'Light state' : 'Sleep mode state'} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs"><option value="true">On</option><option value="false">Off</option></select>
+                  {:else if NUMERIC_ACTIONS.includes(action.action)}
+                    <input type="number" value={Number(action.value ?? 0)} oninput={(event) => setNumber(action, event.currentTarget.value)} min={actionMin(action)} max={actionMax(action)} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs" />
                   {/if}
                   <label class="mt-2 flex items-center gap-2 text-[11px] text-ink/40">
                     <span class="min-w-0 flex-1">Wait before action</span>

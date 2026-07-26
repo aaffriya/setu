@@ -11,9 +11,9 @@ It is a **single static Go binary**. That one binary serves the embedded web app
 API, and a WebSocket for live updates. No NGINX, no separate web server, no process
 supervisor.
 
-> **Status.** The full architecture is in place, including bounded local automation, plus two real device integrations —
-> **Philips WiZ** bulbs and **Samsung Tizen** TVs (see [Supported devices](#supported-devices)).
-> Add more one at a time, by brand and model, following the `example` template and the two
+> **Status.** The full architecture is in place, including bounded local automation, plus three real device integrations —
+> **Philips WiZ** bulbs, **Samsung Tizen** TVs, and **Atomberg** BLDC fans (see [Supported devices](#supported-devices)).
+> Add more one at a time, by brand and model, following the `example` template and the three
 > real packages. See [Adding a device](#adding-a-device).
 
 ---
@@ -333,6 +333,8 @@ cache, keeps the access token and UI preferences, and returns to the fixed app a
 | Philips WiZ — `WiZ`/`color_bulb` | switch, brightness, color, color_temp, scene | UDP :38899 (local, no cloud) |
 | Philips WiZ White — `WiZ`/`tunable_white` | switch, brightness, color_temp, scene | UDP :38899 (local, no cloud) |
 | Samsung Tizen TV — `Samsung`/`tizen` | switch (power), volume (absolute + mute), key, key_hold, app, text | REST :8001 + WebSocket/TLS :8002 + UPnP :9197 + Wake-on-LAN |
+| Atomberg fan — `Atomberg`/`fan` | switch, speed (1–6), sleep, timer, light (on/off) | UDP :5600 out, :5625 in (local, no cloud) |
+| Atomberg fan + light — `Atomberg`/`fan_light` | switch, speed (1–6), sleep, timer, brightness, scene (light colour) | UDP :5600 out, :5625 in (local, no cloud) |
 
 ### Philips WiZ (`WiZ`/`color_bulb`, `WiZ`/`tunable_white`)
 
@@ -374,12 +376,38 @@ cache, keeps the access token and UI preferences, and returns to the fixed app a
   resolved from its MAC). Remote keys are validated against `KEY_[A-Z0-9_]+`; `KEY_FACTORY`
   (service menu) is refused.
 
+### Atomberg fans (`Atomberg`/`fan`, `Atomberg`/`fan_light`)
+
+- **Pure local control over UDP** — no cloud, login or key. Atomberg documents this LAN protocol
+  themselves. Their cloud API is deliberately unused: it is capped at **100 calls/day**, which
+  cannot support polling.
+- **The fan finds itself.** Every Atomberg fan broadcasts `<mac>_<series>` on UDP :5625 once a
+  second, so addressing needs no ARP and a DHCP change corrects itself within a second. The same
+  beacon is what the device scan lists, and it doubles as liveness.
+- **Changes made elsewhere show up immediately.** The hardware broadcasts its full state after
+  *any* change, so turning the fan up with the **physical remote or the Atomberg app** updates the
+  card in well under a second — pushed, not waiting for the next poll.
+- On/off, **speed 1–6** (6 is the boost step), **sleep mode**, and an **auto-off timer**
+  (1, 2, 3 or 6 hours, with the time remaining shown on the card).
+- **The fan's light is its own control.** Power is the fan, so the lamp gets a small `light`
+  capability — an on/off toggle, exactly like sleep mode — and it stays usable with the blades
+  stopped. `fan_light` models (series I1/I5/M1/S1/S2) dim instead, 10–100% with **warm / cool /
+  daylight** as three scene presets. A model never offers both.
+- **Which model to add** is decided by the series the scan reports — the scan labels it for you,
+  and an unrecognised series is shown as "No driver" rather than guessed at.
+- ⚠️ Verified end to end against a protocol-faithful simulator, **not yet against physical
+  hardware**. See [`docs/devices/atomberg.md`](docs/devices/atomberg.md) §9.
+- ⚠️ The protocol has **no authentication** — anyone on the LAN can command a fan. That is
+  Atomberg's design, not Setu's; keep IoT devices on a segment you trust.
+
 ## Adding a device
 
 This is the core next step, and the whole architecture is built around making it small and
-local. Two real packages show the pattern applied to hardware: `internal/devices/wiz` (a compact
-UDP device) and `internal/devices/samsung` (REST + WebSocket + Wake-on-LAN, and how new
-capabilities like `volume`/`key` light up matching UI controls). Each device lives in its own package, organised **by brand → model**. Use
+local. Three real packages show the pattern applied to hardware: `internal/devices/wiz` (a compact
+UDP device), `internal/devices/samsung` (REST + WebSocket + Wake-on-LAN, and how new
+capabilities like `volume`/`key` light up matching UI controls), and `internal/devices/atomberg`
+(a broadcast protocol: one listener shared by every device, pushing state instead of only polling).
+Each device lives in its own package, organised **by brand → model**. Use
 [`internal/devices/example`](internal/devices/example/example.go) as the blueprint — it is a
 fully-commented, compiling template (a brand `base` with the transport, an embedded model type,
 capability methods, resolver usage, and factory registration).
@@ -405,8 +433,19 @@ capability methods, resolver usage, and factory registration).
    (brand, model, name, MAC). It is stored, built and live immediately; nothing to edit on
    disk and no restart.
 
-The frontend needs **no changes** — `DeviceCard` renders the right controls from the device's
-reported `capabilities`.
+The frontend needs **no changes** as long as the device reuses **existing** capabilities —
+`DeviceCard` renders the right controls from the device's reported `capabilities`.
+
+Introducing a *new* capability is the one case that does reach the UI, and it has a trap: every
+capability must belong to one of `DeviceCard`'s groups (`hasLight`, `hasMedia`, `hasFan`). One that
+belongs to none leaves the expand chevron hidden and its controls unreachable. A new capability
+means: the constant + interface in `internal/device`, a case in `internal/control`, any range/list
+in `manager.metaView`, an entry in `automation.safeActions`, and on the web side `api.ts`
+(state fields, `Device` fields, both action unions, `asState`), a control component, the
+`DeviceCard` group + block, `store.ts` (`applyOptimistic`, `snapshotCommands`),
+`Automations.svelte` (`actionOptions`, `resetAction`), and `backup.ts` (`supportsAction` — miss it
+and restored automations using the action are silently dropped). The `speed` / `sleep` / `timer`
+capabilities added for Atomberg fans are a worked example of all of it.
 
 ### Not yet (by design)
 
@@ -441,7 +480,8 @@ no libc dependency.
 Beyond this file, docs are kept **point-to-point** for humans and AI assistants:
 
 - **Native device protocols:** [`docs/devices/wiz.md`](docs/devices/wiz.md),
-  [`docs/devices/samsung.md`](docs/devices/samsung.md) — how to call each device on the wire.
+  [`docs/devices/samsung.md`](docs/devices/samsung.md),
+  [`docs/devices/atomberg.md`](docs/devices/atomberg.md) — how to call each device on the wire.
 - **Per-module context:** every package has its own `README.md`
   (`internal/*/README.md`, `cmd/setu/`, `web/`) — purpose, key types, flow, gotchas, how to extend.
 - **Index:** [`docs/README.md`](docs/README.md).

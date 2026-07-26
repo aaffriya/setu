@@ -22,6 +22,10 @@ const (
 	CapColor      = "color"
 	CapColorTemp  = "color_temp"
 	CapScene      = "scene"
+	CapSpeed      = "speed"
+	CapSleep      = "sleep"
+	CapTimer      = "timer"
+	CapLight      = "light"
 	CapVolume     = "volume"
 	CapKey        = "key"
 	CapKeyHold    = "key_hold"
@@ -59,6 +63,21 @@ type State struct {
 	// SceneSpeed is the animation speed of a dynamic scene (meaningful for
 	// SceneControl devices); 0 when not reported.
 	SceneSpeed int `json:"scene_speed"`
+	// Speed is the current discrete step (meaningful for SpeedControl devices,
+	// e.g. a fan's 1–6); 0 when not reported. Distinct from Brightness, which a
+	// fan uses for its light.
+	Speed int `json:"speed"`
+	// Sleep reports whether sleep/night mode is active (meaningful for SleepMode
+	// devices).
+	Sleep bool `json:"sleep"`
+	// Light reports whether a secondary light is lit (meaningful for LightSwitch
+	// devices). Distinct from On, which is the device's own power.
+	Light bool `json:"light"`
+	// TimerHours is the running auto-off timer in hours (meaningful for
+	// TimerControl devices); 0 when no timer is set. TimerElapsedMins is how far
+	// into it the device has run, when the protocol reports it.
+	TimerHours       int `json:"timer_hours"`
+	TimerElapsedMins int `json:"timer_elapsed_mins"`
 	// Volume is 0–100 (meaningful for VolumeSetter devices). For a TV this is
 	// the real level read back over UPnP (RenderingControl GetVolume).
 	Volume int `json:"volume"`
@@ -152,6 +171,38 @@ type SceneControl interface {
 	Scenes() []Scene
 	SetScene(id int) error
 	SetSceneSpeed(speed int) error
+}
+
+// SpeedControl is implemented by devices with discrete speed steps — a fan,
+// where "half speed" is not a thing the hardware can do. It reports its own
+// range for the same reason ColorTempControl does: so clients never offer a
+// step the device would only clamp or ignore. Steps are contiguous ints.
+type SpeedControl interface {
+	SetSpeed(step int) error
+	SpeedRange() (min, max int)
+}
+
+// SleepMode is implemented by devices with a sleep/night mode — a single toggle
+// that is independent of power, so it cannot ride on Switchable.
+type SleepMode interface {
+	SetSleep(on bool) error
+}
+
+// LightSwitch is implemented by devices with a secondary light that only
+// switches on and off — a ceiling fan's lamp. Switchable is already spoken for
+// by the device's main power, and a light with no levels is not Dimmable, so
+// this is its own small capability. A light that dims uses Dimmable instead.
+type LightSwitch interface {
+	SetLight(on bool) error
+}
+
+// TimerControl is implemented by devices with a built-in auto-off timer.
+// TimerOptions lists the hour values the hardware accepts, always including 0
+// (cancel); SetTimer takes hours from that list, not a vendor index — the
+// driver owns any translation to the wire.
+type TimerControl interface {
+	SetTimer(hours int) error
+	TimerOptions() []int
 }
 
 // Volume is implemented by devices with relative volume control (e.g. a TV).

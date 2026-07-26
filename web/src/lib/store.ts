@@ -308,7 +308,7 @@ const commandQueues = new Map<string, Promise<void>>()
 function sendCommandInOrder(
   id: string,
   action: CommandAction,
-  value?: number | Color | string,
+  value?: number | Color | string | boolean,
 ): Promise<Device> {
   const previous = commandQueues.get(id) ?? Promise.resolve()
   const current = previous.then(() => sendCommand(id, action, value))
@@ -329,7 +329,7 @@ function sendCommandInOrder(
 export async function command(
   id: string,
   action: CommandAction,
-  value?: number | Color | string,
+  value?: number | Color | string | boolean,
 ): Promise<boolean> {
   const generation = (commandGenerations.get(id) ?? 0) + 1
   commandGenerations.set(id, generation)
@@ -369,7 +369,7 @@ export async function command(
 function applyOptimistic(
   state: DeviceState,
   action: CommandAction,
-  value?: number | Color | string,
+  value?: number | Color | string | boolean,
 ): DeviceState {
   const next = { ...state }
   switch (action) {
@@ -399,6 +399,21 @@ function applyOptimistic(
       break
     case 'set_scene_speed':
       next.scene_speed = value as number
+      break
+    case 'set_speed':
+      next.speed = value as number
+      // Selecting a speed starts the fan, matching what the hardware does.
+      next.on = true
+      break
+    case 'set_sleep':
+      next.sleep = value as boolean
+      break
+    case 'set_timer':
+      next.timer_hours = value as number
+      next.timer_elapsed_mins = 0
+      break
+    case 'set_light':
+      next.light = value as boolean
       break
     case 'set_volume':
       next.volume = value as number
@@ -613,7 +628,7 @@ export function resume(): void {
 export type SceneCommand = {
   deviceId: string
   action: CommandAction
-  value?: number | Color | string
+  value?: number | Color | string | boolean
 }
 export type Scene = { id: string; name: string; commands: SceneCommand[] }
 
@@ -632,7 +647,11 @@ function snapshotCommands(d: Device): SceneCommand[] {
   const out: SceneCommand[] = []
   if (caps.has('switch') && !s.on) {
     out.push({ deviceId: d.id, action: 'off' })
-    return out // off → nothing else to restore
+    // A fan's lamp is its own circuit and stays meaningful with the blades
+    // stopped, so it is the one thing still worth restoring on a powered-off
+    // device. Everything else follows the switch.
+    if (caps.has('light')) out.push({ deviceId: d.id, action: 'set_light', value: s.light })
+    return out
   }
   if (caps.has('switch')) out.push({ deviceId: d.id, action: 'on' })
   if (caps.has('brightness') && s.brightness > 0)
@@ -647,6 +666,10 @@ function snapshotCommands(d: Device): SceneCommand[] {
     out.push({ deviceId: d.id, action: 'set_color_temp', value: s.color_temp })
   else if (caps.has('color'))
     out.push({ deviceId: d.id, action: 'set_color', value: s.color })
+  if (caps.has('speed') && s.speed > 0)
+    out.push({ deviceId: d.id, action: 'set_speed', value: s.speed })
+  if (caps.has('sleep')) out.push({ deviceId: d.id, action: 'set_sleep', value: s.sleep })
+  if (caps.has('light')) out.push({ deviceId: d.id, action: 'set_light', value: s.light })
   if (caps.has('volume')) out.push({ deviceId: d.id, action: 'set_volume', value: s.volume })
   return out
 }

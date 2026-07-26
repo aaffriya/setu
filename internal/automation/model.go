@@ -120,6 +120,7 @@ type Snapshot struct {
 var safeActions = map[string]struct{}{
 	"on": {}, "off": {}, "set_brightness": {}, "set_color": {},
 	"set_color_temp": {}, "set_scene": {}, "set_scene_speed": {},
+	"set_speed": {}, "set_sleep": {}, "set_timer": {}, "set_light": {},
 	"set_volume": {}, "launch_app": {}, "wake": {}, ActionAutomation: {},
 }
 

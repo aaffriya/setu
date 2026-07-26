@@ -23,6 +23,7 @@ import (
 	"setu/internal/api"
 	"setu/internal/automation"
 	"setu/internal/config"
+	"setu/internal/devices/atomberg"
 	"setu/internal/devices/example"
 	"setu/internal/devices/samsung"
 	"setu/internal/devices/wiz"
@@ -64,10 +65,11 @@ func run() error {
 
 	// Register device types. Adding a brand is ONE line here.
 	factory := config.NewFactory()
-	example.Register(factory) // template / blueprint (no real protocol)
-	wiz.Register(factory)     // Philips WiZ bulbs (UDP)
-	samsung.Register(factory) // Samsung Tizen TVs (REST + WebSocket + WoL)
-	wol.Register(factory)     // Wake-on-LAN targets (PC/NAS/router — magic packet)
+	example.Register(factory)  // template / blueprint (no real protocol)
+	wiz.Register(factory)      // Philips WiZ bulbs (UDP)
+	samsung.Register(factory)  // Samsung Tizen TVs (REST + WebSocket + WoL)
+	atomberg.Register(factory) // Atomberg BLDC fans (UDP, local)
+	wol.Register(factory)      // Wake-on-LAN targets (PC/NAS/router — magic packet)
 
 	// Brands that can enumerate their devices on the LAN, for the UI's device
 	// scan. Same seam as the resolver, used the other way round: not "where is
@@ -75,6 +77,7 @@ func run() error {
 	scanners := []resolver.Scanner{
 		wiz.NewDiscoverer(),        // UDP broadcast getSystemConfig
 		samsung.NewDiscoverer(nil), // SSDP DIAL + /api/v2/ identity
+		atomberg.NewDiscoverer(),   // UDP :5625 beacons (fans announce themselves)
 	}
 
 	// --- state (the one file Setu persists: devices + automations) ---

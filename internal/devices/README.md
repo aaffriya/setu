@@ -6,6 +6,7 @@
 - `example/` — the documented **blueprint** (compiles; no real protocol).
 - `wiz/` — Philips WiZ bulbs (UDP). Protocol: `docs/devices/wiz.md`.
 - `samsung/` — Samsung Tizen TVs (REST + WebSocket + Wake-on-LAN). Protocol: `docs/devices/samsung.md`.
+- `atomberg/` — Atomberg BLDC fans (UDP; one shared beacon listener). Protocol: `docs/devices/atomberg.md`.
 
 ## Pattern (every brand)
 - A brand `base` struct holds identity + transport + cached state; models **embed** it (composition, not inheritance).

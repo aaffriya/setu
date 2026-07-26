@@ -11,10 +11,11 @@ be understood or extended without re-deriving context.
 ## Native device protocols
 - [`devices/wiz.md`](devices/wiz.md) — Philips WiZ (UDP getPilot/setPilot, discovery).
 - [`devices/samsung.md`](devices/samsung.md) — Samsung Tizen (REST + WebSocket + Wake-on-LAN, key codes, app IDs).
+- [`devices/atomberg.md`](devices/atomberg.md) — Atomberg fans (UDP commands, beacon discovery, state bitfield).
 
 ## Per-module context (a `README.md` lives in each package)
 - Core: [`internal/device`](../internal/device/README.md) · [`internal/events`](../internal/events/README.md) · [`internal/resolver`](../internal/resolver/README.md) · [`internal/config`](../internal/config/README.md) · [`internal/manager`](../internal/manager/README.md) · [`internal/api`](../internal/api/README.md)
-- Devices: [`internal/devices`](../internal/devices/README.md) · [`example`](../internal/devices/example/README.md) · [`wiz`](../internal/devices/wiz/README.md) · [`samsung`](../internal/devices/samsung/README.md)
+- Devices: [`internal/devices`](../internal/devices/README.md) · [`example`](../internal/devices/example/README.md) · [`wiz`](../internal/devices/wiz/README.md) · [`samsung`](../internal/devices/samsung/README.md) · [`atomberg`](../internal/devices/atomberg/README.md)
 - Entry & UI: [`cmd/setu`](../cmd/setu/README.md) · [`web`](../web/README.md)
 
 ## Architecture & usage

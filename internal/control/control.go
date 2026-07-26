@@ -139,6 +139,76 @@ func apply(dev device.Device, req Request, execute bool) error {
 		}
 		return nil
 
+	case "set_speed":
+		d, ok := dev.(device.SpeedControl)
+		if !ok {
+			return invalid("device does not support speed")
+		}
+		var step int
+		if err := json.Unmarshal(req.Value, &step); err != nil {
+			return invalid("set_speed requires a step integer")
+		}
+		minStep, maxStep := d.SpeedRange()
+		if step < minStep || step > maxStep {
+			return invalid("speed is outside the device range")
+		}
+		if execute {
+			return d.SetSpeed(step)
+		}
+		return nil
+
+	case "set_sleep":
+		d, ok := dev.(device.SleepMode)
+		if !ok {
+			return invalid("device does not support sleep mode")
+		}
+		var on bool
+		if err := json.Unmarshal(req.Value, &on); err != nil {
+			return invalid("set_sleep requires true or false")
+		}
+		if execute {
+			return d.SetSleep(on)
+		}
+		return nil
+
+	case "set_light":
+		d, ok := dev.(device.LightSwitch)
+		if !ok {
+			return invalid("device does not support a light")
+		}
+		var on bool
+		if err := json.Unmarshal(req.Value, &on); err != nil {
+			return invalid("set_light requires true or false")
+		}
+		if execute {
+			return d.SetLight(on)
+		}
+		return nil
+
+	case "set_timer":
+		d, ok := dev.(device.TimerControl)
+		if !ok {
+			return invalid("device does not support a timer")
+		}
+		var hours int
+		if err := json.Unmarshal(req.Value, &hours); err != nil {
+			return invalid("set_timer requires an hours integer (0 cancels)")
+		}
+		supported := false
+		for _, option := range d.TimerOptions() {
+			if option == hours {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return invalid("timer duration is not supported by this device")
+		}
+		if execute {
+			return d.SetTimer(hours)
+		}
+		return nil
+
 	case "volume_up", "volume_down", "mute":
 		v, ok := dev.(device.Volume)
 		if !ok {

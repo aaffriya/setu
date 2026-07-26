@@ -15,6 +15,15 @@ export type DeviceState = {
   color_temp: number
   scene: number
   scene_speed: number
+  // Fan controls: the current discrete step, sleep/night mode, and the running
+  // auto-off timer (0 hours = none).
+  speed: number
+  sleep: boolean
+  timer_hours: number
+  timer_elapsed_mins: number
+  // A secondary light that only switches (a fan's lamp). Distinct from `on`,
+  // which is the device's own power.
+  light: boolean
   volume: number
   muted: boolean
   // Mirrors a focused text field on the device (e.g. a TV search box): whether
@@ -33,6 +42,9 @@ export type Device = {
   capabilities: string[]
   color_temp_min?: number
   color_temp_max?: number
+  speed_min?: number // hardware step range, for devices with a speed capability
+  speed_max?: number
+  timer_options?: number[] // hour values the device accepts (0 cancels)
   scenes?: Scene[]
   apps?: App[]
   state: DeviceState
@@ -95,6 +107,10 @@ export type CommandAction =
   | 'set_color_temp'
   | 'set_scene'
   | 'set_scene_speed'
+  | 'set_speed'
+  | 'set_sleep'
+  | 'set_timer'
+  | 'set_light'
   | 'volume_up'
   | 'volume_down'
   | 'set_volume'
@@ -114,6 +130,10 @@ export type AutomationActionName =
   | 'set_color_temp'
   | 'set_scene'
   | 'set_scene_speed'
+  | 'set_speed'
+  | 'set_sleep'
+  | 'set_timer'
+  | 'set_light'
   | 'set_volume'
   | 'launch_app'
   | 'wake'
@@ -123,7 +143,7 @@ export type AutomationAction = {
   device_id: string
   automation_id?: string
   action: AutomationActionName
-  value?: number | string | Color
+  value?: number | string | boolean | Color
   delay_seconds?: number
 }
 
@@ -220,6 +240,11 @@ const emptyState: DeviceState = {
   color_temp: 0,
   scene: 0,
   scene_speed: 0,
+  speed: 0,
+  sleep: false,
+  timer_hours: 0,
+  timer_elapsed_mins: 0,
+  light: false,
   volume: 0,
   muted: false,
   text_active: false,
@@ -257,6 +282,11 @@ function asState(value: unknown): DeviceState {
     color_temp: asNumber(value.color_temp),
     scene: asNumber(value.scene),
     scene_speed: asNumber(value.scene_speed),
+    speed: asNumber(value.speed),
+    sleep: value.sleep === true,
+    timer_hours: asNumber(value.timer_hours),
+    timer_elapsed_mins: asNumber(value.timer_elapsed_mins),
+    light: value.light === true,
     volume: asNumber(value.volume),
     muted: value.muted === true,
     text_active: value.text_active === true,
@@ -266,6 +296,18 @@ function asState(value: unknown): DeviceState {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function asNumberArray(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out = value.filter((item): item is number => typeof item === 'number')
+  return out.length ? out : undefined
+}
+
+function asSpeedRange(item: Record<string, unknown>): { min?: number; max?: number } {
+  const min = asNumber(item.speed_min)
+  const max = asNumber(item.speed_max)
+  return min > 0 && max > min ? { min, max } : {}
 }
 
 function asColorTempRange(item: Record<string, unknown>): { min?: number; max?: number } {
@@ -282,6 +324,7 @@ export function normalizeDevices(value: unknown): Device[] {
     const id = asString(item.id)
     if (!id) continue
     const colorTempRange = asColorTempRange(item)
+    const speedRange = asSpeedRange(item)
     out.push({
       id,
       name: asString(item.name),
@@ -292,6 +335,9 @@ export function normalizeDevices(value: unknown): Device[] {
       capabilities: asStringArray(item.capabilities),
       color_temp_min: colorTempRange.min,
       color_temp_max: colorTempRange.max,
+      speed_min: speedRange.min,
+      speed_max: speedRange.max,
+      timer_options: asNumberArray(item.timer_options),
       scenes: Array.isArray(item.scenes) ? (item.scenes as Scene[]) : undefined,
       apps: Array.isArray(item.apps) ? (item.apps as App[]) : undefined,
       state: asState(item.state),
@@ -374,7 +420,7 @@ export function signalActivity(): void {
 export function sendCommand(
   id: string,
   action: CommandAction,
-  value?: number | Color | string,
+  value?: number | Color | string | boolean,
 ): Promise<Device> {
   return request<Device>(`/api/devices/${encodeURIComponent(id)}/command`, {
     method: 'POST',

@@ -237,6 +237,22 @@ function supportsAction(device: Device, action: AutomationAction): boolean {
       )
     case 'set_scene_speed':
       return capabilities.has('scene')
+    case 'set_speed':
+      return (
+        capabilities.has('speed') &&
+        (typeof action.value !== 'number' ||
+          (action.value >= (device.speed_min ?? action.value) &&
+            action.value <= (device.speed_max ?? action.value)))
+      )
+    case 'set_sleep':
+      return capabilities.has('sleep')
+    case 'set_light':
+      return capabilities.has('light')
+    case 'set_timer':
+      return (
+        capabilities.has('timer') &&
+        (typeof action.value !== 'number' || (device.timer_options ?? []).includes(action.value))
+      )
     case 'set_volume':
       return capabilities.has('volume')
     case 'launch_app':

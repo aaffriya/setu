@@ -10,6 +10,8 @@
   import ColorTempSlider from './ColorTempSlider.svelte'
   import ScenePicker from './ScenePicker.svelte'
   import SceneSpeedSlider from './SceneSpeedSlider.svelte'
+  import FanSpeedSlider from './FanSpeedSlider.svelte'
+  import TimerPicker from './TimerPicker.svelte'
   import Favorites from './Favorites.svelte'
   import VolumeControl from './VolumeControl.svelte'
   import RemotePad from './RemotePad.svelte'
@@ -100,10 +102,27 @@
   const setSceneSpeed = (v: number) => command(device.id, 'set_scene_speed', v)
   const sendKey = (key: string) => command(device.id, 'key', key)
   const launchApp = (id: string) => command(device.id, 'launch_app', id)
+  const setSpeed = (v: number) => command(device.id, 'set_speed', v)
+  const setSleep = (v: boolean) => command(device.id, 'set_sleep', v)
+  const setTimer = (v: number) => command(device.id, 'set_timer', v)
+  const setLight = (v: boolean) => command(device.id, 'set_light', v)
 
   let hasLight = $derived(
     caps.has('brightness') || caps.has('color') || caps.has('color_temp') || caps.has('scene'),
   )
+  // Fan controls form their own group. A capability in NO group would leave the
+  // expand chevron hidden and its controls unreachable, so every new capability
+  // has to land in one of these.
+  let hasFan = $derived(
+    caps.has('speed') || caps.has('sleep') || caps.has('timer') || caps.has('light'),
+  )
+  // On a bulb, power *is* the light, so its controls follow the switch. On a fan
+  // the light is a separate circuit that works with the blades stopped, so it
+  // must not be greyed out just because the fan is off.
+  let lightDisabled = $derived(offline || (!on && !hasFan))
+  // Sleep and the timer only mean something while the fan is running; choosing a
+  // speed starts it, so that one stays live.
+  let fanModeDisabled = $derived(offline || !on)
   // Speed only applies to dynamic (animated) scenes; show the slider only then.
   let activeScene = $derived(device.scenes?.find((s) => s.id === device.state.scene))
   let hasMedia = $derived(
@@ -156,7 +175,7 @@
       {#if caps.has('wol')}
         <WakeButton onWake={() => command(device.id, 'wake')} />
       {/if}
-      {#if hasLight || hasMedia}
+      {#if hasLight || hasMedia || hasFan}
         <button
           type="button"
           onclick={() => {
@@ -184,27 +203,74 @@
     </div>
   </header>
 
+  {#if isOpen && hasFan}
+    <div class="mt-5 space-y-4" transition:slide={{ duration: 250 }}>
+      {#if caps.has('speed')}
+        <FanSpeedSlider
+          value={device.state.speed}
+          min={device.speed_min ?? 1}
+          max={device.speed_max ?? 6}
+          disabled={offline}
+          onChange={setSpeed}
+        />
+      {/if}
+      {#if caps.has('light')}
+        <!-- The lamp is its own circuit: it works with the blades stopped, so
+             it is gated only on reachability, not on fan power. -->
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm text-ink/70">Light</span>
+          <Toggle
+            checked={device.state.light}
+            disabled={offline}
+            label="Light"
+            onToggle={setLight}
+          />
+        </div>
+      {/if}
+      {#if caps.has('sleep')}
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm text-ink/70">Sleep mode</span>
+          <Toggle
+            checked={device.state.sleep}
+            disabled={fanModeDisabled}
+            label="Sleep mode"
+            onToggle={setSleep}
+          />
+        </div>
+      {/if}
+      {#if caps.has('timer')}
+        <TimerPicker
+          options={device.timer_options ?? []}
+          value={device.state.timer_hours}
+          elapsedMins={device.state.timer_elapsed_mins}
+          disabled={fanModeDisabled}
+          onPick={setTimer}
+        />
+      {/if}
+    </div>
+  {/if}
+
   {#if isOpen && hasLight}
     <div class="mt-5 space-y-4" transition:slide={{ duration: 250 }}>
       {#if caps.has('brightness')}
-        <BrightnessSlider value={device.state.brightness} disabled={offline || !on} onChange={setBrightness} />
+        <BrightnessSlider value={device.state.brightness} disabled={lightDisabled} onChange={setBrightness} />
       {/if}
       {#if caps.has('color_temp')}
         <ColorTempSlider
           value={device.state.color_temp}
           min={device.color_temp_min ?? 2200}
           max={device.color_temp_max ?? 6500}
-          disabled={offline || !on}
+          disabled={lightDisabled}
           onChange={setColorTemp}
         />
       {/if}
       {#if caps.has('color')}
-        <ColorPicker {color} disabled={offline || !on} onPick={setColor} />
+        <ColorPicker {color} disabled={lightDisabled} onPick={setColor} />
       {/if}
       {#if caps.has('scene')}
-        <ScenePicker scenes={device.scenes ?? []} value={device.state.scene} disabled={offline || !on} onPick={setScene} />
+        <ScenePicker scenes={device.scenes ?? []} value={device.state.scene} disabled={lightDisabled} onPick={setScene} />
         {#if activeScene?.dynamic}
-          <SceneSpeedSlider value={device.state.scene_speed} disabled={offline || !on} onChange={setSceneSpeed} />
+          <SceneSpeedSlider value={device.state.scene_speed} disabled={lightDisabled} onChange={setSceneSpeed} />
         {/if}
       {/if}
       <Favorites {device} disabled={offline} />

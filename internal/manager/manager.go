@@ -417,8 +417,11 @@ type DeviceView struct {
 	Capabilities []string       `json:"capabilities"`
 	ColorTempMin int            `json:"color_temp_min,omitempty"` // hardware Kelvin range, for ColorTempControl devices
 	ColorTempMax int            `json:"color_temp_max,omitempty"`
-	Scenes       []device.Scene `json:"scenes,omitempty"` // present only for SceneControl devices
-	Apps         []device.App   `json:"apps,omitempty"`   // present only for AppControl devices
+	SpeedMin     int            `json:"speed_min,omitempty"` // hardware step range, for SpeedControl devices
+	SpeedMax     int            `json:"speed_max,omitempty"`
+	TimerOptions []int          `json:"timer_options,omitempty"` // hour values accepted, for TimerControl devices
+	Scenes       []device.Scene `json:"scenes,omitempty"`        // present only for SceneControl devices
+	Apps         []device.App   `json:"apps,omitempty"`          // present only for AppControl devices
 	State        device.State   `json:"state"`
 }
 
@@ -437,6 +440,12 @@ func metaView(d device.Device) DeviceView {
 	}
 	if ct, ok := d.(device.ColorTempControl); ok {
 		v.ColorTempMin, v.ColorTempMax = ct.ColorTempRange()
+	}
+	if sp, ok := d.(device.SpeedControl); ok {
+		v.SpeedMin, v.SpeedMax = sp.SpeedRange()
+	}
+	if tc, ok := d.(device.TimerControl); ok {
+		v.TimerOptions = tc.TimerOptions()
 	}
 	if sc, ok := d.(device.SceneControl); ok {
 		v.Scenes = sc.Scenes()
