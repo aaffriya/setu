@@ -318,7 +318,7 @@ rather than falling back to key-stepping, so the shown state never lies.
 
 The unit Setu's Samsung support is developed and verified against. Read off the
 TV's **Menu → Settings → Support → About This TV** (and the engineering info
-overlay). Config entry: `living_tv` (`docs` ↔ `config.yaml`).
+overlay). Stored as device `living_tv`.
 
 | Field | Value | Meaning |
 |---|---|---|
@@ -337,12 +337,12 @@ overlay). Config entry: `living_tv` (`docs` ↔ `config.yaml`).
 `U`=UHD · `A`=Asia/India market · `50`=50″ panel · `AU7700`=2021 Crystal UHD
 7-series · `K`=variant · `LXL`=India SKU. The driver key in config stays
 `model: tizen` (it selects the Go driver, not the marketing model); the marketing
-name rides in `series: "AU7700"`.
+name rides in the device's `series` label ("AU7700"), editable in Settings → Devices.
 
-> ⚠️ **Two MACs.** The on-screen `MA` (`1C:86:9A:05:E1:4C`) is **not** the MAC in
-> `config.yaml` (`a0:d7:f3:9e:74:b2`). A Samsung TV has separate Wi-Fi and Ethernet
+> ⚠️ **Two MACs.** The on-screen `MA` (`1C:86:9A:05:E1:4C`) is **not** the MAC Setu
+> stores (`a0:d7:f3:9e:74:b2`). A Samsung TV has separate Wi-Fi and Ethernet
 > interfaces, each with its own MAC; the on-screen value reflects one interface
 > (typically the active/Ethernet NIC) while `a0:d7:f3:9e:74:b2` is the one **WoL
-> was verified against** (§4, 2026-06-04). Keep the config MAC as-is. If WoL ever
+> was verified against** (§4, 2026-06-04). Keep the stored MAC as-is. If WoL ever
 > stops waking the TV, try the other MAC — wake the interface the TV actually
 > listens on in network-standby.

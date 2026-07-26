@@ -86,6 +86,14 @@ type Device interface {
 	State() State           // cheap, cached snapshot (must not do I/O)
 }
 
+// Closer is implemented by devices that hold something open between calls (for
+// example a TV's event socket). The manager closes such a device when it is
+// removed or rebuilt, and when Setu shuts down. A device with nothing to
+// release simply does not implement it.
+type Closer interface {
+	Close() error
+}
+
 // Described is optional presentation metadata: a human-friendly product or
 // series name (e.g. "AU7700") distinct from the Model driver key. A device opts
 // in by implementing it (like the capability interfaces); the API omits the

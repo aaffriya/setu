@@ -13,10 +13,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"setu/internal/automation"
 	"setu/internal/events"
+	"setu/internal/inventory"
 	"setu/internal/manager"
+	"setu/internal/resolver"
 )
 
 // Server wires the manager and event bus to HTTP handlers.
@@ -25,6 +28,9 @@ type Server struct {
 	poller     *manager.Poller
 	bus        *events.Bus
 	automation *automation.Engine
+	inventory  *inventory.Inventory
+	scanners   []resolver.Scanner
+	scanMu     sync.Mutex // one LAN scan at a time (see discovery.go)
 	token      string
 	dist       fs.FS // embedded frontend, rooted at the dist dir
 	log        *slog.Logger
@@ -36,20 +42,40 @@ type Options struct {
 	Poller     *manager.Poller
 	Bus        *events.Bus
 	Automation *automation.Engine
-	Token      string
-	Dist       fs.FS
-	Logger     *slog.Logger
+	// Inventory owns the stored device list. Without one the device-management
+	// endpoints are not mounted (the manager still serves what it holds).
+	Inventory *inventory.Inventory
+	// Scanners list the brands that can enumerate their devices on the LAN, in
+	// the order the composition root registered them. Empty = no scan endpoint.
+	Scanners []resolver.Scanner
+	Token    string
+	Dist     fs.FS
+	Logger   *slog.Logger
 }
+
+// emptyFS stands in for an absent frontend. Serving from a nil fs.FS would
+// dereference nil on the first static request; with this the same paths fall
+// through to the built-in placeholder, which is how a Setu binary whose embed
+// holds no index.html already behaves (see static.go).
+type emptyFS struct{}
+
+func (emptyFS) Open(string) (fs.File, error) { return nil, fs.ErrNotExist }
 
 // New returns a Server.
 func New(o Options) *Server {
+	dist := o.Dist
+	if dist == nil {
+		dist = emptyFS{}
+	}
 	return &Server{
 		mgr:        o.Manager,
 		poller:     o.Poller,
 		bus:        o.Bus,
 		automation: o.Automation,
+		inventory:  o.Inventory,
+		scanners:   o.Scanners,
 		token:      o.Token,
-		dist:       o.Dist,
+		dist:       dist,
 		log:        o.Logger,
 	}
 }
@@ -71,6 +97,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/activity", s.auth(http.HandlerFunc(s.handleActivity)))
 	mux.Handle("POST /api/devices/{id}/command", s.auth(http.HandlerFunc(s.handleCommand)))
 	mux.Handle("POST /api/devices/{id}/refresh", s.auth(http.HandlerFunc(s.handleRefreshDevice)))
+	if s.inventory != nil {
+		// Managing which devices exist: added from a scan or by hand, renamed,
+		// removed, and exported/replaced as one list for backup and restore.
+		mux.Handle("GET /api/device-types", s.auth(http.HandlerFunc(s.handleDeviceTypes)))
+		mux.Handle("POST /api/devices", s.auth(http.HandlerFunc(s.handleAddDevice)))
+		mux.Handle("PATCH /api/devices/{id}", s.auth(http.HandlerFunc(s.handleUpdateDevice)))
+		mux.Handle("DELETE /api/devices/{id}", s.auth(http.HandlerFunc(s.handleDeleteDevice)))
+		mux.Handle("GET /api/devices/export", s.auth(http.HandlerFunc(s.handleExportDevices)))
+		mux.Handle("PUT /api/devices", s.auth(http.HandlerFunc(s.handleReplaceDevices)))
+		// A scan actively broadcasts on the LAN, so it is a POST: never
+		// prefetched, never cached, never replayed by a bored browser.
+		mux.Handle("POST /api/discovery/scan", s.auth(http.HandlerFunc(s.handleScan)))
+	}
 	if s.automation != nil {
 		mux.Handle("GET /api/automations", s.auth(http.HandlerFunc(s.handleAutomations)))
 		mux.Handle("PUT /api/automations", s.auth(http.HandlerFunc(s.handleReplaceAutomations)))
@@ -82,7 +121,16 @@ func (s *Server) Handler() http.Handler {
 
 	// WebSocket (token-protected; token may also be passed as ?token= for
 	// browsers, which cannot set an Authorization header on a WebSocket).
-	mux.Handle("GET /ws", s.auth(http.HandlerFunc(s.handleWS)))
+	mux.Handle("GET /ws", s.authQuery(http.HandlerFunc(s.handleWS)))
+
+	// Any other /api path is a mistake, not a page: answer it as the API rather
+	// than letting the SPA fallback below return index.html with a 200, which
+	// surfaces to callers as an unparseable JSON body. More specific patterns
+	// above still win, so this only catches genuinely unrouted paths — including
+	// the automation routes when no engine is configured.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "unknown endpoint")
+	})
 
 	// Everything else → the embedded SPA (public).
 	mux.Handle("/", s.staticHandler())

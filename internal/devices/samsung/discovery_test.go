@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -155,6 +156,64 @@ func TestDiscovererVerifiesCandidateMAC(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// Scan feeds the "add a device" flow, so it has to carry the labels that make a
+// config entry recognisable — not just the MAC that resolution needs.
+func TestScanReportsTVIdentity(t *testing.T) {
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"device":{"wifiMac":"A0:D7:F3:9E:74:B2","name":"[TV] Living Room","modelName":"UE43AU7700"}}`)
+	}))
+	defer info.Close()
+
+	infoURL, err := url.Parse(info.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, infoPort, err := net.SplitHostPort(infoURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ssdp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ssdp.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		n, client, err := ssdp.ReadFromUDP(buf)
+		if err != nil || !strings.Contains(string(buf[:n]), samsungDialSearchTarget) {
+			return
+		}
+		// Two responses from the same TV: the scan must list it once.
+		response := []byte("HTTP/1.1 200 OK\r\nST: " + samsungDialSearchTarget + "\r\n\r\n")
+		_, _ = ssdp.WriteToUDP(response, client)
+		_, _ = ssdp.WriteToUDP(response, client)
+	}()
+
+	d := &Discoverer{
+		timeout:    300 * time.Millisecond,
+		searchAddr: ssdp.LocalAddr().(*net.UDPAddr),
+		restPort:   infoPort,
+		http:       info.Client(),
+	}
+
+	found, err := d.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("Scan(): %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("Scan() = %+v; want one TV", found)
+	}
+	got := found[0]
+	if got.Brand != Brand || got.Model != ModelTizen {
+		t.Errorf("candidate type = %s/%s; want %s/%s", got.Brand, got.Model, Brand, ModelTizen)
+	}
+	if got.MAC != "a0:d7:f3:9e:74:b2" || got.Name != "[TV] Living Room" || got.Series != "UE43AU7700" {
+		t.Errorf("candidate = %+v; want the TV's own mac, name and model name", got)
 	}
 }
 

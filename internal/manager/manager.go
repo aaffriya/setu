@@ -5,6 +5,7 @@ package manager
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -120,11 +121,100 @@ func (m *Manager) resyncLatest() {
 	}
 }
 
-// Close stops the manager's event consumer. Safe to call once.
+// Close stops the manager's event consumer and releases whatever the devices
+// hold open. Safe to call once.
 func (m *Manager) Close() {
 	close(m.done)
 	if m.unsubscribe != nil {
 		m.unsubscribe()
+	}
+	for _, d := range m.Devices() {
+		closeDevice(d)
+	}
+}
+
+// Add registers a device the user just added. It is rejected if the id is
+// already taken — ids are the handle every command, automation and preference
+// uses, so two devices may never share one.
+func (m *Manager) Add(d device.Device) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := d.ID()
+	if _, exists := m.devices[id]; exists {
+		return fmt.Errorf("manager: device %q already exists", id)
+	}
+	m.order = append(m.order, id)
+	m.devices[id] = d
+	m.latest[id] = d.State()
+	m.ops[id] = &sync.Mutex{}
+	_, pollable := d.(device.Pollable)
+	m.health[id] = DeviceDiagnostics{ID: id, Pollable: pollable}
+	return nil
+}
+
+// Remove drops a device and releases what it held open. An in-flight command or
+// poll for it finishes first: they hold the device's operation lock, and this
+// takes it before letting go of the device.
+func (m *Manager) Remove(id string) bool {
+	m.mu.Lock()
+	dev, ok := m.devices[id]
+	op := m.ops[id]
+	if ok {
+		delete(m.devices, id)
+		delete(m.latest, id)
+		delete(m.ops, id)
+		delete(m.health, id)
+		m.order = withoutID(m.order, id)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	op.Lock()
+	closeDevice(dev)
+	op.Unlock()
+	return true
+}
+
+// Replace swaps in a rebuilt device with the same id, keeping its position in
+// the list and its cached state: editing a device's name must not blank its
+// card until the next poll.
+func (m *Manager) Replace(d device.Device) bool {
+	id := d.ID()
+	m.mu.Lock()
+	previous, ok := m.devices[id]
+	op := m.ops[id]
+	if ok {
+		m.devices[id] = d
+		_, pollable := d.(device.Pollable)
+		entry := m.health[id]
+		entry.Pollable = pollable
+		m.health[id] = entry
+	}
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	op.Lock()
+	closeDevice(previous)
+	op.Unlock()
+	return true
+}
+
+func withoutID(ids []string, id string) []string {
+	out := ids[:0]
+	for _, existing := range ids {
+		if existing != id {
+			out = append(out, existing)
+		}
+	}
+	return out
+}
+
+// closeDevice releases a device's long-lived resources, if it has any.
+func closeDevice(d device.Device) {
+	if c, ok := d.(device.Closer); ok {
+		_ = c.Close()
 	}
 }
 

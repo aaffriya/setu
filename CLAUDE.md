@@ -13,14 +13,18 @@ megabyte as precious.
 1. **Lightweight & simple wins.** Standard library first. It's an IoT device, not a server.
 2. **No over-engineering.** Don't add layers, abstractions, or generality the current scope
    doesn't need. When in doubt pick the simpler design. Prefer deleting over adding.
-3. **No new dependency** without a real reason (say why). Today: Go = `coder/websocket`,
-   `yaml.v3`; web = Svelte + Vite + Tailwind. No heavy frameworks or UI kits.
+3. **No new dependency** without a real reason (say why). Today: Go = `coder/websocket` only;
+   web = Svelte + Vite + Tailwind. No heavy frameworks or UI kits.
 4. **Idiomatic Go: composition, not inheritance.** Struct-embed a brand `base`; don't build
    inheritance trees. Interfaces only at the 3 seams below — not for single-impl plumbing.
-5. **Config is data, not behavior.** Behavior lives in code; `config.yaml` is only instance data.
+5. **Config is data, not behavior.** Behavior lives in code. Server settings are env vars
+   (`SETU_*`, all optional, defaults built in); the devices the user added are *state*, stored
+   in `$SETU_STATE_DIR/setu.json` beside the automations. There is no config file.
 6. **MAC is the identity; IP is resolved at runtime.** Never hardcode an IP.
-7. **Event-driven core.** Commands in → state events out via the bus. The automation engine is
-   **not built yet** — keep its seam, don't add it unprompted.
+7. **Event-driven core.** Commands in → state events out via the bus. The automation engine
+   (`internal/automation`) consumes that bus and is deliberately small and bounded — fixed
+   workers, capped rules/actions/runs, history in RAM. Keep it that way; it is not a
+   general rules engine.
 8. **Single binary.** No nginx / reverse proxy / supervisor. It serves `/`, `/api`, `/ws` itself.
 
 ## The 3 seams (the only place new interfaces belong)
@@ -29,12 +33,14 @@ megabyte as precious.
   + a `dispatch` case in `internal/api`. The API checks support via type assertions; never
   fatten devices that lack a capability.
 - **Address resolution** — `internal/resolver` (`Resolver`: ARP now; per-brand discovery; DHCP later).
+  Same seam, other direction: `Scanner` lists devices not added yet (UI's device scan →
+  `POST /api/discovery/scan`); adding one is a separate `POST /api/devices` (`internal/inventory`).
 - **Front-end protocol** — `internal/api` over manager + bus. A second protocol (e.g. HomeKit)
   goes here, **never** in device code.
 
 ## Where things live (each package has its own README.md — read it first)
 - `cmd/setu` — composition root: wire deps, **register brands**, serve.
-- `internal/{device,events,resolver,manager,config,api}` — the core.
+- `internal/{device,events,resolver,manager,config,control,api}` — the core; `internal/automation` — the bounded rules engine; `internal/store` — the one JSON state file; `internal/inventory` — stored device specs ↔ live devices.
 - `internal/devices/<brand>/` — one package per brand; `example/` is the blueprint.
 - `web/` — Svelte 5 PWA (embedded). `docs/devices/*.md` — native device protocols. root `README.md` — architecture & usage.
 
@@ -43,17 +49,22 @@ megabyte as precious.
 2. Put the wire protocol in the brand `base`; implement the capability methods + `Poll`.
 3. Implement **only** the capabilities the model has; update the `var _ device.X = (*T)(nil)` asserts.
 4. Export `New` + `Register`; add **one** `<brand>.Register(factory)` line in `cmd/setu/main.go`.
-5. Add a `config.yaml` entry (brand, model, id, name, **mac**). The driver resolves IP at runtime.
+   If the brand can enumerate its devices, implement `Scan` on its discoverer and add it to the
+   `scanners` slice there too.
+5. Add the device from Settings → Devices (scan or by hand). The driver resolves IP at runtime.
 The frontend needs **no** change — cards render from `capabilities`.
 
 ## Frontend rules
 - Svelte 5 runes; small JS heap (the reason we use Svelte). Render from device data/capabilities,
   no per-device markup. Resilient to mobile backgrounding (persist + re-fetch/reconnect on resume).
-- UI-only preferences (e.g. favourites) live in `localStorage`, **not** the backend — keep the
-  server free of user-pref state.
+- UI-only preferences (favourites, rooms, order, theme) live in `localStorage`, **not** the
+  backend — keep the server free of user-pref state. *Which devices exist* is not a preference:
+  that is server state (`internal/inventory`), and it is in the backup file too.
 
 ## Out of scope — don't add unless explicitly asked
-- Automation/rules engine · HomeKit · config-driven device behavior · heavy deps · internet exposure.
+- HomeKit · config-driven device behavior · heavy deps · internet exposure.
+- Growing the automation engine beyond its bounded scope (no scripting, no expression language,
+  no persistent run history).
 
 ## Before you finish
 - Go: `gofmt -l .` clean · `go vet ./...` · `go test ./...` · `go build ./...`.

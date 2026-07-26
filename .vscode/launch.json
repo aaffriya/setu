@@ -10,10 +10,13 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/setu",
-      "args": [
-        "--config",
-        "${workspaceFolder}/config.yaml"
-      ]
+      // No config file: everything is environment (see example.env). This runs
+      // an unprivileged port with its own state, so debugging never touches a
+      // real installation.
+      "env": {
+        "SETU_PORT": "8080",
+        "SETU_STATE_DIR": "${workspaceFolder}/tmp/state"
+      }
     }
   ]
 }

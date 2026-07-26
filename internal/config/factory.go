@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"setu/internal/device"
@@ -27,11 +28,33 @@ type Constructor func(spec DeviceSpec, deps Deps) (device.Device, error)
 // what lets config stay pure data + mechanism.
 type Factory struct {
 	constructors map[string]Constructor
+	types        []DeviceType
+}
+
+// DeviceType is one registered (brand, model) pair, exactly as the brand
+// package spelled it. The UI lists these when a device has to be added by hand
+// (a Wake-on-LAN target answers no scan), so the catalog stays in code — the
+// only place that knows what Setu can actually drive.
+type DeviceType struct {
+	Brand string `json:"brand"`
+	Model string `json:"model"`
 }
 
 // NewFactory returns an empty Factory.
 func NewFactory() *Factory {
 	return &Factory{constructors: make(map[string]Constructor)}
+}
+
+// Types returns every registered (brand, model) pair, sorted for a stable UI.
+func (f *Factory) Types() []DeviceType {
+	out := append([]DeviceType(nil), f.types...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Brand != out[j].Brand {
+			return out[i].Brand < out[j].Brand
+		}
+		return out[i].Model < out[j].Model
+	})
+	return out
 }
 
 // key normalizes (brand, model) to a case-insensitive lookup key, so config may
@@ -50,13 +73,23 @@ func (f *Factory) Register(brand, model string, c Constructor) {
 		panic(fmt.Sprintf("config: device type %q already registered", k))
 	}
 	f.constructors[k] = c
+	f.types = append(f.types, DeviceType{Brand: brand, Model: model})
+}
+
+// Supports reports whether a (brand, model) pair can be built.
+func (f *Factory) Supports(brand, model string) bool {
+	_, ok := f.constructors[key(brand, model)]
+	return ok
 }
 
 // Build constructs a single device from its spec.
 func (f *Factory) Build(spec DeviceSpec, deps Deps) (device.Device, error) {
 	c, ok := f.constructors[key(spec.Brand, spec.Model)]
 	if !ok {
-		return nil, fmt.Errorf("config: no device registered for brand %q model %q (did you register it in main?)", spec.Brand, spec.Model)
+		// Read by two audiences: a user restoring a backup from a build that had
+		// more brands, and a developer who forgot the Register line in
+		// cmd/setu/main.go. "in this build" is the fact both of them need.
+		return nil, fmt.Errorf("no driver for brand %q model %q in this build", spec.Brand, spec.Model)
 	}
 	return c(spec, deps)
 }

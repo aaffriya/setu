@@ -6,50 +6,37 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
+
+	"setu/internal/store"
 )
 
-const stateFileName = "setu-automations.json"
-
-// MaxStateBytes bounds both API input and the on-disk automation file.
+// MaxStateBytes bounds both API input and the automation section on disk.
 const MaxStateBytes = 256 * 1024
 
-type Store struct{ path string }
+// Store persists the rule set as one section of Setu's shared state file. The
+// engine owns the schema; the file (and its atomic write) is owned by
+// internal/store, so saving rules can never disturb the device list stored
+// beside them.
+type Store struct{ file *store.Store }
 
-func NewStore(path string) *Store { return &Store{path: path} }
+// NewStore returns the automation view of the shared state file.
+func NewStore(file *store.Store) *Store { return &Store{file: file} }
 
-// DefaultPath reuses the state directory already used by Samsung pairing
-// tokens. The boolean reports whether the OS temporary-directory fallback is
-// in use so the composition root can warn that it may not survive a reboot.
-func DefaultPath() (string, bool) {
-	dir := os.Getenv("SETU_STATE_DIR")
-	temporary := dir == ""
-	if temporary {
-		dir = os.TempDir()
-	}
-	return filepath.Join(dir, stateFileName), temporary
-}
-
+// Load returns the stored rule set, or an empty one when nothing is stored yet.
 func (s *Store) Load() (State, error) {
 	state := State{Version: FormatVersion, Items: []Rule{}}
-	f, err := os.Open(s.path)
-	if errors.Is(err, os.ErrNotExist) {
+	file, err := s.file.Load()
+	if err != nil {
+		return State{}, err
+	}
+	if len(file.Automations) == 0 {
 		return state, nil
 	}
-	if err != nil {
-		return State{}, fmt.Errorf("automations: open state: %w", err)
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return State{}, fmt.Errorf("automations: inspect state: %w", err)
-	}
-	if info.Size() > MaxStateBytes {
+	if len(file.Automations) > MaxStateBytes {
 		return State{}, fmt.Errorf("automations: state is larger than 256 KB")
 	}
 
-	decoder := json.NewDecoder(f)
+	decoder := json.NewDecoder(bytes.NewReader(file.Automations))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&state); err != nil {
 		return State{}, fmt.Errorf("automations: decode state: %w", err)
@@ -63,46 +50,17 @@ func (s *Store) Load() (State, error) {
 	return state, nil
 }
 
+// Save replaces the automation section, leaving every other section untouched.
 func (s *Store) Save(state State) error {
-	var encoded bytes.Buffer
-	if err := json.NewEncoder(&encoded).Encode(state); err != nil {
+	encoded, err := json.Marshal(state)
+	if err != nil {
 		return fmt.Errorf("automations: encode state: %w", err)
 	}
-	if encoded.Len() > MaxStateBytes {
+	if len(encoded) > MaxStateBytes {
 		return fmt.Errorf("automations: state is larger than 256 KB")
 	}
-
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("automations: create state directory: %w", err)
-	}
-	tmp, err := os.CreateTemp(dir, ".setu-automations-*")
-	if err != nil {
-		return fmt.Errorf("automations: create temporary state: %w", err)
-	}
-	tmpName := tmp.Name()
-	ok := false
-	defer func() {
-		_ = tmp.Close()
-		if !ok {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("automations: protect temporary state: %w", err)
-	}
-	if _, err := tmp.Write(encoded.Bytes()); err != nil {
-		return fmt.Errorf("automations: write state: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("automations: sync state: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("automations: close state: %w", err)
-	}
-	if err := os.Rename(tmpName, s.path); err != nil {
-		return fmt.Errorf("automations: replace state: %w", err)
-	}
-	ok = true
-	return nil
+	return s.file.Update(func(file *store.State) error {
+		file.Automations = encoded
+		return nil
+	})
 }

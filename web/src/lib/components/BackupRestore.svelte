@@ -12,6 +12,7 @@
   } from '../backup'
 
   let selection = $state<BackupSelection>({
+    devices: true,
     favorites: true,
     rooms: true,
     scenes: true,
@@ -24,6 +25,7 @@
   let allSelected = $derived(Object.values(selection).every(Boolean))
 
   const choices: Array<{ key: keyof BackupSelection; label: string }> = [
+    { key: 'devices', label: 'Devices' },
     { key: 'favorites', label: 'Favorites' },
     { key: 'rooms', label: 'Rooms' },
     { key: 'scenes', label: 'Manual scenes' },
@@ -34,6 +36,7 @@
   function toggleAll() {
     const value = !allSelected
     selection = {
+      devices: value,
       favorites: value,
       rooms: value,
       scenes: value,

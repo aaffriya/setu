@@ -30,8 +30,8 @@ import (
 	"setu/internal/resolver"
 )
 
-// Brand and model identifiers. These are the exact strings used in config.yaml
-// (brand:/model:) and in the factory registration below.
+// Brand and model identifiers. These are the exact strings a stored device spec
+// carries (brand/model) and the ones used in the factory registration below.
 const (
 	Brand     = "example"
 	ModelBulb = "bulb"
@@ -46,12 +46,13 @@ const (
 // each model gets them for free by embedding base. Methods that differ per model
 // (Model, Capabilities, and the capability methods) live on the model type.
 type base struct {
-	id      string
-	name    string
-	series  string
-	mac     string
-	resolve resolver.Resolver
-	bus     *events.Bus
+	id         string
+	name       string
+	series     string
+	mac        string
+	arp        resolver.Resolver // injected fallback (the host's ARP table)
+	discoverer resolver.Resolver // this brand's own discovery (see discovery.go)
+	bus        *events.Bus
 
 	mu    sync.Mutex
 	ip    net.IP       // cached resolved IP (nil until first resolve)
@@ -73,9 +74,11 @@ func (b *base) State() device.State {
 	return b.state
 }
 
-// resolveIP returns the device's current IP, using the cached value if present
-// and otherwise resolving it from the MAC via the Resolver. This is the
-// MAC-primary addressing pattern every real device should follow.
+// resolveIP returns the device's current IP, trying in order: the cached value,
+// the injected ARP resolver (instant when the host has talked to the device
+// recently), then this brand's own discovery. This is the MAC-primary addressing
+// pattern every real device should follow — and the fallback order matters,
+// because ARP alone is empty right after boot and unavailable off Linux.
 func (b *base) resolveIP() (net.IP, error) {
 	b.mu.Lock()
 	cached := b.ip
@@ -83,13 +86,19 @@ func (b *base) resolveIP() (net.IP, error) {
 	if cached != nil {
 		return cached, nil
 	}
-
-	ip, err := b.resolve.Lookup(b.mac)
-	if err != nil {
-		return nil, fmt.Errorf("%s: resolve %s: %w", b.id, b.mac, err)
+	if b.arp != nil {
+		if ip, err := b.arp.Lookup(b.mac); err == nil {
+			b.setIP(ip)
+			return ip, nil
+		}
 	}
-	b.setIP(ip)
-	return ip, nil
+	if b.discoverer != nil {
+		if ip, err := b.discoverer.Lookup(b.mac); err == nil {
+			b.setIP(ip)
+			return ip, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: cannot resolve ip for mac %s", b.id, b.mac)
 }
 
 func (b *base) setIP(ip net.IP) {
@@ -235,6 +244,22 @@ func (b *Bulb) SetColor(c device.Color) error {
 // Poll re-reads hardware state. The template has no hardware, so it returns the
 // cached state (the poller therefore emits no spurious changes). A real
 // implementation would query the device and update b.state to match.
+//
+// IMPORTANT — the one contract that is easy to get wrong: when the read fails
+// but the state you return is still meaningful (an unreachable device is
+// offline; a TV that is off can still be woken by MAC), wrap
+// device.ErrPollNoResponse:
+//
+//	if err != nil {
+//	    b.invalidateIP()
+//	    b.markOffline()
+//	    return b.State(), fmt.Errorf("%s: %w: %w", b.id, device.ErrPollNoResponse, err)
+//	}
+//
+// The manager DISCARDS the state returned with any other error, so a plain error
+// leaves the read model showing the last good state: the device keeps rendering
+// as online and controllable until something else corrects it. Return a bare
+// error only when the state you produced is genuinely garbage.
 func (b *Bulb) Poll() (device.State, error) {
 	return b.State(), nil
 }
@@ -250,12 +275,13 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 		return nil, fmt.Errorf("%s: resolver is required", spec.ID)
 	}
 	b := &Bulb{base: base{
-		id:      spec.ID,
-		name:    spec.Name,
-		series:  spec.Series,
-		mac:     spec.MAC,
-		resolve: deps.Resolver,
-		bus:     deps.Bus,
+		id:         spec.ID,
+		name:       spec.Name,
+		series:     spec.Series,
+		mac:        spec.MAC,
+		arp:        deps.Resolver,
+		discoverer: NewDiscoverer(),
+		bus:        deps.Bus,
 		// Optimistic initial state; the first send/poll reconciles it.
 		state: device.State{Online: true},
 	}}
@@ -276,12 +302,18 @@ func Register(f *config.Factory) {
 //
 //  1. Copy this package to internal/devices/<brand>/ and set Brand/Model consts.
 //  2. Put the brand's transport (UDP/TCP/HTTP client) in `base` and implement
-//     `send` (and, for discovery brands, a resolver.Resolver).
+//     `send`; replace discovery.go's stub Lookup with the brand's real discovery,
+//     and its Scan if the brand can enumerate its devices (the UI's device scan).
 //  3. For each model, define a type embedding base and implement Model,
 //     Capabilities, and only the capability interfaces it supports. Update the
 //     compile-time `var _ = ...` assertions to match.
 //  4. Implement Poll to read real hardware state (or omit Pollable entirely).
+//     Wrap device.ErrPollNoResponse on a failed read whose state is still
+//     meaningful — see the Poll doc comment; getting this wrong makes an
+//     unreachable device render as a healthy one.
 //  5. Export New (a config.Constructor) and a Register(*config.Factory).
-//  6. Call <brand>.Register(factory) once in cmd/setu/main.go.
-//  7. Add a device entry to config.yaml (brand, model, id, name, mac).
+//  6. Call <brand>.Register(factory) once in cmd/setu/main.go — and add the
+//     discoverer to the `scanners` slice there if it implements Scan.
+//  7. Add the device from Settings → Devices: a network scan finds it, or it
+//     is typed in by hand. Nothing to edit on disk.
 // ---------------------------------------------------------------------------

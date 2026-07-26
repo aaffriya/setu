@@ -7,6 +7,12 @@
 
 ## Files
 - `samsung.go` — `base` (REST reachability, WS keys/text/events + token persistence, UPnP volume, Wake-on-LAN) + `TV` model.
+- `discovery.go` — `Discoverer` implements `resolver.Resolver` (`Lookup`: SSDP +
+  `/api/v2/` `wifiMac` match) **and** `resolver.Scanner` (`Scan`: every SSDP
+  responder that answers `/api/v2/`, for `POST /api/discovery/scan`). Non-Samsung
+  DIAL devices fail that read and are dropped. M-SEARCH goes out twice per window
+  (UDP loses datagrams); the `/api/v2/` `name` and `modelName` ride along so a
+  scanned TV arrives with a recognisable label.
 
 ## Capabilities → transport
 - `switch` on → **Wake-on-LAN** (UDP 9); off → WS `KEY_POWER`.

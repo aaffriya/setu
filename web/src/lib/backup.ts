@@ -12,17 +12,22 @@ import { getTheme, type Theme } from './theme'
 import { isFavoritesSection, isScenesSection } from './backup-validation'
 import {
   exportAutomations,
+  exportDevices,
   getAutomations,
+  listDevices,
+  replaceDevices,
   saveAutomations,
   type AutomationAction,
   type AutomationRule,
   type AutomationState,
   type Device,
+  type DeviceSpec,
 } from './api'
 
 export const BACKUP_LIMIT = 256 * 1024
 
 export type BackupSelection = {
+  devices: boolean
   favorites: boolean
   rooms: boolean
   scenes: boolean
@@ -37,6 +42,10 @@ type AppearanceBackup = {
 }
 
 type BackupSections = {
+  // The devices themselves live on the server now, so they belong in the
+  // backup: without them a restored install has automations and room names for
+  // devices that do not exist.
+  devices?: DeviceSpec[]
   favorites?: Record<string, Favorite[]>
   rooms?: Record<string, string>
   scenes?: Scene[]
@@ -64,6 +73,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+// A device entry is only worth restoring if it carries the identity Setu needs
+// to build it. The server validates again; this keeps an obviously wrong file
+// from reaching it.
+function isDeviceSection(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.brand === 'string' &&
+        typeof item.model === 'string' &&
+        typeof item.name === 'string' &&
+        typeof item.mac === 'string',
+    )
+  )
+}
+
 function isStringRecord(value: unknown): boolean {
   return isRecord(value) && Object.values(value).every((item) => typeof item === 'string')
 }
@@ -74,6 +100,7 @@ function isBooleanRecord(value: unknown): boolean {
 
 export async function createBackup(selection: BackupSelection): Promise<SetuBackup> {
   const sections: BackupSections = {}
+  if (selection.devices) sections.devices = (await exportDevices()).items
   if (selection.favorites) sections.favorites = get(favorites)
   if (selection.rooms) sections.rooms = get(rooms)
   if (selection.scenes) sections.scenes = get(scenes)
@@ -119,11 +146,14 @@ export function validateBackup(value: unknown): SetuBackup {
   }
   if (!isRecord(value.sections)) throw new Error('Backup has no sections.')
   const keys = Object.keys(value.sections)
-  const allowed = new Set(['favorites', 'rooms', 'scenes', 'appearance', 'automations'])
+  const allowed = new Set(['devices', 'favorites', 'rooms', 'scenes', 'appearance', 'automations'])
   if (keys.length === 0 || keys.some((key) => !allowed.has(key))) {
     throw new Error('Backup contains unsupported sections.')
   }
   const sections = value.sections
+  if ('devices' in sections && !isDeviceSection(sections.devices)) {
+    throw new Error('Devices section is invalid.')
+  }
   if ('favorites' in sections && !isFavoritesSection(sections.favorites)) {
     throw new Error('Favorites section is invalid.')
   }
@@ -172,6 +202,7 @@ export function validateBackup(value: unknown): SetuBackup {
 
 export function backupSectionNames(backup: SetuBackup): string[] {
   const names: Record<keyof BackupSections, string> = {
+    devices: 'Devices',
     favorites: 'Favorites',
     rooms: 'Rooms',
     scenes: 'Manual scenes',
@@ -310,11 +341,23 @@ function rollbackLocal(previous: RawSnapshot): void {
 // Restore is one user action. Included local sections replace their current
 // keys; omitted sections are untouched. Backend validation happens before its
 // atomic file replacement, and local keys roll back if that call fails.
+//
+// Devices go first and are not rolled back: every other section refers to them
+// by id, so which automations survive depends on the devices that exist *after*
+// the restore. The server validates and builds the whole list before replacing
+// anything, so the failure this ordering exposes is narrow — devices restored,
+// a later section refused — and the message says which.
 export async function restoreBackup(backup: SetuBackup, devices: Device[]): Promise<void> {
+  let installed = devices
+  if (backup.sections.devices) {
+    await replaceDevices(backup.sections.devices)
+    installed = await listDevices()
+  }
+
   let automation: AutomationState | undefined
   if (backup.sections.automations) {
     const current = await getAutomations()
-    automation = portableAutomations(backup.sections.automations, devices)
+    automation = portableAutomations(backup.sections.automations, installed)
     automation.version = 1
     automation.revision = current.revision
   }

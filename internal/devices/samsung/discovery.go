@@ -17,12 +17,21 @@ const (
 	ssdpPort                = 1900
 	samsungDialSearchTarget = "urn:dial-multiscreen-org:device:dialreceiver:1"
 	discoveryTimeout        = 2500 * time.Millisecond
+	// M-SEARCH goes out more than once inside the window: SSDP is UDP, and a TV
+	// that misses the request (or whose reply is lost) is indistinguishable from
+	// one that is not there.
+	searchProbes = 2
 )
 
-// Discoverer resolves a Samsung TV's current IP without a configured IP. It
-// asks for DIAL receivers over SSDP, then verifies each candidate against the
-// TV's /api/v2/ wifiMac field. The MAC remains the source of truth even when a
-// DHCP lease changes.
+// Discoverer finds Samsung TVs without a configured IP. It asks for DIAL
+// receivers over SSDP, then reads each responder's /api/v2/ document — the step
+// that separates a Samsung TV from any other DIAL device on the network and
+// yields its wifiMac. Both address seams run over that one exchange:
+//
+//	Lookup — resolver.Resolver: keep the responder whose wifiMac is the wanted
+//	         one, so a changed DHCP lease never loses a configured TV.
+//	Scan   — resolver.Scanner: keep every Samsung responder, so a TV that is not
+//	         added yet can be listed for the user.
 type Discoverer struct {
 	timeout    time.Duration
 	searchAddr *net.UDPAddr
@@ -52,9 +61,63 @@ func (d *Discoverer) Lookup(mac string) (net.IP, error) {
 		return nil, err
 	}
 
+	var found net.IP
+	err = d.search(context.Background(), func(ip net.IP, deadline time.Time) bool {
+		info, err := d.deviceInfo(ip, deadline)
+		if err != nil || info.MAC != want {
+			return false
+		}
+		found = append(net.IP(nil), ip...)
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	if found == nil {
+		return nil, fmt.Errorf("samsung discovery: no TV with mac %s replied", want)
+	}
+	return found, nil
+}
+
+// Scan implements resolver.Scanner. DIAL is spoken by plenty of non-Samsung
+// hardware; those responders fail the /api/v2/ read and are simply dropped, so
+// the result only ever contains TVs this package can actually drive.
+func (d *Discoverer) Scan(ctx context.Context) ([]resolver.Candidate, error) {
+	var found []resolver.Candidate
+	seen := make(map[string]struct{})
+	err := d.search(ctx, func(ip net.IP, deadline time.Time) bool {
+		info, err := d.deviceInfo(ip, deadline)
+		if err != nil {
+			return false
+		}
+		if _, dup := seen[info.MAC]; dup {
+			return false
+		}
+		seen[info.MAC] = struct{}{}
+		found = append(found, resolver.Candidate{
+			Brand:  Brand,
+			Model:  ModelTizen,
+			Series: info.Model,
+			Name:   info.Name,
+			MAC:    resolver.FormatMAC(info.MAC),
+			IP:     ip.String(),
+		})
+		return false // keep listening until the window closes
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// search sends one M-SEARCH and hands each distinct DIAL responder to visit,
+// until visit reports it is done, the reply window closes, or ctx ends. visit
+// receives the shared deadline so its per-responder HTTP call stays inside the
+// caller's overall budget.
+func (d *Discoverer) search(ctx context.Context, visit func(net.IP, time.Time) bool) error {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
 	if err != nil {
-		return nil, fmt.Errorf("samsung discovery: listen: %w", err)
+		return fmt.Errorf("samsung discovery: listen: %w", err)
 	}
 	defer conn.Close()
 
@@ -64,40 +127,75 @@ func (d *Discoverer) Lookup(mac string) (net.IP, error) {
 		"MX: 1\r\n" +
 		"ST: " + samsungDialSearchTarget + "\r\n\r\n")
 	if _, err := conn.WriteToUDP(request, d.searchAddr); err != nil {
-		return nil, fmt.Errorf("samsung discovery: send: %w", err)
+		return fmt.Errorf("samsung discovery: send: %w", err)
 	}
 
 	deadline := time.Now().Add(d.timeout)
-	_ = conn.SetReadDeadline(deadline)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	// A cancelled caller must not keep the socket for the rest of the window:
+	// an expired deadline unblocks the read immediately.
+	defer context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })()
+
+	slot := d.timeout / searchProbes
 	seen := make(map[string]struct{})
 	buf := make([]byte, 4096)
-	for {
-		n, addr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			break
+	for probe := 0; probe < searchProbes; probe++ {
+		if ctx.Err() != nil {
+			return nil // the caller gave up: no further probes
 		}
-		response := strings.ToLower(string(buf[:n]))
-		if !strings.Contains(response, strings.ToLower(samsungDialSearchTarget)) {
-			continue
+		if probe > 0 {
+			// A TV that missed the first M-SEARCH (or whose reply was lost)
+			// gets another chance inside the same window.
+			if _, err := conn.WriteToUDP(request, d.searchAddr); err != nil {
+				return nil // the earlier replies still stand
+			}
 		}
-		key := addr.IP.String()
-		if _, ok := seen[key]; ok {
-			continue
+		until := time.Now().Add(slot)
+		if until.After(deadline) {
+			until = deadline
 		}
-		seen[key] = struct{}{}
+		_ = conn.SetReadDeadline(until)
+		for {
+			n, addr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				break // this probe's slot is over — send the next one
+			}
+			response := strings.ToLower(string(buf[:n]))
+			if !strings.Contains(response, strings.ToLower(samsungDialSearchTarget)) {
+				continue
+			}
+			key := addr.IP.String()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
 
-		got, err := d.candidateMAC(addr.IP, deadline)
-		if err == nil && got == want {
-			return append(net.IP(nil), addr.IP...), nil
+			if visit(addr.IP, deadline) {
+				return nil
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return nil
 		}
 	}
-	return nil, fmt.Errorf("samsung discovery: no TV with mac %s replied", want)
+	return nil
 }
 
-func (d *Discoverer) candidateMAC(ip net.IP, deadline time.Time) (string, error) {
+// deviceInfo is the identity a Samsung TV publishes at /api/v2/: the MAC (the
+// only field that matters for resolution) plus the labels worth showing when
+// offering the TV as a candidate.
+type deviceInfo struct {
+	MAC   string // normalized
+	Name  string // user-set TV name, e.g. "[TV] Living Room"
+	Model string // product/series name, e.g. "UE43AU7700"
+}
+
+func (d *Discoverer) deviceInfo(ip net.IP, deadline time.Time) (deviceInfo, error) {
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
-		return "", context.DeadlineExceeded
+		return deviceInfo{}, context.DeadlineExceeded
 	}
 	if remaining > time.Second {
 		remaining = time.Second
@@ -108,24 +206,30 @@ func (d *Discoverer) candidateMAC(ip net.IP, deadline time.Time) (string, error)
 	u := fmt.Sprintf("http://%s/api/v2/", net.JoinHostPort(ip.String(), d.restPort))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return deviceInfo{}, err
 	}
 	resp, err := d.http.Do(req)
 	if err != nil {
-		return "", err
+		return deviceInfo{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", resp.StatusCode)
+		return deviceInfo{}, fmt.Errorf("status %d", resp.StatusCode)
 	}
 
 	var info struct {
 		Device struct {
-			WiFiMAC string `json:"wifiMac"`
+			WiFiMAC   string `json:"wifiMac"`
+			Name      string `json:"name"`
+			ModelName string `json:"modelName"`
 		} `json:"device"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&info); err != nil {
-		return "", err
+		return deviceInfo{}, err
 	}
-	return resolver.NormalizeMAC(info.Device.WiFiMAC)
+	mac, err := resolver.NormalizeMAC(info.Device.WiFiMAC)
+	if err != nil {
+		return deviceInfo{}, err
+	}
+	return deviceInfo{MAC: mac, Name: info.Device.Name, Model: info.Device.ModelName}, nil
 }

@@ -497,6 +497,16 @@ func (b *base) ensureEvents(ctx context.Context) {
 	}
 }
 
+// Close implements device.Closer: it drops the TV's event socket. Called when
+// the device is removed or rebuilt (a rename) and on shutdown — without it, a
+// removed TV would leave a live socket and its reader goroutine behind.
+func (b *base) Close() error {
+	b.wsMu.Lock()
+	defer b.wsMu.Unlock()
+	b.closeWSLocked()
+	return nil
+}
+
 // closeWSLocked closes and clears the cached socket (also unblocks drainWS). wsMu held.
 func (b *base) closeWSLocked() {
 	if b.wsConn != nil {
@@ -754,6 +764,9 @@ var (
 	_ device.TextInput    = (*TV)(nil)
 	_ device.AppControl   = (*TV)(nil)
 	_ device.Pollable     = (*TV)(nil)
+	// The TV keeps an event socket open, so removing or rebuilding it has to
+	// release something — that is what device.Closer is for.
+	_ device.Closer = (*TV)(nil)
 )
 
 func (t *TV) Model() string { return ModelTizen }

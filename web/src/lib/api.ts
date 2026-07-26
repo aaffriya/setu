@@ -48,6 +48,45 @@ export type DeviceDiagnostics = {
   last_command_error: string
 }
 
+// One device found by a network scan. `model` is empty when the brand answered
+// but Setu has no driver for that hardware; `configured` means this brand
+// already has a device with that MAC (then `device_id` names it).
+export type DiscoveredDevice = {
+  brand: string
+  model: string
+  series?: string
+  name?: string
+  mac: string
+  ip?: string
+  configured: boolean
+  device_id?: string
+}
+
+// A (brand, model) pair this build can drive. The catalog comes from the
+// server, so the manual add form can never offer something Setu cannot build.
+export type DeviceType = { brand: string; model: string }
+
+// What Setu stores for one device — the form used to add one and to back the
+// list up. Identity (brand, model, mac) is fixed once added; only the labels
+// can be edited.
+export type DeviceSpec = {
+  id?: string
+  brand: string
+  model: string
+  series?: string
+  name: string
+  mac: string
+}
+
+export type DeviceList = { version: number; items: DeviceSpec[] }
+
+export type DiscoveryResult = {
+  candidates: DiscoveredDevice[]
+  // One brand's scanner failing (no multicast route, a firewall) must not hide
+  // what the others found, so failures arrive beside the results.
+  errors: string[]
+}
+
 export type CommandAction =
   | 'on'
   | 'off'
@@ -269,21 +308,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       Authorization: `Bearer ${getToken()}`,
     },
   })
-  if (!res.ok) {
-    let msg = res.statusText
-    let device: Device | undefined
-    try {
-      const body = (await res.json()) as unknown
-      if (isRecord(body)) {
-        if (typeof body.error === 'string') msg = body.error
-        device = normalizeDevices([body.device])[0]
-      }
-    } catch {
-      // non-JSON error body — keep the status text
-    }
-    throw new ApiError(res.status, msg, device)
-  }
+  if (!res.ok) throw await failure(res)
   return (await res.json()) as T
+}
+
+// failure turns a non-OK response into the error the UI shows. Setu answers
+// with {"error": "..."} and sometimes a reconciled device, so the message the
+// user sees is the server's own, not a bare status code.
+async function failure(res: Response): Promise<ApiError> {
+  let msg = res.statusText
+  let device: Device | undefined
+  try {
+    const body = (await res.json()) as unknown
+    if (isRecord(body)) {
+      if (typeof body.error === 'string') msg = body.error
+      device = normalizeDevices([body.device])[0]
+    }
+  } catch {
+    // non-JSON error body — keep the status text
+  }
+  return new ApiError(res.status, msg, device)
 }
 
 export async function listDevices(hardwareRefresh = false): Promise<Device[]> {
@@ -371,6 +415,99 @@ export async function refreshDevice(id: string): Promise<Device> {
   ])[0]
   if (!device) throw new Error('Setu returned an invalid device status.')
   return device
+}
+
+function normalizeDiscovery(value: unknown): DiscoveryResult {
+  if (!isRecord(value)) return { candidates: [], errors: [] }
+  const candidates: DiscoveredDevice[] = []
+  if (Array.isArray(value.candidates)) {
+    for (const item of value.candidates) {
+      if (!isRecord(item)) continue
+      const mac = asString(item.mac)
+      if (!mac) continue // without the identity there is nothing to configure
+      candidates.push({
+        brand: asString(item.brand),
+        model: asString(item.model),
+        series: asString(item.series) || undefined,
+        name: asString(item.name) || undefined,
+        ip: asString(item.ip) || undefined,
+        mac,
+        configured: item.configured === true,
+        device_id: asString(item.device_id) || undefined,
+      })
+    }
+  }
+  return { candidates, errors: asStringArray(value.errors) }
+}
+
+// scanNetwork asks each brand to enumerate its devices on the LAN. It actively
+// broadcasts, so it is a POST and the server runs one scan at a time (409 when
+// another is already in flight).
+export async function scanNetwork(): Promise<DiscoveryResult> {
+  return normalizeDiscovery(await request<unknown>('/api/discovery/scan', { method: 'POST' }))
+}
+
+export function listDeviceTypes(): Promise<DeviceType[]> {
+  return request<DeviceType[]>('/api/device-types')
+}
+
+// addDevice stores a device and brings it online; the server derives the id and
+// answers with the live device, so the card can appear immediately.
+export async function addDevice(spec: DeviceSpec): Promise<Device> {
+  const device = normalizeDevices([
+    await request<unknown>('/api/devices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(spec),
+    }),
+  ])[0]
+  if (!device) throw new Error('Setu returned an invalid device.')
+  return device
+}
+
+// updateDevice edits the labels only. Brand, model and MAC are the device's
+// identity: changing those is a remove and an add.
+//
+// It sends just the fields being changed. Name and series are two separate
+// inputs, and a save from one must not carry the other's value — which may be
+// a render behind after the previous save.
+export async function updateDevice(
+  id: string,
+  labels: { name?: string; series?: string },
+): Promise<Device> {
+  const device = normalizeDevices([
+    await request<unknown>(`/api/devices/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(labels),
+    }),
+  ])[0]
+  if (!device) throw new Error('Setu returned an invalid device.')
+  return device
+}
+
+// deleteDevice is the one call with no response body (204), so it does not go
+// through request().
+export async function deleteDevice(id: string): Promise<void> {
+  const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  if (!res.ok) throw await failure(res)
+}
+
+export function exportDevices(): Promise<DeviceList> {
+  return request<DeviceList>('/api/devices/export')
+}
+
+// replaceDevices swaps the whole list (restore). The server validates and
+// builds everything first, so a rejected list changes nothing.
+export function replaceDevices(items: DeviceSpec[]): Promise<DeviceList> {
+  return request<DeviceList>('/api/devices', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: 1, items }),
+  })
 }
 
 export function getAutomations(): Promise<AutomationSnapshot> {

@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { haptics } from '../haptics'
   import Slider from './Slider.svelte'
+  import { sliderCommit } from '../slider-commit.svelte'
 
   // White color-temperature control (Kelvin). Warm (left) → cool (right). Same
-  // drag-override + debounce pattern as BrightnessSlider.
+  // drag-override + debounced commit as the other value sliders.
   let {
     value = 0,
     min = 2200,
@@ -18,21 +18,10 @@
     onChange?: (kelvin: number) => void
   } = $props()
 
-  let dragging = $state<number | null>(null)
+  const drag = sliderCommit(120, (v) => onChange?.(v))
   // Fall back to a neutral 2700 K when the bulb isn't in white mode, then keep
   // both that fallback and any stale cached value inside this device's range.
-  const display = $derived(Math.min(max, Math.max(min, dragging ?? (value || 2700))))
-
-  let debounce: ReturnType<typeof setTimeout> | undefined
-  function handle(v: number) {
-    dragging = v
-    haptics.slide()
-    clearTimeout(debounce)
-    debounce = setTimeout(() => {
-      onChange?.(v)
-      dragging = null
-    }, 120)
-  }
+  const display = $derived(Math.min(max, Math.max(min, drag.dragging ?? (value || 2700))))
 </script>
 
 <div class="flex items-center gap-3">
@@ -51,7 +40,7 @@
     {disabled}
     label="Color temperature"
     trackClass="setu-temp"
-    oninput={handle}
+    oninput={drag.input}
   />
   <span class="w-12 text-right text-sm tabular-nums text-ink/60">{display}K</span>
 </div>

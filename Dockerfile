@@ -30,17 +30,19 @@ COPY --from=web /web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
     go build -trimpath -ldflags="-s -w" -o /out/setu ./cmd/setu
 
-# --- Stage 3: tiny final image (just the binary + a default config) ---
+# --- Stage 3: tiny final image (just the binary) ---
 # scratch works for EVERY target arch (386, arm/v5·v6·v7, mipsle…). Distroless
 # isn't published for those exotic router archs, and the binary is fully static
 # (CGO off) so it needs nothing else — no libc, no shell.
 FROM scratch AS final
 COPY --from=build /out/setu /usr/local/bin/setu
-# A default config; mount your own over it (see README "Deployment").
-COPY config.yaml /etc/setu/config.yaml
+# Settings come from the environment (all optional, see README "Configuration");
+# devices and automations live in SETU_STATE_DIR, which must be a mounted volume
+# to survive a container restart.
+ENV SETU_STATE_DIR=/var/lib/setu
 EXPOSE 80
 EXPOSE 443
-ENTRYPOINT ["/usr/local/bin/setu", "-config", "/etc/setu/config.yaml"]
+ENTRYPOINT ["/usr/local/bin/setu"]
 
 # Multi-arch build (cross-compiled, no QEMU for the Go/JS builds):
 #
@@ -52,10 +54,11 @@ ENTRYPOINT ["/usr/local/bin/setu", "-config", "/etc/setu/config.yaml"]
 # broadcasts / mDNS. So its network namespace must sit ON the LAN broadcast
 # domain (not NAT'd / routed). Two deployments:
 #
-# • Plain Docker / Podman (x86 or Linux host) — host networking + a mounted config:
+# • Plain Docker / Podman (x86 or Linux host) — host networking + a state volume:
 #
 #     docker run --rm --network host \
-#       -v $PWD/config.yaml:/etc/setu/config.yaml:ro setu
+#       -e SETU_TOKEN=your-secret \
+#       -v setu-state:/var/lib/setu setu
 #
 # For a Unix-socket listener, mount a writable dir for the socket, e.g.
 #   -v /run/setu:/run   and set listen: "unix:/run/setu.sock" in the config.

@@ -28,6 +28,7 @@
   import Automations from './lib/components/Automations.svelte'
   import RoomControls from './lib/components/RoomControls.svelte'
   import DeviceDiagnostics from './lib/components/DeviceDiagnostics.svelte'
+  import Devices from './lib/components/Devices.svelte'
   import BackupRestore from './lib/components/BackupRestore.svelte'
   import { trapFocus } from './lib/focus-trap'
   import { masonry } from './lib/masonry'
@@ -35,7 +36,7 @@
   let token = $state(getToken())
   let tokenDraft = $state(getToken())
   let showSettings = $state(false)
-  type SettingsTool = 'scenes' | 'automations' | 'rooms' | 'diagnostics'
+  type SettingsTool = 'scenes' | 'automations' | 'rooms' | 'diagnostics' | 'devices'
   let activeSettingsTool = $state<SettingsTool | ''>('')
   let themeChoice = $state<Theme>(getTheme())
   let confirmReset = $state(false)
@@ -181,7 +182,15 @@
     startY = e.clientY
     dragDX = 0
     dragDY = 0
-    ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+    // Capture keeps the drag tracking when the finger leaves the handle, but a
+    // pointer that is no longer active makes it throw — and an uncaught throw
+    // here would skip the listeners below, leaving a card that lifts and then
+    // never follows or drops. Same guard, same reason, as Slider.svelte.
+    try {
+      ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+    } catch {
+      /* non-fatal: the window listeners below still drive the drag */
+    }
     window.addEventListener('pointermove', onDragMove)
     window.addEventListener('pointerup', endDrag)
     window.addEventListener('pointercancel', endDrag)
@@ -500,7 +509,7 @@
           </svg>
         </div>
         <h2 class="text-lg font-semibold">Connect to Setu</h2>
-        <p class="mt-1 text-sm text-ink/50">Enter the access token from your <code class="rounded bg-ink/10 px-1">config.yaml</code>.</p>
+        <p class="mt-1 text-sm text-ink/50">Enter the access token Setu was started with (<code class="rounded bg-ink/10 px-1">SETU_TOKEN</code>).</p>
         <input
           class="mt-4 w-full rounded-xl border border-ink/10 bg-ink/5 px-4 py-2.5 text-center outline-none ring-indigo-400/50 focus:ring-2"
           type="password"
@@ -585,8 +594,14 @@
         </div>
         <h2 class="mt-5 text-xl font-semibold">No devices yet</h2>
         <p class="mt-2 max-w-xs text-sm leading-relaxed text-ink/50">
-          Add one in <code class="rounded bg-ink/10 px-1">config.yaml</code> by its brand, model and MAC — then restart Setu.
+          Scan your network for devices, or add one by hand. Nothing to edit, nothing to restart.
         </p>
+        <button
+          onclick={openSettings}
+          class="mt-4 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
+        >
+          Add a device
+        </button>
       </div>
     {:else if displayDevices.length === 0}
       <div in:fade={{ duration: 150 }} class="flex flex-col items-center justify-center py-16 text-center">
@@ -735,6 +750,11 @@
           disabled={!hasDevices}
           onmodalchange={(open) => setSettingsTool('diagnostics', open)}
         />
+        <!-- Not gated on hasDevices: an empty install is exactly when you scan. -->
+        <Devices
+          disabled={needsToken}
+          onmodalchange={(open) => setSettingsTool('devices', open)}
+        />
         <button
           type="button"
           onclick={() => {
@@ -774,8 +794,8 @@
         {:else if !secureContext}
           <p class="mt-1.5 text-xs leading-relaxed text-ink/50">
             Installing needs a secure (HTTPS) connection. Serve Setu over HTTPS — set
-            <code class="rounded bg-ink/10 px-1">listen.tls</code> in
-            <code class="rounded bg-ink/10 px-1">config.yaml</code>, or reach it via Tailscale.
+            <code class="rounded bg-ink/10 px-1">SETU_TLS_CERT</code> and
+            <code class="rounded bg-ink/10 px-1">SETU_TLS_KEY</code>, or reach it via Tailscale.
           </p>
         {:else}
           <p class="mt-1.5 text-xs leading-relaxed text-ink/50">

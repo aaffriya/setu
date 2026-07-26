@@ -13,11 +13,15 @@ import {
   listDevices,
   refreshDevice as fetchDeviceRefresh,
   sendCommand,
+  addDevice as postDevice,
+  updateDevice as patchDevice,
+  deleteDevice as removeStoredDevice,
   wsURL,
   getToken,
   ApiError,
   normalizeDevices,
   type Device,
+  type DeviceSpec,
   type DeviceState,
   type Color,
   type CommandAction,
@@ -98,13 +102,46 @@ function uid(): string {
 }
 
 // Persist the device list so a cold resume paints immediately.
-devices.subscribe((list) => {
+//
+// Writes are coalesced. localStorage.setItem is synchronous, and this store is
+// updated by every WebSocket event, every optimistic command and every command
+// response — serialising the whole list on each one puts a JSON.stringify plus a
+// storage write on the main thread during exactly the bursts (a slider drag, a
+// run of remote-key presses, a scene firing at several devices) where the UI has
+// to stay smooth. A short window collapses a burst into a single write while
+// still always persisting the latest value.
+const CACHE_WRITE_DELAY_MS = 250
+let cacheTimer: ReturnType<typeof setTimeout> | undefined
+let pendingCache: Device[] | null = null
+
+function writeCache(): void {
+  clearTimeout(cacheTimer)
+  cacheTimer = undefined
+  if (!pendingCache) return
+  const list = pendingCache
+  pendingCache = null
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(list))
   } catch {
     // storage full/disabled — non-fatal
   }
+}
+
+devices.subscribe((list) => {
+  pendingCache = list
+  if (cacheTimer) return
+  cacheTimer = setTimeout(writeCache, CACHE_WRITE_DELAY_MS)
 })
+
+// Flush before the page goes away. This cache exists for the mobile tab the OS
+// kills while backgrounded, and both events fire before that happens (pagehide
+// also covers bfcache entry), so a queued write is never the one that is lost.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') writeCache()
+  })
+  window.addEventListener('pagehide', writeCache)
+}
 
 function loadCache(): Device[] {
   try {
@@ -166,6 +203,59 @@ export async function refresh(hardwareRefresh = false): Promise<void> {
     }
     setError(err instanceof Error ? err.message : 'failed to load devices')
   }
+}
+
+// --- managing which devices exist ------------------------------------------
+// Devices live on the server (added from a scan or by hand), so these mutate
+// the same list refresh() loads. Each one applies the server's answer directly:
+// the card appears, renames, or disappears without waiting for a full reload.
+
+export async function addDevice(spec: DeviceSpec): Promise<Device> {
+  const device = await postDevice(spec)
+  noteAuthoritative(device.id)
+  devices.update((list) => [...list.filter((item) => item.id !== device.id), device])
+  lastUpdated.set(Date.now())
+  return device
+}
+
+export async function renameDevice(
+  id: string,
+  labels: { name?: string; series?: string },
+): Promise<void> {
+  const updated = await patchDevice(id, labels)
+  noteAuthoritative(id)
+  devices.update((list) => list.map((device) => (device.id === id ? updated : device)))
+}
+
+export async function removeDevice(id: string): Promise<void> {
+  await removeStoredDevice(id)
+  authoritativeVersions.delete(id)
+  devices.update((list) => list.filter((device) => device.id !== id))
+  // Preferences are keyed by device id; leaving them behind would silently
+  // reattach to a future device that reuses the id.
+  rooms.update((current) => {
+    const { [id]: _removed, ...rest } = current
+    return rest
+  })
+  expanded.update((current) => {
+    const { [id]: _removed, ...rest } = current
+    return rest
+  })
+  favorites.update((current) => {
+    const { [id]: _removed, ...rest } = current
+    return rest
+  })
+  order.update((current) => current.filter((existing) => existing !== id))
+  // A scene that still fires at a removed device would fail with a 404 toast
+  // every time it runs; one left with nothing to do is just noise.
+  scenes.update((current) =>
+    current
+      .map((scene) => ({
+        ...scene,
+        commands: scene.commands.filter((command) => command.deviceId !== id),
+      }))
+      .filter((scene) => scene.commands.length > 0),
+  )
 }
 
 // Refresh one device for the diagnostics panel without polling every device.
@@ -615,14 +705,27 @@ export function setRoom(deviceId: string, room: string): void {
 
 export const order = persisted<string[]>('setu.order', [], stringArrayOrEmpty)
 
+// The rank lookup depends only on `order`, which changes when the user drags a
+// card — not when a device's state does. Caching it by array identity keeps a
+// Map rebuild off every WebSocket event once a manual order exists; the store
+// hands out a new array only on a real reorder, so the cache can never go stale.
+let rankIds: string[] | null = null
+let rankById = new Map<string, number>()
+
 // orderDevices sorts a device list by the saved manual order; unknown ids keep
 // their incoming (server) order, appended after the explicitly-ordered ones.
 export function orderDevices(list: Device[], ids: string[]): Device[] {
   if (ids.length === 0) return list
-  const rank = new Map(ids.map((id, i) => [id, i]))
+  if (ids !== rankIds) {
+    rankById = new Map(ids.map((id, i) => [id, i]))
+    rankIds = ids
+  }
+  const rank = rankById
   return [...list].sort((a, b) => {
     const ra = rank.get(a.id) ?? Infinity
     const rb = rank.get(b.id) ?? Infinity
+    // Both unranked → Infinity - Infinity is NaN, which would scramble the sort;
+    // returning 0 keeps them in their incoming order (Array#sort is stable).
     return ra === rb ? 0 : ra - rb
   })
 }

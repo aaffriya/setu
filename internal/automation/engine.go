@@ -460,8 +460,8 @@ func (e *Engine) enqueueLocked(id, source string) (TriggerResult, error) {
 	var rule *Rule
 	for i := range e.state.Items {
 		if e.state.Items[i].ID == id {
-			copy := e.state.Items[i]
-			rule = &copy
+			match := e.state.Items[i]
+			rule = &match
 			break
 		}
 	}
@@ -636,8 +636,8 @@ func (e *Engine) runNested(ctx context.Context, id, parentID string, depth int, 
 	var rule *Rule
 	for i := range e.state.Items {
 		if e.state.Items[i].ID == id {
-			copy := e.state.Items[i]
-			rule = &copy
+			match := e.state.Items[i]
+			rule = &match
 			break
 		}
 	}

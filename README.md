@@ -48,14 +48,14 @@ rule behavior in device code.
 | Seam | Interface | Why |
 | --- | --- | --- |
 | Device capabilities | `Switchable`, `Dimmable`, `ColorControl` (in `internal/device`) | New device features without changing existing devices; the API discovers support via type assertions |
-| Address resolution | `Resolver` (in `internal/resolver`) | Swap MAC→IP strategies (ARP + per-brand discovery now; DHCP leases later) |
+| Address resolution | `Resolver` + `Scanner` (in `internal/resolver`) | Swap MAC→IP strategies (ARP + per-brand discovery now; DHCP leases later), and let a brand list what is on the network but not yet configured |
 | Front-end protocol | the `api` package vs. the manager + event bus | A second protocol (e.g. an Apple HomeKit bridge) can be added beside `api`, talking to the same manager/bus, with no device-code changes |
 
 ### Repository layout
 
 ```
 setu/
-├── cmd/setu/main.go        # composition root: load config, wire deps, register devices, serve
+├── cmd/setu/main.go        # composition root: read env, wire deps, register brands, serve
 ├── internal/
 │   ├── api/                # http handlers, ws hub, bearer auth, routing, static embed serving
 │   ├── automation/         # bounded schedules, device relations, incoming webhook triggers
@@ -63,15 +63,17 @@ setu/
 │   ├── manager/            # device registry, command routing, event-driven state snapshot, poller
 │   ├── events/             # channel-based pub/sub bus + event types
 │   ├── device/             # capability interfaces + Device + Color/State
-│   ├── resolver/           # Resolver interface + ARP implementation (DHCP-lease impl: future)
+│   ├── resolver/           # Resolver + Scanner interfaces, ARP impl (DHCP-lease impl: future)
+│   ├── inventory/          # the devices you added: stored specs ↔ live devices
+│   ├── store/              # the one state file (devices + automations), written atomically
 │   ├── devices/
 │   │   └── example/        # TEMPLATE device package — the blueprint for real devices
-│   └── config/             # config schema + loader + (brand,model) factory
+│   └── config/             # environment settings + device spec + (brand,model) factory
 ├── web/                    # Svelte 5 + Vite + Tailwind PWA (built → web/dist, embedded)
 │   ├── embed.go            #   //go:embed of web/dist
 │   ├── src/                #   App.svelte, lib/{api,store}.ts, lib/components/*
 │   └── public/             #   manifest.webmanifest, service-worker.js, icons
-├── config.yaml             # your configuration
+├── example.env             # every setting with its default (documentation; Setu doesn't read it)
 ├── Dockerfile              # multi-stage: build web → build Go (embed) → distroless
 ├── Makefile
 └── go.mod
@@ -88,11 +90,13 @@ Setu needs the **host network** to reach LAN devices and read the ARP table.
 ```sh
 make docker                       # or: docker build -t setu .
 docker run --rm --network host \
-  -v "$PWD/config.yaml:/etc/setu/config.yaml:ro" \
+  -e SETU_TOKEN=your-secret \
+  -v setu-state:/var/lib/setu \
   setu
 ```
 
-Open `http://<host>` (port 80 by default), enter your `auth.token`, and you'll see the empty dashboard.
+Open `http://<host>` (port 80 by default), enter your token, and you'll see the empty
+dashboard — then add your first device from **Settings → Devices**.
 
 ### From source
 
@@ -100,7 +104,7 @@ Requires Go 1.23+ and Node 20+.
 
 ```sh
 make build        # builds the frontend, then the binary into ./bin/setu
-make run          # build + run with ./config.yaml
+make run          # build + run on :8080 with its state under ./tmp/state
 ```
 
 `make build-arm64` cross-compiles a static `linux/arm64` binary for a MikroTik/OpenWrt/Pi.
@@ -108,14 +112,14 @@ make run          # build + run with ./config.yaml
 ### Hot-reload development
 
 ```sh
-# terminal 1 — backend (set listen.port: 8080 in config.yaml for sudo-free dev)
-go run ./cmd/setu -config config.yaml
+# terminal 1 — backend on :8080 (unprivileged), with its own state
+SETU_PORT=8080 SETU_STATE_DIR=$PWD/tmp/state go run ./cmd/setu
 # terminal 2 — frontend (Vite proxies /api and /ws to :8080)
 cd web && npm install && npm run dev
 ```
 
-> The shipped `config.yaml` defaults to port **80** (privileged). For hot-reload dev, set
-> `listen.port: 8080` so the unprivileged backend matches the Vite proxy above.
+> The default port is **80** (privileged), which is why dev sets `SETU_PORT=8080` to match
+> the Vite proxy above.
 
 > `go build ./...` works on a fresh checkout even before the frontend is built: the embed
 > contains only a `.gitkeep`, and the server serves a small built-in placeholder page until
@@ -125,31 +129,36 @@ cd web && npm install && npm run dev
 
 ## Configuration
 
-`config.yaml` is **data only** — device *behaviour* lives in code, never in config.
+There is **no configuration file**. Server settings come from the environment —
+every variable optional, each falling back to the default Setu has always shipped —
+and your devices are added from the app itself.
+[`example.env`](example.env) lists every variable with its default and is safe to copy.
 
-```yaml
-listen:
-  port: 80               # TCP port (default 80; binding to 80 needs privilege)
-  interface: ""          # bind address; blank = all interfaces
-  # socket: /run/setu.sock  # serve on a Unix socket instead (tunnel-only)
-  # tls:                  # optional own/self-signed cert → HTTPS (secure context for PWA)
-  #   cert: /etc/setu/cert.pem
-  #   key:  /etc/setu/key.pem
-auth:
-  token: "CHANGE_ME"     # bearer token required on /api and /ws — CHANGE THIS
-poll_interval: 45s       # active cadence; idle polling backs off automatically
-devices: []              # empty for now; see "Adding a device"
+```sh
+setu                       # all defaults: port 80, token CHANGE_ME, 45s polling
+SETU_TOKEN=s3cret SETU_PORT=8080 SETU_STATE_DIR=/etc/setu setu
 ```
 
-| Key | Meaning |
-| --- | --- |
-| `listen.port` | TCP port. Defaults to `80` (binding to 80 needs privilege — run as root or grant `CAP_NET_BIND_SERVICE`). |
-| `listen.interface` | Bind address (a network interface's IP, e.g. `192.168.1.10`). **Blank = all interfaces.** Use `127.0.0.1` for loopback only. |
-| `listen.socket` | Optional Unix-domain socket path (e.g. `/run/setu.sock`) for tunnel-only, zero-open-port access. When set, it overrides `interface`/`port`. |
-| `listen.tls.cert` / `listen.tls.key` | Optional PEM cert + key. Set **both** to serve HTTPS (stdlib TLS, no proxy) — needed for the PWA's secure-context features. Omit both for plain HTTP (the default, unchanged). No ACME; bring your own cert (or use Tailscale). |
-| `auth.token` | Bearer token for `/api` and `/ws`. The server refuses to start with an empty token and warns if it's still `CHANGE_ME`. |
-| `poll_interval` | Active-use cadence (default `45s`). After 2m without app activity or device changes, polling backs off through `5m`, `10m`, `30m`, `1h`, then `6h`. Opening/using the app resets the cadence; foreground/manual refresh polls immediately. `0` disables only scheduled polling. |
-| `devices[]` | One entry per device: `id`, `brand`, `model`, `name`, `mac` (**required**, primary identity), `series` (optional friendly product/series name shown in the UI, e.g. `AU7700`). |
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SETU_TOKEN` | `CHANGE_ME` | Bearer token for `/api` and `/ws`. Setu warns on every start while it is the default — set a real one. |
+| `SETU_PORT` | `80`, or `443` with TLS | TCP port; the default follows the scheme, like a browser. Binding below 1024 needs privilege (run as root or grant `CAP_NET_BIND_SERVICE`). |
+| `SETU_INTERFACE` | all interfaces | Bind address (a network interface's IP, e.g. `192.168.1.10`). Use `127.0.0.1` for loopback only. |
+| `SETU_SOCKET` | — | Unix-domain socket path (e.g. `/run/setu.sock`) for tunnel-only, zero-open-port access. Overrides interface/port. |
+| `SETU_TLS_CERT` / `SETU_TLS_KEY` | — | PEM cert + key. Set **both** to serve HTTPS (stdlib TLS, no proxy) — needed for the PWA's secure-context features, and it moves the default port to `443`. Omit both for plain HTTP. No ACME; bring your own cert (or use Tailscale). |
+| `SETU_POLL_INTERVAL` | `45s` | Active-use cadence. After 2m without app activity or device changes, polling backs off through `5m`, `10m`, `30m`, `1h`, then `6h`. Opening/using the app resets it; foreground/manual refresh polls immediately. `0` disables only scheduled polling. |
+| `SETU_STATE_DIR` | OS temp dir | Where Setu keeps its state. **Set this** to something persistent, or your devices and automations will not survive a reboot. |
+
+### State — the one file Setu writes
+
+`$SETU_STATE_DIR/setu.json` holds your **devices** and your **automations**, written
+atomically (temp file + rename, mode `0600`). That file plus the environment above is
+a complete installation — which is why backup is a copy of two things, not a
+filesystem tour. Samsung pairing tokens live beside it as `setu-samsung-<id>.token`.
+
+Devices are added from **Settings → Devices**: scan the network and tap Add, or type
+one in by hand for hardware that answers no scan (a Wake-on-LAN target). Nothing to
+edit on disk, and nothing to restart.
 
 ### HTTP / WebSocket API
 
@@ -171,6 +180,7 @@ An incoming automation hook accepts only its separate per-rule bearer token.
 | | `{"action":"key","value":"KEY_HOME"}` | named remote key (tap) |
 | | `{"action":"key_down","value":"KEY_RIGHT"}` / `{"action":"key_up","value":"KEY_RIGHT"}` | press-and-hold a key (the device auto-releases a hold the client never ends) |
 | | `{"action":"send_text","value":"breaking bad"}` | type into the device's focused text field |
+| `POST /api/discovery/scan` | — | ask every brand what is on the LAN → `{candidates, errors}`; each candidate is annotated `configured` / `device_id` and given a suggested config `id`. One scan at a time (`409`) |
 | `GET /ws` | — | WebSocket; pushes `{type,device_id,state}` (`snapshot` on connect, then `state_changed`) |
 | `GET` / `PUT /api/automations` | complete revisioned rule state | list or atomically replace automations |
 | `GET /api/automations/export` | — | backup form (hashed webhook secrets only) |
@@ -236,6 +246,19 @@ type Resolver interface {
   current IP is cached.
 - **DHCP lease table** — *future.* OpenWrt `/tmp/dhcp.leases`, RouterOS via API. Same interface.
 
+The same seam runs the other way round for devices that are **not configured yet**:
+
+```go
+type Scanner interface {
+    Scan(ctx context.Context) ([]Candidate, error)
+}
+```
+
+Settings → **Devices** (or `POST /api/discovery/scan`) asks every brand what is on the network,
+marks what you have already added, and lets you add the rest with one tap — brand, model, MAC
+and a starting name all filled in from what the device reported. Devices whose model has no
+driver are listed too, plainly marked, rather than guessed at.
+
 ---
 
 ## Listener options
@@ -285,7 +308,7 @@ worker over plain HTTP). No proxy is needed — Go serves TLS natively. Easiest 
 
 - **Tailscale** — gives automatic HTTPS on your `*.ts.net` name, zero config in Setu.
 - **`localhost`** via an SSH tunnel — counts as secure, nothing else needed.
-- **Own / self-signed cert** — set `listen.tls.cert` + `listen.tls.key` (see *Listener options*)
+- **Own / self-signed cert** — set `SETU_TLS_CERT` + `SETU_TLS_KEY` (see *Listener options*)
   and trust the cert once on each device. Generate one with, e.g.:
 
   ```sh
@@ -325,8 +348,8 @@ cache, keeps the access token and UI preferences, and returns to the fixed app a
 
 ### Samsung Tizen TV (`Samsung`/`tizen`)
 
-- **MAC-only addressing:** no `ip` is needed in config. Setu discovers DIAL receivers over
-  SSDP, verifies the candidate TV's `/api/v2/` `wifiMac` against the configured MAC, caches the
+- **MAC-only addressing:** only the MAC is stored. Setu discovers DIAL receivers over
+  SSDP, verifies the candidate TV's `/api/v2/` `wifiMac` against the stored MAC, caches the
   current IP, and repeats discovery after a transport failure invalidates that cache.
 - **Power on** = Wake-on-LAN (sprayed at each interface's directed broadcast + the limited
   broadcast, ports 9 & 7). ✅ Verified to wake a UA50AU7700KLXL from off. ⚠️ WoL over Wi-Fi can
@@ -375,15 +398,12 @@ capability methods, resolver usage, and factory registration).
    ```go
    wiz.Register(factory)   // next to example.Register(factory)
    ```
-7. **Add a config entry:**
-   ```yaml
-   devices:
-     - id: living_light
-       brand: WiZ   # case-insensitive (wiz / WiZ both work)
-       model: color_bulb
-       name: "Living Room"
-       mac: "a8:bb:50:11:22:33"   # primary identity
-   ```
+7. **Optionally implement `Scan`** on the brand's discoverer (same transport as `Lookup`, no
+   MAC filter) and add it to the `scanners` slice in `main.go`. That is all it takes for the
+   brand to be found by Settings → **Devices** → *Scan network*.
+8. **Add the device** from Settings → Devices — found by the scan, or typed in by hand
+   (brand, model, name, MAC). It is stored, built and live immediately; nothing to edit on
+   disk and no restart.
 
 The frontend needs **no changes** — `DeviceCard` renders the right controls from the device's
 reported `capabilities`.
@@ -402,7 +422,7 @@ reported `capabilities`.
 ## Deployment notes
 
 **General.** Setu must share the **host network** (LAN reachability, ARP, and future UDP
-broadcast / mDNS). Mount your `config.yaml`. Set `SETU_STATE_DIR` to a writable persistent
+broadcast / mDNS). Set `SETU_STATE_DIR` to a writable persistent
 directory for automations and Samsung pairing tokens; otherwise the OS temp directory is used.
 
 **MikroTik RouterOS (container).** Build the `linux/arm64` (or your arch) image, import it into
@@ -410,7 +430,7 @@ the `container` package, attach it to a veth on your LAN bridge, and mount a con
 Cross-compile locally with `make build-arm64` if building off-device.
 
 **OpenWrt.** Drop the static `linux/<arch>` binary on the router (e.g. `/usr/bin/setu`), add a
-small procd/init script pointing at `/etc/setu/config.yaml`, and (future) read leases from
+small procd/init script that exports `SETU_TOKEN` and `SETU_STATE_DIR`, and (future) read leases from
 `/tmp/dhcp.leases` via a DHCP resolver. The binary is fully static (`CGO_ENABLED=0`), so it has
 no libc dependency.
 
@@ -431,7 +451,8 @@ Beyond this file, docs are kept **point-to-point** for humans and AI assistants:
 Kept deliberately minimal (standard library does the rest):
 
 - **`github.com/coder/websocket`** — small, context-aware, zero-dependency WebSocket library.
-- **`gopkg.in/yaml.v3`** — human-friendly config with comments and `5s`-style durations.
+  It is now the *only* Go dependency: settings moved to environment variables and state to
+  one JSON file, so the YAML parser went with them.
 - **Frontend:** Svelte 5 (tiny runtime → small JS heap, important on mobile), Vite, Tailwind.
   No heavy UI kit.
 

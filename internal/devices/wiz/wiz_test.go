@@ -1,12 +1,38 @@
 package wiz
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"setu/internal/config"
 	"setu/internal/device"
 )
+
+// An unreachable bulb still has a meaningful state — offline — so Poll must wrap
+// ErrPollNoResponse. Without it the manager discards the read model update, and
+// an unplugged bulb keeps rendering as online and controllable in the UI.
+func TestPollOfUnreachableBulbReportsOffline(t *testing.T) {
+	bulb := &ColorBulb{base: base{
+		id:         "bulb",
+		mac:        "aa:bb:cc:dd:ee:ff",
+		discoverer: &Discoverer{timeout: 10 * time.Millisecond},
+		timeout:    10 * time.Millisecond,
+		state:      device.State{Online: true, On: true, Brightness: 80},
+	}}
+
+	state, err := bulb.Poll()
+	if err == nil {
+		t.Fatal("Poll() of an unreachable bulb must report the failed contact")
+	}
+	if !errors.Is(err, device.ErrPollNoResponse) {
+		t.Fatalf("Poll() error = %v; want it to wrap ErrPollNoResponse so the manager publishes the offline state", err)
+	}
+	if state.Online {
+		t.Error("Poll() state.Online = true; an unreachable bulb must report offline")
+	}
+}
 
 func TestTunableWhiteModelCapabilities(t *testing.T) {
 	dev, err := NewTunableWhite(config.DeviceSpec{

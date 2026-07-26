@@ -1,5 +1,10 @@
 # Build Prompt — "Setu" (Phase 1: Design & Scaffold, Go-only)
 
+> **Historical record.** This is the original Phase-1 prompt, kept as written. Some of it
+> has since been superseded — most visibly the configuration: there is no `config.yaml`
+> any more. Server settings are environment variables (see `example.env`) and devices are
+> added from the app into the state file. The README is the current description.
+
 > Paste this entire document as the task for an AI coding agent (e.g. Claude Code).
 >
 > **Scope of this phase: design and scaffold only.** Produce a complete, compiling, runnable skeleton with every architectural seam in place plus a documented device template. **Do NOT implement real device protocols yet** — actual devices (WiZ, etc.) will be added one-by-one in later steps, organised by **brand** and **model**.

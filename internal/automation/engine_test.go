@@ -17,6 +17,7 @@ import (
 	"setu/internal/device"
 	"setu/internal/events"
 	"setu/internal/manager"
+	"setu/internal/store"
 )
 
 type testSwitch struct {
@@ -68,7 +69,7 @@ func newTestEngine(t *testing.T, devices ...device.Device) *Engine {
 	mgr := manager.New(bus, devices)
 	t.Cleanup(mgr.Close)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	engine, err := New(mgr, bus, NewStore(filepath.Join(t.TempDir(), stateFileName)), log)
+	engine, err := New(mgr, bus, NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))), log)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -444,7 +445,7 @@ func TestNewDisablesRuleAfterDeviceCapabilityChanges(t *testing.T) {
 	target := &testSwitch{id: "target", bus: bus}
 	mgr := manager.New(bus, []device.Device{target})
 	defer mgr.Close()
-	path := filepath.Join(t.TempDir(), stateFileName)
+	path := filepath.Join(t.TempDir(), "setu.json")
 	state := State{
 		Version: FormatVersion,
 		Items: []Rule{{
@@ -457,11 +458,11 @@ func TestNewDisablesRuleAfterDeviceCapabilityChanges(t *testing.T) {
 			Actions: []Action{{DeviceID: target.id, Action: "set_brightness", Value: json.RawMessage("50")}},
 		}},
 	}
-	store := NewStore(path)
-	if err := store.Save(state); err != nil {
+	rules := NewStore(store.New(path))
+	if err := rules.Save(state); err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(mgr, bus, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine, err := New(mgr, bus, rules, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new engine after capability change: %v", err)
 	}
@@ -472,7 +473,7 @@ func TestNewDisablesRuleAfterDeviceCapabilityChanges(t *testing.T) {
 	if got.Revision != 1 {
 		t.Fatalf("reconciled revision = %d, want 1", got.Revision)
 	}
-	persisted, err := store.Load()
+	persisted, err := rules.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +487,7 @@ func TestNewCascadeDisablesCallerOfInvalidTarget(t *testing.T) {
 	target := &testSwitch{id: "target", bus: bus}
 	mgr := manager.New(bus, []device.Device{target})
 	defer mgr.Close()
-	path := filepath.Join(t.TempDir(), stateFileName)
+	path := filepath.Join(t.TempDir(), "setu.json")
 	child := webhookRule("missing_child", "missing")
 	parent := Rule{
 		ID:      "parent",
@@ -495,12 +496,12 @@ func TestNewCascadeDisablesCallerOfInvalidTarget(t *testing.T) {
 		Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}},
 		Actions: []Action{{Action: ActionAutomation, AutomationID: child.ID}},
 	}
-	store := NewStore(path)
-	if err := store.Save(State{Version: FormatVersion, Items: []Rule{child, parent}}); err != nil {
+	rules := NewStore(store.New(path))
+	if err := rules.Save(State{Version: FormatVersion, Items: []Rule{child, parent}}); err != nil {
 		t.Fatal(err)
 	}
 
-	engine, err := New(mgr, bus, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine, err := New(mgr, bus, rules, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -511,20 +512,33 @@ func TestNewCascadeDisablesCallerOfInvalidTarget(t *testing.T) {
 	}
 }
 
+// The rule set shares a file with the device list now, so its own cap has to be
+// enforced on the section — not on the file, which is allowed to be bigger.
 func TestStoreRejectsOversizedState(t *testing.T) {
-	path := filepath.Join(t.TempDir(), stateFileName)
-	if err := os.WriteFile(path, make([]byte, MaxStateBytes+1), 0o600); err != nil {
+	path := filepath.Join(t.TempDir(), "setu.json")
+	oversized, err := json.Marshal(State{
+		Version: FormatVersion,
+		Items:   []Rule{{Name: string(bytes.Repeat([]byte("x"), MaxStateBytes))}},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewStore(path).Load(); err == nil {
+	file := store.New(path)
+	if err := file.Update(func(state *store.State) error {
+		state.Automations = oversized
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(file).Load(); err == nil {
 		t.Fatal("oversized automation state was accepted")
 	}
 }
 
 func TestStoreRefusesToWriteOversizedState(t *testing.T) {
-	path := filepath.Join(t.TempDir(), stateFileName)
+	path := filepath.Join(t.TempDir(), "setu.json")
 	state := State{Version: FormatVersion, Items: []Rule{{Name: string(bytes.Repeat([]byte("x"), MaxStateBytes))}}}
-	if err := NewStore(path).Save(state); err == nil {
+	if err := NewStore(store.New(path)).Save(state); err == nil {
 		t.Fatal("oversized automation state was written")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -538,8 +552,8 @@ func TestStoredStateContainsNoPlaintextWebhookToken(t *testing.T) {
 	target.bus = bus
 	mgr := manager.New(bus, []device.Device{target})
 	defer mgr.Close()
-	path := filepath.Join(t.TempDir(), stateFileName)
-	engine, err := New(mgr, bus, NewStore(path), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	path := filepath.Join(t.TempDir(), "setu.json")
+	engine, err := New(mgr, bus, NewStore(store.New(path)), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -88,7 +88,7 @@ func (p *Poller) Run(ctx context.Context) {
 	} else {
 		// Keep the coordinator alive: scheduled polling is disabled, but an end
 		// user must still be able to request a one-shot hardware refresh.
-		p.log.Info("scheduled state polling disabled (poll_interval <= 0)")
+		p.log.Info("scheduled state polling disabled (SETU_POLL_INTERVAL <= 0)")
 	}
 	p.readyOnce.Do(func() { close(p.ready) })
 

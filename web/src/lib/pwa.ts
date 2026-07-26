@@ -1,7 +1,8 @@
 // PWA install affordance. A browser only offers to install in a secure context
 // (HTTPS or localhost) with a registered service worker — on a plain
 // http://<lan-ip> address none of that holds and no install option appears at
-// all (this is exactly why the optional TLS listener exists; see config.yaml).
+// all (this is exactly why the optional TLS listener exists — SETU_TLS_CERT /
+// SETU_TLS_KEY).
 //
 // When the browser does consider the app installable it fires
 // `beforeinstallprompt`; we capture it so the app can show its own Install

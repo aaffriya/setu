@@ -258,17 +258,23 @@ func (b *base) setSceneSpeed(speed int) error {
 	return nil
 }
 
+// poll reads live state over getPilot. A bulb that cannot be resolved or does
+// not answer still has a meaningful state — offline — so the failure wraps
+// device.ErrPollNoResponse: the manager then adopts and publishes that state
+// (dimming the card and disabling its controls) while diagnostics still record
+// the failed contact. Returning a plain error would leave the read model showing
+// the last good state, so an unplugged bulb would keep looking controllable.
 func (b *base) poll() (device.State, error) {
 	ip, err := b.resolveIP()
 	if err != nil {
 		b.updateState(func(s *device.State) { s.Online = false })
-		return b.State(), err
+		return b.State(), fmt.Errorf("%w: %w", device.ErrPollNoResponse, err)
 	}
 	res, err := b.rpc(ip, "getPilot", map[string]any{})
 	if err != nil {
 		b.invalidateIP()
 		b.updateState(func(s *device.State) { s.Online = false })
-		return b.State(), err
+		return b.State(), fmt.Errorf("wiz %s: %w: %w", b.id, device.ErrPollNoResponse, err)
 	}
 	b.updateState(func(s *device.State) {
 		s.Online = true

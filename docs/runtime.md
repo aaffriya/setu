@@ -40,7 +40,7 @@ recovery path, by design.
 - **Polling is concurrent per tick** (`poller.pollOnce`): cycle cost = slowest
   device, not the sum. Worst cases to keep in mind: off TV ≈ 4 s REST connect
   timeout; unreachable WiZ ≈ 3.5 s (ARP miss → 1.5 s broadcast discovery → 2 s
-  rpc). The configured `poll_interval` is the active cadence (default 45 s).
+  rpc). `SETU_POLL_INTERVAL` is the active cadence (default 45 s).
   After 2m without app activity or device changes it backs off to 5m → 10m →
   30m → 1h → 6h. UI pointer/keyboard activity is signalled at most every 30s;
   foreground/manual refresh performs a one-shot hardware poll and resets the

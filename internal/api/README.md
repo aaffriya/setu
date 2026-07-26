@@ -12,6 +12,12 @@ nothing about it.
 - `GET /api/diagnostics` → latest per-device poll/command outcomes from bounded backend RAM; no hardware I/O.
 - `POST /api/devices/{id}/refresh` → one serialized hardware read for that device; returns its refreshed view, including fallback state with a 502 when no live response arrives.
 - `POST /api/activity` → reset the adaptive poller's idle backoff without touching hardware.
+- `POST /api/discovery/scan` → asks every registered `resolver.Scanner` what is on the LAN; answers `{candidates, errors}`. Each candidate carries the device's own labels plus `configured`/`device_id` (matched by brand + MAC against the devices already added). POST because it actively broadcasts; one scan at a time (`409` otherwise); `501` when no scanner is registered. It stores nothing — adding is a separate, deliberate `POST /api/devices`.
+- `GET /api/device-types` → the `(brand, model)` pairs this build can drive, for the UI's manual add form.
+- `POST /api/devices` → add one device (id optional, derived from brand + MAC); it is stored, brought online, polled once, and returned as a live view (`201`).
+- `PATCH /api/devices/{id}` → edit the labels (`name`, `series`). Identity (brand, model, MAC) is not editable — that would be a different device.
+- `DELETE /api/devices/{id}` → remove it (`204`).
+- `GET /api/devices/export` → the stored specs (`{version, items}`) — the backup form. `PUT /api/devices` replays it (restore); the whole list is validated and built before anything is replaced.
 - `GET /api/recover` → self-contained service-worker/cache recovery page; preserves token and UI preferences.
 - `POST /api/devices/{id}/command` → shared control executor: `on`/`off`, `set_brightness`, `set_color`, `set_color_temp`, `set_scene`, `set_scene_speed`, `volume_up`/`volume_down`/`set_volume`/`mute`, `key`, `key_down`/`key_up` (press-and-hold), `send_text`, `launch_app`.
 - `GET|PUT /api/automations` → list/update the complete bounded rule set (revision checked).
@@ -22,7 +28,7 @@ nothing about it.
 - `/` → embedded `web/dist` with SPA fallback (a built-in placeholder if the UI isn't built).
 
 ## Files
-- server.go (routing + JSON helpers), auth.go (bearer; also `?token=` for the WS), handlers.go (device commands), automations.go (rule/webhook endpoints), ws.go (hub), static.go (embed + SPA + MIME).
+- server.go (routing + JSON helpers), auth.go (bearer; also `?token=` for the WS), handlers.go (device commands), devices.go (add/edit/remove/export), discovery.go (LAN scan → annotated candidates), automations.go (rule/webhook endpoints), ws.go (hub), static.go (embed + SPA + MIME).
 
 ## Gotchas
 - ws.go: every write has a 10 s deadline (`wsWriteTimeout`) — half-open mobile sockets must die at the next event, not at kernel TCP timeout (~15 min of leaked goroutine + bus subscription).
@@ -31,7 +37,10 @@ nothing about it.
 - static.go: unknown non-asset paths return 200 + index.html (SPA fallback); missing `/assets/*` paths return 404 so HTML cannot masquerade as stale JS/CSS.
 
 ## Errors
-- `400` unsupported capability / bad input · `401` missing/wrong token · `404` unknown item · `409` stale revision/paused rule · `429` webhook limit · `502` device or I/O failure · `503` full automation queue.
+- `400` unsupported capability / bad input · `401` missing/wrong token · `404` unknown item · `409` stale revision/paused rule/scan already running · `429` webhook limit · `501` no scanners registered · `502` device or I/O failure · `503` full automation queue.
+
+## Device management
+- The device-management routes are mounted only when an `Inventory` is configured. The API validates nothing itself: it hands the spec to `internal/inventory`, which owns the rules (valid spec, registered brand, free id, one brand per MAC) and reports a plain message the UI shows as-is.
 
 ## Seam
 - A second front-end (e.g. an Apple HomeKit bridge) is added **beside** this package, talking to the same manager + event bus — no device changes.

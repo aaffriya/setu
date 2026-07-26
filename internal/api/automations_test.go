@@ -17,6 +17,7 @@ import (
 	"setu/internal/device"
 	"setu/internal/events"
 	"setu/internal/manager"
+	"setu/internal/store"
 )
 
 type automationSwitch struct {
@@ -47,7 +48,7 @@ func automationServer(t *testing.T) (*Server, string) {
 	mgr := manager.New(bus, []device.Device{&automationSwitch{}})
 	t.Cleanup(mgr.Close)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	engine, err := automation.New(mgr, bus, automation.NewStore(filepath.Join(t.TempDir(), "automations.json")), log)
+	engine, err := automation.New(mgr, bus, automation.NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))), log)
 	if err != nil {
 		t.Fatal(err)
 	}

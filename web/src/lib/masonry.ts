@@ -19,27 +19,39 @@ const ROW = 1 // grid-auto-rows track unit (px)
 const GAP = 16 // vertical gap between cards (matches the grid's gap-4 = 16px)
 
 export function masonry(node: HTMLElement) {
+  // Reads and writes are kept in separate passes. Reading offsetHeight after a
+  // style write forces the browser to reflow synchronously, so interleaving them
+  // per card costs one full layout per card; batching all writes, then all reads,
+  // then all writes costs one. This runs on every card resize (each expand,
+  // collapse and column change), which is exactly when frames are tightest.
   function layout() {
     node.style.gridAutoRows = `${ROW}px`
     node.style.rowGap = '0px'
-    for (const child of node.children) {
-      const el = child as HTMLElement
-      // Top-align so the item measures its true content height (not stretched to
-      // its spanned tracks) — keeps offsetHeight stable so writing the span can't
-      // feed back into another resize.
+    const items = Array.from(node.children) as HTMLElement[]
+
+    // Pass 1 — writes. Top-align so an item measures its true content height
+    // (not stretched to its spanned tracks), keeping offsetHeight stable so
+    // writing the span can't feed back into another resize.
+    for (const el of items) {
       if (el.style.alignSelf !== 'start') el.style.alignSelf = 'start'
-      // offsetHeight ignores the drag-lift transform, so dragging never resizes.
-      // span = content height + the gap (in 1px tracks) → exactly GAP of space
-      // below each card, with the next card tucked right under it.
-      const span = Math.max(1, el.offsetHeight + GAP)
-      const value = `span ${span}`
-      // Only write when it actually changes: avoids a ResizeObserver feedback loop
-      // when the container's own size shifts as a result of re-spanning.
+    }
+
+    // Pass 2 — reads, after every write above has landed. offsetHeight ignores
+    // the drag-lift transform, so dragging never resizes. span = content height
+    // + the gap (in 1px tracks) → exactly GAP of space below each card, with the
+    // next card tucked right under it.
+    const spans = items.map((el) => Math.max(1, el.offsetHeight + GAP))
+
+    // Pass 3 — writes. Only write when the value actually changes: avoids a
+    // ResizeObserver feedback loop when the container's own size shifts as a
+    // result of re-spanning.
+    items.forEach((el, i) => {
+      const value = `span ${spans[i]}`
       if (el.dataset.mspan !== value) {
         el.dataset.mspan = value
         el.style.gridRowEnd = value
       }
-    }
+    })
   }
 
   // Re-pack when the container resizes (column count changes) or any card grows

@@ -8,7 +8,9 @@
 ## Files
 - `wiz.go` — `base` (UDP `getPilot`/`setPilot`, resolve chain, state) +
   `ColorBulb` and `TunableWhiteBulb` models.
-- `discovery.go` — `Discoverer` implements `resolver.Resolver` via UDP **broadcast** (matches the bulb by MAC).
+- `discovery.go` — `Discoverer` implements `resolver.Resolver` (`Lookup`: broadcast
+  `getPilot`, match by MAC) **and** `resolver.Scanner` (`Scan`: broadcast
+  `getSystemConfig`, list every bulb for `POST /api/discovery/scan`).
 - `scenes.go` — the 32 named WiZ scenes, exposed via `Scenes()`.
 
 ## Capabilities → protocol
@@ -33,6 +35,15 @@ does not implement `ColorControl`, so the UI does not render an RGB picker.
 
 ## Resolution
 - cached IP → ARP → **WiZ broadcast discovery** → `ip` hint. Any UDP failure invalidates the cache → next call re-resolves.
+- Every broadcast goes out **several times** inside its reply window (2 probes for
+  `Lookup`, 4 for `Scan`): a bulb drops the odd datagram, and on a real segment a
+  single-probe scan missed a live bulb about half the time.
+
+## Scan → model
+- `getSystemConfig.moduleName` names the light engine and is the only thing that
+  tells the models apart: `…RGB…` → `color_bulb`, `…TW…` → `tunable_white`.
+- Anything else (plugs, dimmable-white `DW`, fans) is reported with an **empty
+  model** — found, but no driver — never guessed at.
 
 ## Status
 - **Verified live** (read + write), 2026-06-03 — confirmed a color bulb (accepts RGB).

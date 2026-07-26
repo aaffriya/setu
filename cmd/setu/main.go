@@ -28,8 +28,10 @@ import (
 	"setu/internal/devices/wiz"
 	"setu/internal/devices/wol"
 	"setu/internal/events"
+	"setu/internal/inventory"
 	"setu/internal/manager"
 	"setu/internal/resolver"
+	"setu/internal/store"
 	"setu/web"
 )
 
@@ -41,17 +43,19 @@ func main() {
 }
 
 func run() error {
-	configPath := flag.String("config", "config.yaml", "path to config file")
+	// Setu takes no flags: everything is environment (see example.env). Parsing
+	// anyway means a stale `-config …` from an old init script fails loudly
+	// instead of being silently ignored.
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	if cfg.Auth.Token == "CHANGE_ME" {
-		log.Warn("auth.token is still the default 'CHANGE_ME' — set a real token in your config")
+	if cfg.Token == config.DefaultToken {
+		log.Warn("running with the default access token — set " + config.EnvToken + " to a secret of your own")
 	}
 
 	// --- wire dependencies (composition root) ---
@@ -65,33 +69,53 @@ func run() error {
 	samsung.Register(factory) // Samsung Tizen TVs (REST + WebSocket + WoL)
 	wol.Register(factory)     // Wake-on-LAN targets (PC/NAS/router — magic packet)
 
-	devices, err := factory.BuildAll(cfg.Devices, config.Deps{Resolver: res, Bus: bus})
+	// Brands that can enumerate their devices on the LAN, for the UI's device
+	// scan. Same seam as the resolver, used the other way round: not "where is
+	// this MAC?" but "what is out there that has not been added yet?".
+	scanners := []resolver.Scanner{
+		wiz.NewDiscoverer(),        // UDP broadcast getSystemConfig
+		samsung.NewDiscoverer(nil), // SSDP DIAL + /api/v2/ identity
+	}
+
+	// --- state (the one file Setu persists: devices + automations) ---
+	statePath, temporaryState := store.DefaultPath()
+	if temporaryState {
+		log.Warn("SETU_STATE_DIR is unset; devices and automations may not survive a reboot", "path", statePath)
+	}
+	state := store.New(statePath)
+
+	mgr := manager.New(bus, nil)
+	defer mgr.Close()
+
+	// The devices the user added, loaded from the state file and brought online.
+	// They are managed from the UI (scan or manual entry), so this is also the
+	// only writer of that section of the file.
+	devices, err := inventory.New(state, factory, config.Deps{Resolver: res, Bus: bus}, mgr, log)
 	if err != nil {
 		return err
 	}
-	log.Info("loaded devices", "count", len(devices))
-
-	mgr := manager.New(bus, devices)
-	defer mgr.Close()
+	log.Info("loaded devices", "count", len(devices.Specs()), "state", statePath)
 
 	// --- lifecycle context (graceful shutdown on SIGINT/SIGTERM) ---
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// state poller
-	poller := manager.NewPoller(mgr, cfg.PollInterval.Duration(), log)
+	poller := manager.NewPoller(mgr, cfg.PollInterval, log)
 	go poller.Run(ctx)
 
-	automationPath, temporaryAutomationState := automation.DefaultPath()
-	if temporaryAutomationState {
-		log.Warn("SETU_STATE_DIR is unset; automations may not survive a reboot", "path", automationPath)
-	}
-	automations, err := automation.New(mgr, bus, automation.NewStore(automationPath), log)
+	// Automations are an optional layer over the devices. A corrupt or
+	// hand-edited state file must never stop the bridge from controlling
+	// hardware, so a load failure is logged and the engine is left out; the API
+	// mounts its automation routes only when one is present.
+	automations, err := automation.New(mgr, bus, automation.NewStore(state), log)
 	if err != nil {
-		return err
+		log.Error("automations unavailable; serving devices only", "path", statePath, "err", err)
+		automations = nil
+	} else {
+		go automations.Run(ctx, poller.Ready())
+		log.Info("loaded automations", "count", len(automations.Snapshot().Items))
 	}
-	go automations.Run(ctx, poller.Ready())
-	log.Info("loaded automations", "count", len(automations.Snapshot().Items))
 
 	// --- HTTP server ---
 	srv := api.New(api.Options{
@@ -99,7 +123,9 @@ func run() error {
 		Poller:     poller,
 		Bus:        bus,
 		Automation: automations,
-		Token:      cfg.Auth.Token,
+		Inventory:  devices,
+		Scanners:   scanners,
+		Token:      cfg.Token,
 		Dist:       web.Dist(),
 		Logger:     log,
 	})

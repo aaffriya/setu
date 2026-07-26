@@ -90,3 +90,23 @@ func NormalizeMAC(mac string) (string, error) {
 	}
 	return sb.String(), nil
 }
+
+// FormatMAC renders a MAC in the conventional colon-separated form for humans —
+// config files and the UI. Comparison still goes through NormalizeMAC; this is
+// presentation only. An unparseable input is returned unchanged, so a display
+// path can never lose the raw value it was given.
+func FormatMAC(mac string) string {
+	norm, err := NormalizeMAC(mac)
+	if err != nil {
+		return mac
+	}
+	var sb strings.Builder
+	sb.Grow(17)
+	for i := 0; i < len(norm); i += 2 {
+		if i > 0 {
+			sb.WriteByte(':')
+		}
+		sb.WriteString(norm[i : i+2])
+	}
+	return sb.String()
+}

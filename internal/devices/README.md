@@ -14,4 +14,4 @@
 - Resolution + re-resolve-on-failure follows the `resolver.Resolver` seam.
 
 ## Add a device
-- Copy `example/`, implement the protocol, add one `Register` line in `cmd/setu/main.go`, add a `config.yaml` entry. Full steps: root README → "Adding a device".
+- Copy `example/`, implement the protocol, add one `Register` line in `cmd/setu/main.go`, then add the device from Settings → Devices. Full steps: root README → "Adding a device".

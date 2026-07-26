@@ -2,6 +2,7 @@ package manager
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -263,4 +264,96 @@ func TestManagerResyncsAfterEventOverflow(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("manager cache did not recover from overflow using live device state")
+}
+
+// failingPollDevice reports a failed hardware read. Its returned state is always
+// meaningful (an unreachable device is offline); whether it wraps
+// ErrPollNoResponse decides whether the manager is allowed to believe it.
+type failingPollDevice struct {
+	wrapSentinel bool
+}
+
+func (*failingPollDevice) ID() string             { return "failing" }
+func (*failingPollDevice) Name() string           { return "Failing" }
+func (*failingPollDevice) Brand() string          { return "test" }
+func (*failingPollDevice) Model() string          { return "failing" }
+func (*failingPollDevice) MAC() string            { return "02:00:00:00:00:04" }
+func (*failingPollDevice) Capabilities() []string { return []string{device.CapSwitch} }
+func (*failingPollDevice) State() device.State    { return device.State{Online: false} }
+func (*failingPollDevice) On() error              { return nil }
+func (*failingPollDevice) Off() error             { return nil }
+
+func (d *failingPollDevice) Poll() (device.State, error) {
+	state := device.State{Online: false}
+	if d.wrapSentinel {
+		return state, fmt.Errorf("no reply: %w", device.ErrPollNoResponse)
+	}
+	return state, errors.New("no reply")
+}
+
+// This is the contract that keeps an unreachable device from rendering as a
+// healthy one: a driver whose fallback state is meaningful MUST wrap
+// ErrPollNoResponse, and only then does the manager adopt and publish it. Both
+// directions are pinned here because the difference is invisible at the call
+// site — a driver that forgets the sentinel silently leaves the read model
+// showing the last good state forever.
+func TestPollAdoptsFallbackStateOnlyWhenSentinelIsWrapped(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		wrapSentinel bool
+		wantOnline   bool
+		wantEvent    bool
+	}{
+		{name: "wrapped sentinel is adopted", wrapSentinel: true, wantOnline: false, wantEvent: true},
+		{name: "plain error is discarded", wrapSentinel: false, wantOnline: true, wantEvent: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := events.NewBus()
+			sub, unsubscribe := bus.Subscribe()
+			defer unsubscribe()
+
+			dev := &failingPollDevice{wrapSentinel: tt.wrapSentinel}
+			mgr := New(bus, []device.Device{dev})
+			defer mgr.Close()
+
+			// Seed the read model with a healthy state, as a successful poll would.
+			mgr.mu.Lock()
+			mgr.latest[dev.ID()] = device.State{Online: true, On: true}
+			mgr.mu.Unlock()
+
+			state, pollable, changed, err := mgr.Poll(dev.ID())
+			if !pollable || err == nil {
+				t.Fatalf("Poll() = pollable %v, err %v; want a pollable device reporting failure", pollable, err)
+			}
+			if state.Online {
+				t.Errorf("returned state.Online = true; the driver reported offline")
+			}
+			if changed != tt.wantEvent {
+				t.Errorf("changed = %v, want %v", changed, tt.wantEvent)
+			}
+
+			if got := mgr.Snapshot()[0].State.Online; got != tt.wantOnline {
+				t.Errorf("snapshot online = %v, want %v", got, tt.wantOnline)
+			}
+
+			select {
+			case ev := <-sub:
+				if !tt.wantEvent {
+					t.Fatalf("unexpected state event published: %+v", ev.State)
+				}
+				if ev.State.Online {
+					t.Errorf("published state.Online = true, want the offline state")
+				}
+			case <-time.After(100 * time.Millisecond):
+				if tt.wantEvent {
+					t.Fatal("no state event published for the adopted offline state")
+				}
+			}
+
+			// Either way the failed contact is recorded, so diagnostics stay honest.
+			if got := mgr.Diagnostics()[0].LastPollError; got == "" {
+				t.Error("diagnostics recorded no poll error")
+			}
+		})
+	}
 }

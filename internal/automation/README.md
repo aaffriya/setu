@@ -13,7 +13,8 @@ relations, and authenticated incoming webhook triggers.
 - no scripts, nested expression tree, per-rule goroutine, database, retries, or
   outbound HTTP
 
-Rules persist atomically at `$SETU_STATE_DIR/setu-automations.json` (OS temp
+Rules persist atomically in the `automations` section of `$SETU_STATE_DIR/setu.json`
+— the same file that holds the devices, written through `internal/store` (OS temp
 fallback). Webhook plaintext secrets are returned once; only SHA-256 hashes are
 stored. The engine subscribes through the event bus's recoverable subscription
 and atomically replaces a stale event buffer with a fresh device snapshot after

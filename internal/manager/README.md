@@ -8,7 +8,8 @@
 - Runs the generic state poller.
 
 ## Key types
-- `Manager` — `Device(id)`, `Devices()`, `Command()`, `Poll()`, `Snapshot()`, `Diagnostics()`, `Close()`.
+- `Manager` — `Device(id)`, `Devices()`, `Command()`, `Poll()`, `Snapshot()`, `Diagnostics()`, `Close()`,
+  and the runtime membership calls `Add(d)`, `Remove(id)`, `Replace(d)` used by `internal/inventory`.
 - `DeviceView` — JSON projection (id, name, brand, model, mac, capabilities,
   optional color-temperature range, state); `ViewOf(d)`.
 - `Poller` — `NewPoller(mgr, interval, log).Run(ctx)`; `Ready()` closes after the startup baseline.
@@ -22,5 +23,11 @@
 - State-triggered automation waits for `Ready()` and snapshots the resulting device state, so first discovery is a baseline rather than a user transition.
 
 ## Gotchas
-- Works with **zero** devices; `Snapshot()` returns `[]`, never nil.
+- Works with **zero** devices; `Snapshot()` returns `[]`, never nil — that is a fresh
+  install before the first device is added, not an error state.
+- The device set changes at runtime. `Add` refuses a duplicate id; `Remove` takes the
+  device's operation lock so an in-flight command finishes first, then calls
+  `device.Closer` if the device has one (a removed TV must not leave its event socket
+  behind); `Replace` swaps a rebuilt device in place, keeping its position and cached
+  state so a rename does not blank the card. `Close()` closes every device.
 - Device `Poll` methods update quietly; manager `Poll()` publishes the resulting change exactly once.

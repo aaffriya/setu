@@ -29,6 +29,28 @@
     return value > 0 ? timeFormat.format(new Date(value)) : 'Not yet'
   }
 
+  // Polling backs off to as much as 6h while the app is idle, so a bare clock
+  // time cannot say whether a record still describes the device now — "3h ago"
+  // can. The exact time stays available as the element's title.
+  function formatAge(value: number, at: number): string {
+    const secs = Math.max(0, Math.round((at - value) / 1000))
+    if (secs < 5) return 'just now'
+    if (secs < 60) return `${secs}s ago`
+    const mins = Math.round(secs / 60)
+    if (mins < 60) return `${mins}m ago`
+    const hours = Math.round(mins / 60)
+    return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`
+  }
+
+  // Tick only while the panel is open, so no timer runs on the happy path.
+  let now = $state(Date.now())
+  $effect(() => {
+    if (!open) return
+    now = Date.now()
+    const tick = setInterval(() => (now = Date.now()), 5000)
+    return () => clearInterval(tick)
+  })
+
   async function load() {
     const generation = ++loadGeneration
     loading = true
@@ -172,16 +194,21 @@
 
               <div class="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
                 <span class="text-ink/40">Last check</span>
-                <span class="min-w-0 text-right text-ink/65">
-                  {formatTime(record?.last_poll_at ?? 0)}
-                  {#if record?.last_poll_at}
-                    · {record.last_poll_error ? 'No response' : 'OK'}
-                  {/if}
+                <span
+                  class="min-w-0 text-right text-ink/65"
+                  title={record?.last_poll_at ? formatTime(record.last_poll_at) : undefined}
+                >
+                  {record?.last_poll_at
+                    ? `${formatAge(record.last_poll_at, now)} · ${record.last_poll_error ? 'No response' : 'OK'}`
+                    : 'Not yet'}
                 </span>
                 <span class="text-ink/40">Last command</span>
-                <span class="min-w-0 truncate text-right text-ink/65">
+                <span
+                  class="min-w-0 truncate text-right text-ink/65"
+                  title={record?.last_command_at ? formatTime(record.last_command_at) : undefined}
+                >
                   {record?.last_command_at
-                    ? `${record.last_command_action.replaceAll('_', ' ')} · ${record.last_command_error ? 'Failed' : 'OK'} · ${formatTime(record.last_command_at)}`
+                    ? `${record.last_command_action.replaceAll('_', ' ')} · ${record.last_command_error ? 'Failed' : 'OK'} · ${formatAge(record.last_command_at, now)}`
                     : 'Not yet'}
                 </span>
               </div>
