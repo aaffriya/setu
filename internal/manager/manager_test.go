@@ -112,6 +112,204 @@ func TestCommandWaitsForInFlightPoll(t *testing.T) {
 	}
 }
 
+type lifecycleDevice struct {
+	id string
+
+	mu      sync.Mutex
+	closed  bool
+	onCalls int
+}
+
+func (d *lifecycleDevice) ID() string           { return d.id }
+func (d *lifecycleDevice) Name() string         { return d.id }
+func (*lifecycleDevice) Brand() string          { return "test" }
+func (*lifecycleDevice) Model() string          { return "lifecycle" }
+func (*lifecycleDevice) MAC() string            { return "02:00:00:00:00:09" }
+func (*lifecycleDevice) Capabilities() []string { return []string{device.CapSwitch} }
+func (*lifecycleDevice) State() device.State    { return device.State{Online: true} }
+func (*lifecycleDevice) Off() error             { return nil }
+func (d *lifecycleDevice) On() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return errors.New("command reached closed device")
+	}
+	d.onCalls++
+	return nil
+}
+func (d *lifecycleDevice) Close() error {
+	d.mu.Lock()
+	d.closed = true
+	d.mu.Unlock()
+	return nil
+}
+
+func TestRemovedOperationHandleCannotReachClosedDevice(t *testing.T) {
+	bus := events.NewBus()
+	dev := &lifecycleDevice{id: "lifecycle"}
+	mgr := New(bus, []device.Device{dev})
+	defer mgr.Close()
+
+	// This is the handle a command can capture immediately before Remove wins
+	// the operation lock. It must become inactive before the device is closed.
+	stale := mgr.ops[dev.ID()]
+	if !mgr.Remove(dev.ID()) {
+		t.Fatal("remove did not find device")
+	}
+	if _, active := stale.lockDevice(); active {
+		stale.unlock()
+		t.Fatal("stale operation handle stayed active after removal")
+	}
+	if _, found, err := mgr.Command(dev.ID(), control.Request{Action: "on"}); found || err != nil {
+		t.Fatalf("command after removal = found %v, err %v", found, err)
+	}
+	dev.mu.Lock()
+	defer dev.mu.Unlock()
+	if !dev.closed || dev.onCalls != 0 {
+		t.Fatalf("removed device = closed %v, on calls %d", dev.closed, dev.onCalls)
+	}
+}
+
+func TestCapturedOperationUsesReplacementDevice(t *testing.T) {
+	bus := events.NewBus()
+	previous := &lifecycleDevice{id: "lifecycle"}
+	replacement := &lifecycleDevice{id: "lifecycle"}
+	mgr := New(bus, []device.Device{previous})
+	defer mgr.Close()
+
+	captured := mgr.ops[previous.ID()]
+	if !mgr.Replace(replacement) {
+		t.Fatal("replace did not find device")
+	}
+	current, active := captured.lockDevice()
+	if !active {
+		t.Fatal("operation became inactive after replacement")
+	}
+	if current != replacement {
+		captured.unlock()
+		t.Fatal("captured operation still points at the closed previous device")
+	}
+	captured.unlock()
+
+	if _, found, err := mgr.Command(replacement.ID(), control.Request{Action: "on"}); !found || err != nil {
+		t.Fatalf("replacement command = found %v, err %v", found, err)
+	}
+	previous.mu.Lock()
+	previousClosed, previousCalls := previous.closed, previous.onCalls
+	previous.mu.Unlock()
+	replacement.mu.Lock()
+	replacementCalls := replacement.onCalls
+	replacement.mu.Unlock()
+	if !previousClosed || previousCalls != 0 || replacementCalls != 1 {
+		t.Fatalf(
+			"previous = closed %v/calls %d, replacement calls = %d",
+			previousClosed, previousCalls, replacementCalls,
+		)
+	}
+}
+
+type shutdownDevice struct {
+	id string
+
+	commandStarted chan struct{}
+	releaseCommand chan struct{}
+	startOnce      sync.Once
+
+	mu      sync.Mutex
+	closed  bool
+	onCalls int
+}
+
+func (d *shutdownDevice) ID() string           { return d.id }
+func (d *shutdownDevice) Name() string         { return d.id }
+func (*shutdownDevice) Brand() string          { return "test" }
+func (*shutdownDevice) Model() string          { return "shutdown" }
+func (*shutdownDevice) MAC() string            { return "02:00:00:00:00:0a" }
+func (*shutdownDevice) Capabilities() []string { return []string{device.CapSwitch} }
+func (*shutdownDevice) State() device.State    { return device.State{Online: true} }
+func (*shutdownDevice) Off() error             { return nil }
+func (d *shutdownDevice) On() error {
+	d.startOnce.Do(func() { close(d.commandStarted) })
+	<-d.releaseCommand
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return errors.New("command overlapped device close")
+	}
+	d.onCalls++
+	return nil
+}
+func (d *shutdownDevice) Close() error {
+	d.mu.Lock()
+	d.closed = true
+	d.mu.Unlock()
+	return nil
+}
+
+func TestCloseWaitsForInFlightCommandAndRejectsNewOperations(t *testing.T) {
+	bus := events.NewBus()
+	dev := &shutdownDevice{
+		id:             "shutdown",
+		commandStarted: make(chan struct{}),
+		releaseCommand: make(chan struct{}),
+	}
+	mgr := New(bus, []device.Device{dev})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, _, err := mgr.Command(dev.ID(), control.Request{Action: "on"})
+		firstDone <- err
+	}()
+	<-dev.commandStarted
+
+	closeDone := make(chan struct{})
+	go func() {
+		mgr.Close()
+		close(closeDone)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		mgr.mu.RLock()
+		closed := mgr.closed
+		mgr.mu.RUnlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("manager did not enter shutdown")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if _, found, err := mgr.Command(dev.ID(), control.Request{Action: "on"}); found || err != nil {
+		t.Fatalf("new command during shutdown = found %v, err %v", found, err)
+	}
+	if _, _, _, err := mgr.Poll(dev.ID()); err != nil {
+		t.Fatalf("poll during shutdown: %v", err)
+	}
+	select {
+	case <-closeDone:
+		t.Fatal("manager closed the device before its in-flight command finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(dev.releaseCommand)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("in-flight command: %v", err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("manager did not finish closing after command completed")
+	}
+
+	dev.mu.Lock()
+	defer dev.mu.Unlock()
+	if !dev.closed || dev.onCalls != 1 {
+		t.Fatalf("device after shutdown = closed %v, on calls %d", dev.closed, dev.onCalls)
+	}
+}
+
 type uncertainCommandDevice struct {
 	mu    sync.Mutex
 	state device.State

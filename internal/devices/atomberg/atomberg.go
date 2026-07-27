@@ -86,17 +86,23 @@ func (b *base) Close() error {
 	return nil
 }
 
-// resolveIP tries, in order: the cached IP, the fan's own beacon (authoritative
-// and usually a second old), then the injected ARP table. The beacon comes
-// before ARP here — the opposite of the other brands — because it is the fan
-// itself reporting its address, where ARP is the host's possibly stale memory.
+// resolveIP prefers the fan's latest fresh beacon, then falls back to the cached
+// IP and finally ARP. Checking the beacon before the cache is what lets a DHCP
+// change correct itself: UDP writes to an unused old LAN address can still
+// succeed locally, so a transport error is not guaranteed to invalidate it.
 func (b *base) resolveIP() (net.IP, error) {
+	if ip, ok := b.listener.addressOf(watchKey(b.mac)); ok {
+		b.setIP(ip)
+		return ip, nil
+	}
 	b.mu.Lock()
 	cached := b.ip
 	b.mu.Unlock()
 	if cached != nil {
 		return cached, nil
 	}
+	// With no usable cache, wait briefly for the first beacon. This keeps a
+	// command issued immediately after process start from failing needlessly.
 	if ip, err := b.listener.Lookup(b.mac); err == nil {
 		b.setIP(ip)
 		return ip, nil

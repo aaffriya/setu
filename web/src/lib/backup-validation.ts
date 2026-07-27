@@ -79,6 +79,13 @@ function isSceneCommand(value: unknown): value is SceneCommand {
     case 'set_brightness':
     case 'set_volume':
       return isInteger(value.value, 0, 100)
+    case 'set_speed':
+      return isInteger(value.value, 1, Number.MAX_SAFE_INTEGER)
+    case 'set_timer':
+      return isInteger(value.value, 0, Number.MAX_SAFE_INTEGER)
+    case 'set_sleep':
+    case 'set_light':
+      return typeof value.value === 'boolean'
     case 'set_color':
       return isColor(value.value)
     case 'set_color_temp':

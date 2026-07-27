@@ -486,10 +486,12 @@ func (e *Engine) enqueueLocked(id, source string) (TriggerResult, error) {
 		return TriggerResult{}, err
 	}
 	e.pending[id] = true
-	e.lastTriggered[id] = now
 	request := runRequest{id: runID, rule: cloneState(State{Items: []Rule{*rule}}).Items[0], source: source}
 	select {
 	case e.queue <- request:
+		// Cooldown starts only once the run is accepted. A full queue did not
+		// trigger anything and must not suppress the caller's next attempt.
+		e.lastTriggered[id] = now
 		return TriggerResult{RunID: runID, Status: "queued"}, nil
 	default:
 		delete(e.pending, id)

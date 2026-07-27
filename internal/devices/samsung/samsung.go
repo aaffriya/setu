@@ -111,8 +111,9 @@ type base struct {
 	powerAt time.Time // when On/Off was last commanded (start of the grace window)
 	powerOn bool      // the power state that command intended
 
-	wsMu   sync.Mutex      // serializes the remote-control socket (dial + writes); guards wsConn
+	wsMu   sync.Mutex      // serializes the remote-control socket (dial + writes); guards wsConn/closed
 	wsConn *websocket.Conn // reused remote-control socket (nil = none open)
+	closed bool            // a removed/replaced device must never reconnect
 
 	holdMu    sync.Mutex  // guards the held-key bookkeeping below
 	heldKey   string      // key currently held down via Press ("" = none)
@@ -402,6 +403,9 @@ func (b *base) sendText(text string) error {
 
 // writeFrameLocked ensures a live socket and writes one frame on it. wsMu held.
 func (b *base) writeFrameLocked(ctx context.Context, frame []byte) error {
+	if b.closed {
+		return fmt.Errorf("samsung %s: device is closed", b.id)
+	}
 	if b.wsConn == nil {
 		c, err := b.dialWSLocked(ctx)
 		if err != nil {
@@ -489,7 +493,7 @@ func (b *base) ensureEvents(ctx context.Context) {
 	}
 	b.wsMu.Lock()
 	defer b.wsMu.Unlock()
-	if b.wsConn != nil {
+	if b.closed || b.wsConn != nil {
 		return
 	}
 	if c, err := b.dialWSLocked(ctx); err == nil {
@@ -501,8 +505,12 @@ func (b *base) ensureEvents(ctx context.Context) {
 // the device is removed or rebuilt (a rename) and on shutdown — without it, a
 // removed TV would leave a live socket and its reader goroutine behind.
 func (b *base) Close() error {
+	// A held key survives a socket close on the TV. Release it while this driver
+	// is still allowed to use/reconnect the socket, and cancel its watchdog.
+	b.releaseHeld()
 	b.wsMu.Lock()
 	defer b.wsMu.Unlock()
+	b.closed = true
 	b.closeWSLocked()
 	return nil
 }

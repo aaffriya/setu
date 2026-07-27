@@ -12,6 +12,9 @@ and adaptive poll coordination.
 - `View`, `Snapshot`: cached API projections with no hardware I/O.
 - `Diagnostics`: latest poll/command outcome per device, bounded in RAM.
 
+An operation handle resolves the current instance after locking: replacement
+redirects captured handles, while removal deactivates them before close.
+
 Command success updates the cache immediately. Ambiguous transport failure
 attempts one same-device poll before returning. `ErrPollNoResponse` retains
 meaningful fallback state while diagnostics records failed contact.

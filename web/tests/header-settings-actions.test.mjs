@@ -74,6 +74,21 @@ test('room controls stay browser-local and bound command fan-out', () => {
   assert.doesNotMatch(api, /\/api\/rooms/)
 })
 
+test('room controls combine targets from multiple selected rooms', () => {
+  assert.match(roomControls, /let selectedRooms = \$state<string\[\]>\(\[\]\)/)
+  assert.match(
+    roomControls,
+    /\$devices\.filter\(\(device\) => selectedRooms\.includes\(\$rooms\[device\.id\] \?\? ''\)\)/,
+  )
+  assert.match(roomControls, /function toggleRoom\(room: string\)/)
+  assert.match(roomControls, /function toggleAllRooms\(\)/)
+  assert.match(roomControls, /selectedRooms\.includes\(room\)/)
+  assert.match(roomControls, /Select all rooms/)
+  assert.match(roomControls, /selectedRooms\.length > 1/)
+  assert.match(roomControls, /\{\$rooms\[device\.id\]\}/)
+  assert.doesNotMatch(roomControls, /<select[\s\S]*?room-control-room/)
+})
+
 test('diagnostics use latest RAM status and a single-device refresh route', () => {
   assert.match(api, /request<unknown>\('\/api\/diagnostics'\)/)
   assert.match(api, /\/api\/devices\/\$\{encodeURIComponent\(id\)\}\/refresh/)

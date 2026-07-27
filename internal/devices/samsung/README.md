@@ -11,7 +11,8 @@ Samsung Tizen TV driver. Full wire reference:
 Capabilities are power, real absolute volume/mute, remote keys and safe hold,
 app launch, and text input. The TV socket stays open while on. Background polls
 redial only with a cached token, and every held key is released explicitly,
-before a newer key, or by watchdog.
+before a newer key, on driver close, or by watchdog. Close then prevents
+reconnects.
 
 Resolution is cached IP → ARP → MAC-verified SSDP. `On` bypasses resolution and
 sends WoL. `Off` checks live power before using toggle key `KEY_POWER`.

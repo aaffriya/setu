@@ -200,6 +200,38 @@ func TestScheduleRunsOncePerMatchingMinute(t *testing.T) {
 	}
 }
 
+func TestFullQueueDoesNotConsumeCooldown(t *testing.T) {
+	bus := events.NewBus()
+	target := &testSwitch{id: "target", bus: bus}
+	mgr := manager.New(bus, []device.Device{target})
+	defer mgr.Close()
+	engine, err := New(
+		mgr,
+		bus,
+		NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	rule := webhookRule("cooldown", target.id)
+	rule.CooldownSeconds = 60
+	replaceRules(t, engine, rule)
+
+	for range cap(engine.queue) {
+		engine.queue <- runRequest{}
+	}
+	if _, err := engine.RunNow(rule.ID); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("full queue error = %v, want ErrQueueFull", err)
+	}
+
+	<-engine.queue
+	result, err := engine.RunNow(rule.ID)
+	if err != nil || result.Status != "queued" {
+		t.Fatalf("retry after queue space = %+v, %v; cooldown was consumed", result, err)
+	}
+}
+
 func TestStaleRevisionIsRejected(t *testing.T) {
 	target := &testSwitch{id: "target"}
 	engine := newTestEngine(t, target)

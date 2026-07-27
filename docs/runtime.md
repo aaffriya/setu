@@ -60,7 +60,7 @@ RAM-only diagnostics entry. Diagnostics never trigger I/O.
 
 - Stored identity is MAC, never IP.
 - WiZ and Samsung: cached IP → ARP → verified brand discovery.
-- Atomberg: cached IP → device beacon → ARP.
+- Atomberg: fresh beacon → cached IP → cold-cache beacon wait → ARP.
 - Any transport failure invalidates the cached IP.
 - Samsung Wake-on-LAN and generic WoL bypass IP resolution.
 

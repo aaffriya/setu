@@ -9,6 +9,8 @@ Bounded server-side rules that continue running when no browser is open.
 - Optional stable time up to 300 seconds, cooldown up to 3600 seconds, and
   per-action delay up to 60 seconds.
 - Two workers, queue size 32, last 20 run results in RAM.
+- Cooldown starts only after the queue accepts a run; a full queue does not
+  consume it.
 - A rule may call another enabled rule inline. Calls must be acyclic, at most 8
   levels, 128 actions, and 960 delay-seconds per run.
 - Power relations that form a device cycle are rejected.

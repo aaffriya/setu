@@ -75,8 +75,10 @@ the same broadcasts. The listener:
 - implements `resolver.Scanner` from recent sightings;
 - decodes and pushes out-of-band state changes to registered fan instances.
 
-Resolution is cached IP → beacon → ARP. Send failures clear the cache. `Poll`
-sends the no-op state request and waits for a newer listener revision.
+Resolution prefers a fresh beacon, then cached IP. With no cache it waits one
+beacon interval before ARP; this lets a new DHCP address replace stale cache.
+Send failures also clear the cache. `Poll` sends the no-op state request and
+waits for a newer listener revision.
 
 ## 5. Models
 

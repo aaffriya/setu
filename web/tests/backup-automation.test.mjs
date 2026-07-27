@@ -80,6 +80,30 @@ test('backup validation rejects malformed favourites and scenes before restore',
     ]),
     true,
   )
+  for (const command of [
+    { deviceId: 'fan', action: 'set_speed', value: 4 },
+    { deviceId: 'fan', action: 'set_sleep', value: true },
+    { deviceId: 'fan', action: 'set_light', value: false },
+    { deviceId: 'fan', action: 'set_timer', value: 6 },
+  ]) {
+    assert.equal(
+      validation.isScenesSection([{ id: 'fan-scene', name: 'Fan', commands: [command] }]),
+      true,
+      `${command.action} should survive localStorage and backup validation`,
+    )
+  }
+  for (const command of [
+    { deviceId: 'fan', action: 'set_speed', value: false },
+    { deviceId: 'fan', action: 'set_sleep', value: 1 },
+    { deviceId: 'fan', action: 'set_light', value: 'on' },
+    { deviceId: 'fan', action: 'set_timer', value: -1 },
+  ]) {
+    assert.equal(
+      validation.isScenesSection([{ id: 'fan-scene', name: 'Bad fan', commands: [command] }]),
+      false,
+      `${command.action} should still reject malformed values`,
+    )
+  }
   assert.equal(validation.isScenesSection([null]), false)
   assert.equal(
     validation.isScenesSection([

@@ -13,7 +13,7 @@ Brand drivers compose strategies:
 
 - WiZ: ARP then UDP MAC discovery.
 - Samsung: ARP then SSDP candidates verified by REST `wifiMac`.
-- Atomberg: its own beacon then ARP.
+- Atomberg: fresh beacon, cached IP fallback, brief beacon wait, then ARP.
 
 ARP is unavailable on non-Linux development hosts and only knows recent
 neighbors, so brand discovery must remain functional. Scanners repeat lossy

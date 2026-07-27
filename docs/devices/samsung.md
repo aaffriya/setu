@@ -58,8 +58,9 @@ Normal key click:
 `Cmd` can be `Click`, `Press`, or `Release`.
 
 **Every `Press` must receive a matching `Release`.** A stuck key can freeze the
-TV remote channel across reconnects. The driver guarantees release on an
-explicit call, before a newer key, or after the one-minute watchdog.
+TV remote channel across reconnects. The driver releases on an explicit call,
+before a newer key, on close during removal/rebuild/shutdown, or after the
+one-minute watchdog. Close releases first, then prevents reconnects.
 
 Keys must match `KEY_[A-Z0-9_]+`; `KEY_FACTORY` is rejected.
 

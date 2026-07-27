@@ -11,7 +11,7 @@
   }: { disabled?: boolean; onmodalchange?: (open: boolean) => void } = $props()
 
   let open = $state(false)
-  let selectedRoom = $state('')
+  let selectedRooms = $state<string[]>([])
   let picks = $state<Record<string, boolean>>({})
   let busy = $state(false)
   let result = $state('')
@@ -27,32 +27,61 @@
     }
     return [...names].sort()
   })
-  let roomDevices = $derived($devices.filter((device) => $rooms[device.id] === selectedRoom))
+  let roomDevices = $derived(
+    $devices.filter((device) => selectedRooms.includes($rooms[device.id] ?? '')),
+  )
   let switchableDevices = $derived(
     roomDevices.filter((device) => device.capabilities.includes('switch')),
   )
   let selectedDevices = $derived(switchableDevices.filter((device) => picks[device.id]))
+  let allRoomsSelected = $derived(
+    roomNames.length > 0 && roomNames.every((room) => selectedRooms.includes(room)),
+  )
   let allSelected = $derived(
     switchableDevices.length > 0 &&
       switchableDevices.every((device) => picks[device.id] === true),
   )
 
-  function chooseRoom(room: string) {
-    selectedRoom = room
-    picks = Object.fromEntries(
-      $devices
-        .filter(
-          (device) => $rooms[device.id] === room && device.capabilities.includes('switch'),
-        )
-        .map((device) => [device.id, true]),
-    )
+  function chooseRooms(nextRooms: string[]) {
+    const previous = new Set(selectedRooms)
+    const selected = new Set(nextRooms)
+    const nextPicks = { ...picks }
+
+    selectedRooms = roomNames.filter((room) => selected.has(room))
+    for (const device of $devices) {
+      const room = $rooms[device.id]
+      if (
+        !room ||
+        !selected.has(room) ||
+        !device.capabilities.includes('switch')
+      ) {
+        delete nextPicks[device.id]
+      } else if (!previous.has(room)) {
+        nextPicks[device.id] = true
+      }
+    }
+    picks = nextPicks
     result = ''
+  }
+
+  function toggleRoom(room: string) {
+    chooseRooms(
+      selectedRooms.includes(room)
+        ? selectedRooms.filter((selected) => selected !== room)
+        : [...selectedRooms, room],
+    )
+  }
+
+  function toggleAllRooms() {
+    chooseRooms(allRoomsSelected ? [] : roomNames)
   }
 
   function openDialog() {
     if (disabled || busy || roomNames.length === 0) return
     haptics.tap()
-    chooseRoom(roomNames[0])
+    selectedRooms = []
+    picks = {}
+    chooseRooms([roomNames[0]])
     open = true
   }
 
@@ -103,10 +132,13 @@
   }
 
   $effect(() => {
-    if (open && !roomNames.includes(selectedRoom)) {
-      if (roomNames.length) chooseRoom(roomNames[0])
-      else open = false
+    if (!open) return
+    if (roomNames.length === 0) {
+      open = false
+      return
     }
+    const availableRooms = selectedRooms.filter((room) => roomNames.includes(room))
+    if (availableRooms.length !== selectedRooms.length) chooseRooms(availableRooms)
   })
   $effect(() => onmodalchange(open))
   onDestroy(() => onmodalchange(false))
@@ -174,22 +206,40 @@
         >×</button>
       </div>
       <p class="mt-1 text-xs leading-relaxed text-ink/45">
-        Choose exactly which on/off devices receive this room action.
+        Select one or more rooms, then choose exactly which on/off devices receive the action.
       </p>
 
-      <label for="room-control-room" class="mt-3 text-xs font-medium text-ink/55">Room</label>
-      <select
-        id="room-control-room"
-        value={selectedRoom}
-        onchange={(event) => chooseRoom(event.currentTarget.value)}
-        disabled={busy}
-        class="mt-1 w-full rounded-xl border border-ink/10 bg-ink/5 px-3 py-2 text-sm text-ink/75 outline-none"
-      >
-        {#each roomNames as room (room)}<option value={room}>{room}</option>{/each}
-      </select>
+      <div class="mt-3 flex items-center justify-between gap-2">
+        <span class="text-xs font-medium text-ink/55">Rooms</span>
+        <button
+          type="button"
+          onclick={toggleAllRooms}
+          disabled={busy}
+          class="text-xs font-medium text-indigo-500 disabled:opacity-40 dark:text-indigo-300"
+        >{allRoomsSelected ? 'Clear rooms' : 'Select all rooms'}</button>
+      </div>
+      <div class="mt-1.5 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto overscroll-contain rounded-xl bg-ink/[0.03] p-1.5">
+        {#each roomNames as room (room)}
+          <label class="flex min-w-0 max-w-full items-center gap-2 rounded-lg bg-ink/5 px-2.5 py-2 text-ink/70">
+            <input
+              type="checkbox"
+              checked={selectedRooms.includes(room)}
+              onchange={() => toggleRoom(room)}
+              disabled={busy}
+              class="h-4 w-4 shrink-0 accent-indigo-500"
+            />
+            <span class="truncate text-xs font-medium">{room}</span>
+          </label>
+        {/each}
+      </div>
 
       <div class="mt-3 flex items-center justify-between">
-        <span class="text-xs font-medium text-ink/55">Targets</span>
+        <span class="text-xs font-medium text-ink/55">
+          Targets
+          {#if switchableDevices.length}
+            <span class="font-normal text-ink/35">({selectedDevices.length}/{switchableDevices.length})</span>
+          {/if}
+        </span>
         {#if switchableDevices.length}
           <button
             type="button"
@@ -215,10 +265,15 @@
               class="h-4 w-4 shrink-0 accent-indigo-500"
             />
             <span class="min-w-0 flex-1 truncate text-sm">{device.name || device.id}</span>
+            {#if selectedRooms.length > 1}
+              <span class="max-w-20 shrink-0 truncate rounded-full bg-ink/5 px-1.5 py-0.5 text-[10px] text-ink/45">{$rooms[device.id]}</span>
+            {/if}
             {#if !switchable}<span class="shrink-0 text-[10px]">No on/off</span>{/if}
           </label>
         {:else}
-          <p class="px-2 py-5 text-center text-xs text-ink/40">No devices in this room.</p>
+          <p class="px-2 py-5 text-center text-xs text-ink/40">
+            {selectedRooms.length ? 'No devices in the selected rooms.' : 'Select at least one room.'}
+          </p>
         {/each}
       </div>
 

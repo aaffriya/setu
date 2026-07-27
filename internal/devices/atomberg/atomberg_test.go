@@ -278,6 +278,29 @@ func newTestFan(t *testing.T) (*Fan, *Discoverer) {
 	return f, d
 }
 
+func TestResolveIPReplacesStaleCacheWithFreshBeacon(t *testing.T) {
+	f, d := newTestFan(t)
+	stale := net.IPv4(192, 0, 2, 10)
+	f.setIP(stale)
+
+	fresh := net.IPv4(192, 0, 2, 25)
+	d.recordBeacon(beacon{MAC: testMAC, Series: "R1"}, fresh)
+
+	got, err := f.resolveIP()
+	if err != nil {
+		t.Fatalf("resolve IP: %v", err)
+	}
+	if !got.Equal(fresh) {
+		t.Fatalf("resolved %v, want fresh beacon address %v instead of cached %v", got, fresh, stale)
+	}
+	f.mu.Lock()
+	cached := append(net.IP(nil), f.ip...)
+	f.mu.Unlock()
+	if !cached.Equal(fresh) {
+		t.Fatalf("cached IP = %v, want %v", cached, fresh)
+	}
+}
+
 func TestFanRejectsOutOfRangeValuesBeforeTheTransport(t *testing.T) {
 	f, _ := newTestFan(t)
 

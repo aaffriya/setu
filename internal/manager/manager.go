@@ -27,12 +27,40 @@ type Manager struct {
 	order   []string                 // device ids in config order
 	devices map[string]device.Device // id → device
 	latest  map[string]device.State  // id → most recent state (event-driven)
-	ops     map[string]*sync.Mutex   // one command/poll operation at a time per device
+	ops     map[string]*deviceOperation
 	health  map[string]DeviceDiagnostics
 
 	unsubscribe func()
 	done        chan struct{}
+	closed      bool
 }
+
+// deviceOperation owns the device instance used by serialized hardware work.
+// A caller may retain this handle while Remove or Replace waits for its mutex;
+// active/device are therefore checked only after locking it.
+type deviceOperation struct {
+	mu     sync.Mutex
+	device device.Device
+	active bool
+}
+
+func newDeviceOperation(d device.Device) *deviceOperation {
+	return &deviceOperation{device: d, active: true}
+}
+
+// lockDevice returns the current live instance while keeping the operation
+// locked. A stale handle captured before removal is rejected rather than being
+// allowed to command a device that has already been closed.
+func (op *deviceOperation) lockDevice() (device.Device, bool) {
+	op.mu.Lock()
+	if !op.active {
+		op.mu.Unlock()
+		return nil, false
+	}
+	return op.device, true
+}
+
+func (op *deviceOperation) unlock() { op.mu.Unlock() }
 
 // New creates a Manager over the given devices and starts consuming state
 // events. It works correctly with zero devices. Call Close to stop it.
@@ -41,7 +69,7 @@ func New(bus *events.Bus, devices []device.Device) *Manager {
 		bus:     bus,
 		devices: make(map[string]device.Device, len(devices)),
 		latest:  make(map[string]device.State, len(devices)),
-		ops:     make(map[string]*sync.Mutex, len(devices)),
+		ops:     make(map[string]*deviceOperation, len(devices)),
 		health:  make(map[string]DeviceDiagnostics, len(devices)),
 		done:    make(chan struct{}),
 	}
@@ -49,7 +77,7 @@ func New(bus *events.Bus, devices []device.Device) *Manager {
 		m.order = append(m.order, d.ID())
 		m.devices[d.ID()] = d
 		m.latest[d.ID()] = d.State() // seed cache from initial device state
-		m.ops[d.ID()] = &sync.Mutex{}
+		m.ops[d.ID()] = newDeviceOperation(d)
 		_, pollable := d.(device.Pollable)
 		m.health[d.ID()] = DeviceDiagnostics{ID: d.ID(), Pollable: pollable}
 	}
@@ -122,14 +150,38 @@ func (m *Manager) resyncLatest() {
 }
 
 // Close stops the manager's event consumer and releases whatever the devices
-// hold open. Safe to call once.
+// hold open. It waits for each in-flight command/poll before closing that
+// device, and rejects new operations as soon as shutdown starts.
 func (m *Manager) Close() {
-	close(m.done)
-	if m.unsubscribe != nil {
-		m.unsubscribe()
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
 	}
-	for _, d := range m.Devices() {
-		closeDevice(d)
+	m.closed = true
+	ops := make([]*deviceOperation, 0, len(m.order))
+	for _, id := range m.order {
+		if op := m.ops[id]; op != nil {
+			ops = append(ops, op)
+		}
+	}
+	unsubscribe := m.unsubscribe
+	m.unsubscribe = nil
+	m.mu.Unlock()
+
+	close(m.done)
+	if unsubscribe != nil {
+		unsubscribe()
+	}
+	for _, op := range ops {
+		dev, active := op.lockDevice()
+		if !active {
+			continue
+		}
+		op.active = false
+		op.device = nil
+		closeDevice(dev)
+		op.unlock()
 	}
 }
 
@@ -139,6 +191,9 @@ func (m *Manager) Close() {
 func (m *Manager) Add(d device.Device) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return fmt.Errorf("manager: closed")
+	}
 	id := d.ID()
 	if _, exists := m.devices[id]; exists {
 		return fmt.Errorf("manager: device %q already exists", id)
@@ -146,7 +201,7 @@ func (m *Manager) Add(d device.Device) error {
 	m.order = append(m.order, id)
 	m.devices[id] = d
 	m.latest[id] = d.State()
-	m.ops[id] = &sync.Mutex{}
+	m.ops[id] = newDeviceOperation(d)
 	_, pollable := d.(device.Pollable)
 	m.health[id] = DeviceDiagnostics{ID: id, Pollable: pollable}
 	return nil
@@ -156,23 +211,38 @@ func (m *Manager) Add(d device.Device) error {
 // poll for it finishes first: they hold the device's operation lock, and this
 // takes it before letting go of the device.
 func (m *Manager) Remove(id string) bool {
-	m.mu.Lock()
-	dev, ok := m.devices[id]
-	op := m.ops[id]
-	if ok {
-		delete(m.devices, id)
-		delete(m.latest, id)
-		delete(m.ops, id)
-		delete(m.health, id)
-		m.order = withoutID(m.order, id)
-	}
-	m.mu.Unlock()
-	if !ok {
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
 		return false
 	}
-	op.Lock()
+	op := m.ops[id]
+	m.mu.RUnlock()
+	if op == nil {
+		return false
+	}
+
+	dev, active := op.lockDevice()
+	if !active {
+		return false
+	}
+	defer op.unlock()
+
+	m.mu.Lock()
+	if m.ops[id] != op {
+		m.mu.Unlock()
+		return false
+	}
+	delete(m.devices, id)
+	delete(m.latest, id)
+	delete(m.ops, id)
+	delete(m.health, id)
+	m.order = withoutID(m.order, id)
+	op.active = false
+	op.device = nil
+	m.mu.Unlock()
+
 	closeDevice(dev)
-	op.Unlock()
 	return true
 }
 
@@ -181,23 +251,37 @@ func (m *Manager) Remove(id string) bool {
 // card until the next poll.
 func (m *Manager) Replace(d device.Device) bool {
 	id := d.ID()
-	m.mu.Lock()
-	previous, ok := m.devices[id]
-	op := m.ops[id]
-	if ok {
-		m.devices[id] = d
-		_, pollable := d.(device.Pollable)
-		entry := m.health[id]
-		entry.Pollable = pollable
-		m.health[id] = entry
-	}
-	m.mu.Unlock()
-	if !ok {
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
 		return false
 	}
-	op.Lock()
+	op := m.ops[id]
+	m.mu.RUnlock()
+	if op == nil {
+		return false
+	}
+
+	previous, active := op.lockDevice()
+	if !active {
+		return false
+	}
+	defer op.unlock()
+
+	m.mu.Lock()
+	if m.ops[id] != op {
+		m.mu.Unlock()
+		return false
+	}
+	op.device = d
+	m.devices[id] = d
+	_, pollable := d.(device.Pollable)
+	entry := m.health[id]
+	entry.Pollable = pollable
+	m.health[id] = entry
+	m.mu.Unlock()
+
 	closeDevice(previous)
-	op.Unlock()
 	return true
 }
 
@@ -232,15 +316,21 @@ func (m *Manager) Device(id string) (device.Device, bool) {
 // still fully concurrent.
 func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, error) {
 	m.mu.RLock()
-	dev, ok := m.devices[id]
+	if m.closed {
+		m.mu.RUnlock()
+		return DeviceView{}, false, nil
+	}
 	op := m.ops[id]
 	m.mu.RUnlock()
-	if !ok {
+	if op == nil {
 		return DeviceView{}, false, nil
 	}
 
-	op.Lock()
-	defer op.Unlock()
+	dev, active := op.lockDevice()
+	if !active {
+		return DeviceView{}, false, nil
+	}
+	defer op.unlock()
 	if err := control.Execute(dev, req); err != nil {
 		m.recordCommand(id, req.Action, err)
 		// Invalid input never reached the transport, so there is nothing to
@@ -275,14 +365,20 @@ func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, err
 // changed. The returned pollable flag is false for devices without Pollable.
 func (m *Manager) Poll(id string) (state device.State, pollable, changed bool, err error) {
 	m.mu.RLock()
-	dev, ok := m.devices[id]
-	op := m.ops[id]
-	m.mu.RUnlock()
-	if !ok {
+	if m.closed {
+		m.mu.RUnlock()
 		return device.State{}, false, false, nil
 	}
-	op.Lock()
-	defer op.Unlock()
+	op := m.ops[id]
+	m.mu.RUnlock()
+	if op == nil {
+		return device.State{}, false, false, nil
+	}
+	dev, active := op.lockDevice()
+	if !active {
+		return device.State{}, false, false, nil
+	}
+	defer op.unlock()
 	return m.pollLocked(id, dev)
 }
 

@@ -18,6 +18,7 @@ replaces the light toggle with brightness and warm/cool/daylight scenes.
 Series-to-model mapping is explicit in `modelFor`; unknown series are scanned
 with no model.
 
-Resolution is cached IP → fan beacon → ARP. Commands have no acknowledgement;
-`Poll` sends `speedDelta:0` and waits for a newer broadcast. The driver is
-simulator-verified end to end but not yet verified on physical hardware.
+Resolution is fresh beacon → cached IP → cold-cache beacon wait → ARP. Commands
+have no acknowledgement; `Poll` sends `speedDelta:0` and waits for a newer
+broadcast. The driver is simulator-verified end to end but not yet verified on
+physical hardware.
