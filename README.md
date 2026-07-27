@@ -1,501 +1,193 @@
 # Setu — सेतु
 
-> A tiny, self-hosted bridge from your local IoT devices to a fast, app-like web UI.
+Setu is a small, self-hosted bridge for controlling local IoT devices from a
+fast web app. One static Go binary serves the embedded Svelte PWA, JSON API,
+WebSocket, device drivers, and bounded automation engine.
 
-**Setu** (Sanskrit *सेतु*, "bridge") is a lightweight home-automation server designed to
-run on low-resource hardware — a MikroTik RouterOS container, an OpenWrt router, a Raspberry
-Pi (~256–512 MB RAM). It controls local devices and serves a small PWA control panel for
-phones and desktops.
+It is designed for router-class hardware and uses no cloud service, database,
+reverse proxy, or process supervisor.
 
-It is a **single static Go binary**. That one binary serves the embedded web app, the JSON
-API, and a WebSocket for live updates. No NGINX, no separate web server, no process
-supervisor.
+## Supported devices
 
-> **Status.** The full architecture is in place, including bounded local automation, plus three real device integrations —
-> **Philips WiZ** bulbs, **Samsung Tizen** TVs, and **Atomberg** BLDC fans (see [Supported devices](#supported-devices)).
-> Add more one at a time, by brand and model, following the `example` template and the three
-> real packages. See [Adding a device](#adding-a-device).
-
----
-
-## How it fits together
-
-```
-                         ┌───────────────────────── setu (one Go binary) ─────────────────────────┐
-   browser / PWA  ◀──────┤  net/http (one mux, one listener: TCP or unix socket)                   │
-        │  HTTPS/tunnel  │   ├── /            → embedded Svelte build  (web/dist via //go:embed)    │
-        │               │   ├── /api/*       → JSON API        ┐  bearer-token auth                │
-        │  WebSocket     │   └── /ws          → live events     ┘                                   │
-        └───────────────┤                                                                          │
-                         │   api → manager (registry, command routing, state snapshot)             │
-                         │            │              ▲                                              │
-                         │   commands │              │ state-change events                         │
-                         │            ▼              │                                              │
-                         │        devices ──────▶ event bus (Go channels) ◀── state poller         │
-                         │            │                       └── automation (time/device/webhook)  │
-                         │   MAC→IP   ▼                                                             │
-                         │        resolver (ARP / brand discovery → IP)                            │
-                         └──────────────────────────────────────────────────────────────────────────┘
-```
-
-**Event-driven core.** Commands flow *in* (HTTP → manager → device); state-change events
-flow *out* (device/poller → event bus → WebSocket → browser). The event bus is a tiny
-channel-based pub/sub. This powers both the live UI and the automation engine without putting
-rule behavior in device code.
-
-**Interfaces only at the real seams** (idiomatic Go: composition, not inheritance):
-
-| Seam | Interface | Why |
+| Brand / model key | Capabilities | Local transport |
 | --- | --- | --- |
-| Device capabilities | `Switchable`, `Dimmable`, `ColorControl` (in `internal/device`) | New device features without changing existing devices; the API discovers support via type assertions |
-| Address resolution | `Resolver` + `Scanner` (in `internal/resolver`) | Swap MAC→IP strategies (ARP + per-brand discovery now; DHCP leases later), and let a brand list what is on the network but not yet configured |
-| Front-end protocol | the `api` package vs. the manager + event bus | A second protocol (e.g. an Apple HomeKit bridge) can be added beside `api`, talking to the same manager/bus, with no device-code changes |
+| `WiZ/color_bulb` | power, brightness, RGB, colour temperature, scenes | UDP `38899` |
+| `WiZ/tunable_white` | power, brightness, colour temperature, white scenes | UDP `38899` |
+| `Samsung/tizen` | power, volume, remote keys/hold, apps, text | REST `8001`, WSS `8002`, UPnP `9197`, WoL |
+| `Atomberg/fan` | power, speed, sleep, timer, light toggle | UDP `5600`/`5625` |
+| `Atomberg/fan_light` | power, speed, sleep, timer, dimmable light, light modes | UDP `5600`/`5625` |
+| `wol/device` | Wake-on-LAN | UDP broadcast |
 
-### Repository layout
+WiZ and Samsung drivers have been verified with physical hardware. Atomberg is
+covered end to end with a protocol-faithful simulator but still needs physical
+hardware verification.
 
-```
-setu/
-├── cmd/setu/main.go        # composition root: read env, wire deps, register brands, serve
-├── internal/
-│   ├── api/                # http handlers, ws hub, bearer auth, routing, static embed serving
-│   ├── automation/         # bounded schedules, device relations, incoming webhook triggers
-│   ├── control/            # shared validated command execution (API + automation)
-│   ├── manager/            # device registry, command routing, event-driven state snapshot, poller
-│   ├── events/             # channel-based pub/sub bus + event types
-│   ├── device/             # capability interfaces + Device + Color/State
-│   ├── resolver/           # Resolver + Scanner interfaces, ARP impl (DHCP-lease impl: future)
-│   ├── inventory/          # the devices you added: stored specs ↔ live devices
-│   ├── store/              # the one state file (devices + automations), written atomically
-│   ├── devices/
-│   │   └── example/        # TEMPLATE device package — the blueprint for real devices
-│   └── config/             # environment settings + device spec + (brand,model) factory
-├── web/                    # Svelte 5 + Vite + Tailwind PWA (built → web/dist, embedded)
-│   ├── embed.go            #   //go:embed of web/dist
-│   ├── src/                #   App.svelte, lib/{api,store}.ts, lib/components/*
-│   └── public/             #   manifest.webmanifest, service-worker.js, icons
-├── example.env             # every setting with its default (documentation; Setu doesn't read it)
-├── Dockerfile              # multi-stage: build web → build Go (embed) → distroless
-├── Makefile
-└── go.mod
-```
+## Run
 
----
+### Docker
 
-## Build & run
-
-### With Docker (recommended)
-
-Setu needs the **host network** to reach LAN devices and read the ARP table.
+LAN discovery, ARP, UDP broadcasts, and Wake-on-LAN need host/L2 network access.
 
 ```sh
-make docker                       # or: docker build -t setu .
+docker build -t setu .
 docker run --rm --network host \
-  -e SETU_TOKEN=your-secret \
+  -e SETU_TOKEN=replace-this \
   -v setu-state:/var/lib/setu \
   setu
 ```
 
-Open `http://<host>` (port 80 by default), enter your token, and you'll see the empty
-dashboard — then add your first device from **Settings → Devices**.
+Open `http://<host>`, enter the token, then add devices from **Settings →
+Devices**.
 
-### From source
+### Source
 
-Requires Go 1.23+ and Node 20+.
-
-```sh
-make build        # builds the frontend, then the binary into ./bin/setu
-make run          # build + run on :8080 with its state under ./tmp/state
-```
-
-`make build-arm64` cross-compiles a static `linux/arm64` binary for a MikroTik/OpenWrt/Pi.
-
-### Hot-reload development
+Requires Go 1.23+ and Node `20.19+` or `22.12+`.
 
 ```sh
-# terminal 1 — backend on :8080 (unprivileged), with its own state
-SETU_PORT=8080 SETU_STATE_DIR=$PWD/tmp/state go run ./cmd/setu
-# terminal 2 — frontend (Vite proxies /api and /ws to :8080)
-cd web && npm install && npm run dev
+make build
+SETU_TOKEN=replace-this SETU_PORT=8080 make run
 ```
 
-> The default port is **80** (privileged), which is why dev sets `SETU_PORT=8080` to match
-> the Vite proxy above.
+`make build` builds `web/dist` and embeds it into `bin/setu`.
 
-> `go build ./...` works on a fresh checkout even before the frontend is built: the embed
-> contains only a `.gitkeep`, and the server serves a small built-in placeholder page until
-> you run `make web`.
+For frontend hot reload:
 
----
+```sh
+# terminal 1
+SETU_TOKEN=dev SETU_PORT=8080 SETU_STATE_DIR="$PWD/tmp/state" go run ./cmd/setu
+
+# terminal 2
+cd web
+npm install
+npm run dev
+```
+
+Vite proxies `/api` and `/ws` to `localhost:8080`.
 
 ## Configuration
 
-There is **no configuration file**. Server settings come from the environment —
-every variable optional, each falling back to the default Setu has always shipped —
-and your devices are added from the app itself.
-[`example.env`](example.env) lists every variable with its default and is safe to copy.
+Setu does not read a config file. All settings are optional environment
+variables; [`example.env`](example.env) is a copyable reference.
 
-```sh
-setu                       # all defaults: port 80, token CHANGE_ME, 45s polling
-SETU_TOKEN=s3cret SETU_PORT=8080 SETU_STATE_DIR=/etc/setu setu
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SETU_TOKEN` | `CHANGE_ME` | bearer token for `/api` and `/ws`; change it |
+| `SETU_INTERFACE` | all interfaces | TCP bind address |
+| `SETU_PORT` | `80`, or `443` with TLS | TCP port |
+| `SETU_SOCKET` | unset | Unix socket; overrides interface and port |
+| `SETU_TLS_CERT`, `SETU_TLS_KEY` | unset | PEM pair for native HTTPS; both are required |
+| `SETU_POLL_INTERVAL` | `45s` | active poll cadence; `0` disables scheduled polling only |
+| `SETU_STATE_DIR` | OS temp directory | location for persistent state and Samsung tokens |
+
+Set `SETU_STATE_DIR` to durable storage. The temporary default is not guaranteed
+to survive a reboot.
+
+## State and backup
+
+`$SETU_STATE_DIR/setu.json` is the only Setu state document. It contains:
+
+- the device inventory;
+- the automation rule set.
+
+Writes use a mode-`0600` temporary file plus rename. Samsung pairing tokens are
+separate mode-`0600` files named `setu-samsung-<id>.token` in the same directory.
+
+The UI creates a versioned JSON backup with selected sections: devices,
+favourites, rooms, manual scenes, layout/theme, and automations. A restore
+replaces only sections present in the file. It never exports the Setu access
+token, Samsung plaintext pairing tokens, live state, caches, or run history.
+
+## Architecture
+
+```text
+browser/PWA
+  ├─ HTTP /api ──> API ──> manager ──> control ──> device capability
+  └─ WebSocket <── event bus <── commands, polls, device push, automations
+                                  │
+MAC ──> ARP or brand discovery ──> current IP
 ```
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `SETU_TOKEN` | `CHANGE_ME` | Bearer token for `/api` and `/ws`. Setu warns on every start while it is the default — set a real one. |
-| `SETU_PORT` | `80`, or `443` with TLS | TCP port; the default follows the scheme, like a browser. Binding below 1024 needs privilege (run as root or grant `CAP_NET_BIND_SERVICE`). |
-| `SETU_INTERFACE` | all interfaces | Bind address (a network interface's IP, e.g. `192.168.1.10`). Use `127.0.0.1` for loopback only. |
-| `SETU_SOCKET` | — | Unix-domain socket path (e.g. `/run/setu.sock`) for tunnel-only, zero-open-port access. Overrides interface/port. |
-| `SETU_TLS_CERT` / `SETU_TLS_KEY` | — | PEM cert + key. Set **both** to serve HTTPS (stdlib TLS, no proxy) — needed for the PWA's secure-context features, and it moves the default port to `443`. Omit both for plain HTTP. No ACME; bring your own cert (or use Tailscale). |
-| `SETU_POLL_INTERVAL` | `45s` | Active-use cadence. After 2m without app activity or device changes, polling backs off through `5m`, `10m`, `30m`, `1h`, then `6h`. Opening/using the app resets it; foreground/manual refresh polls immediately. `0` disables only scheduled polling. |
-| `SETU_STATE_DIR` | OS temp dir | Where Setu keeps its state. **Set this** to something persistent, or your devices and automations will not survive a reboot. |
+Important boundaries:
 
-### State — the one file Setu writes
+- `internal/device`: small opt-in capability interfaces.
+- `internal/resolver`: MAC-to-IP resolution and discovery scanning.
+- `internal/api`: one front-end protocol over the manager and event bus.
+- `internal/manager`: live registry, serialized per-device operations, cached
+  snapshots, diagnostics, and adaptive polling.
+- `internal/automation`: server-side schedules, device-state edges, incoming
+  webhooks, conditions, ordered actions, and acyclic nested rules.
 
-`$SETU_STATE_DIR/setu.json` holds your **devices** and your **automations**, written
-atomically (temp file + rename, mode `0600`). That file plus the environment above is
-a complete installation — which is why backup is a copy of two things, not a
-filesystem tour. Samsung pairing tokens live beside it as `setu-samsung-<id>.token`.
+See [`docs/runtime.md`](docs/runtime.md) before changing cross-package command,
+polling, WebSocket, cache, or address-resolution behavior.
 
-Devices are added from **Settings → Devices**: scan the network and tap Add, or type
-one in by hand for hardware that answers no scan (a Wake-on-LAN target). Nothing to
-edit on disk, and nothing to restart.
+## Device identity and discovery
 
-### HTTP / WebSocket API
+Stored device specs contain `id`, `brand`, `model`, optional `series`, `name`,
+and `mac`—never an IP. Drivers cache the current address and clear it after a
+transport failure.
 
-Admin endpoints require `Authorization: Bearer <token>` (the WebSocket also accepts `?token=`).
-An incoming automation hook accepts only its separate per-rule bearer token.
+- WiZ: ARP, then UDP discovery matched by reported MAC.
+- Samsung: ARP, then SSDP candidates verified through `/api/v2/` `wifiMac`.
+- Atomberg: the fan's UDP beacon, then ARP.
+- WoL: no IP resolution.
 
-| Method & path | Body | Result |
-| --- | --- | --- |
-| `GET /api/devices` | — | Cached `[]DeviceView` (id, name, brand, model, `series` (optional), mac, capabilities, optional `color_temp_min`/`color_temp_max`, state) — `[]` when none. Add `?refresh=true` for a one-shot hardware poll first. |
-| `POST /api/activity` | — | Keeps the active polling cadence warm without polling hardware (`204`). |
-| `POST /api/devices/{id}/command` | `{"action":"on"}` / `{"action":"off"}` | updated `DeviceView` |
-| | `{"action":"set_brightness","value":70}` | (0–100) |
-| | `{"action":"set_color","value":{"r":255,"g":120,"b":0}}` | |
-| | `{"action":"set_color_temp","value":2700}` | white temperature (Kelvin) |
-| | `{"action":"set_scene","value":11}` | preset scene id (see device `scenes`) |
-| | `{"action":"set_scene_speed","value":120}` | dynamic-scene speed (10–200) |
-| | `{"action":"volume_up"}` / `{"action":"volume_down"}` / `{"action":"mute"}` | relative volume / mute toggle |
-| | `{"action":"set_volume","value":35}` | absolute volume (0–100) |
-| | `{"action":"key","value":"KEY_HOME"}` | named remote key (tap) |
-| | `{"action":"key_down","value":"KEY_RIGHT"}` / `{"action":"key_up","value":"KEY_RIGHT"}` | press-and-hold a key (the device auto-releases a hold the client never ends) |
-| | `{"action":"send_text","value":"breaking bad"}` | type into the device's focused text field |
-| `POST /api/discovery/scan` | — | ask every brand what is on the LAN → `{candidates, errors}`; each candidate is annotated `configured` / `device_id` and given a suggested config `id`. One scan at a time (`409`) |
-| `GET /ws` | — | WebSocket; pushes `{type,device_id,state}` (`snapshot` on connect, then `state_changed`) |
-| `GET` / `PUT /api/automations` | complete revisioned rule state | list or atomically replace automations |
-| `GET /api/automations/export` | — | backup form (hashed webhook secrets only) |
-| `POST /api/automations/{id}/run` | — | queue a manual run |
-| `POST /api/automations/{id}/token` | — | rotate and return a webhook token once |
-| `POST /api/automation-hooks/{id}` | optional body (max 4 KB, ignored) | trigger one predefined rule with its per-rule bearer token |
+**Settings → Devices → Scan network** runs registered brand scanners in
+parallel. Unsupported hardware is shown with no model instead of being guessed.
+Adding a device is a separate explicit action.
 
-The command body is **uniform and device-agnostic**. The API checks capability support with
-type assertions and returns `400` if a device doesn't support an action (e.g. brightness on a
-plain switch), `404` for an unknown device, `502` for a device/IO failure. Capabilities reported
-today: `switch`, `brightness`, `color`, `color_temp`, `scene`, `volume`, `key`, `key_hold`,
-`app`, `text`. A device that has `scene` also lists its presets in the `scenes` field of
-`GET /api/devices`.
+## Adding a driver
 
----
+1. Copy `internal/devices/example` to `internal/devices/<brand>`.
+2. Put shared transport, address caching, and state publishing in an embedded
+   brand `base`.
+3. Implement only the capability interfaces each model supports and add
+   compile-time interface assertions.
+4. Implement `Poll` only when state can be read.
+5. Export constructors plus `Register`, then register the brand in
+   `cmd/setu/main.go`.
+6. If discovery is possible, implement `resolver.Scanner` and register the
+   scanner there too.
+7. Add protocol tests, focused driver tests, and update the protocol document.
 
-## Lightweight automation and backup
+Existing capabilities render automatically. A new capability must be wired
+through `internal/device`, `internal/control`, manager metadata when applicable,
+automation validation, web API types and optimistic state, a reachable
+`DeviceCard` group/control, backup restore validation, and tests.
 
-The Settings automation editor supports one trigger per rule: a minute-level schedule, a
-device power-state edge, or an incoming webhook. Rules have up to four simple AND conditions
-and sixteen ordered, idempotent actions. The runtime is deliberately bounded: 64 rules, two
-fixed workers, a 32-entry queue, and the last 20 results in RAM only. Device relations that
-form a power cycle are rejected. The event subscriber can request one snapshot resync after
-overflow, so it needs no reconciliation ticker.
-An action can run another automation inline while preserving action order; nested call graphs
-must be acyclic, may be at most eight rules deep, and share 128-action / 960-second delay
-budgets per run.
+## Automation limits
 
-Webhook tokens are generated independently for each rule. The plaintext is returned only
-when created/rotated; Setu stores a SHA-256 hash. Call the shown URL with
-`Authorization: Bearer <webhook-token>` and optionally an `Idempotency-Key`. Keep Setu on a
-trusted LAN/VPN or HTTPS tunnel; never expose it raw to the internet.
+Automation is intentionally bounded for router hardware:
 
-Settings creates one versioned JSON backup. Export checkboxes select favourites, rooms,
-manual scenes, layout/theme, and/or automations. Restore has one action: every section present
-in the file replaces that type; omitted sections stay untouched. Access tokens, live device
-state/cache, IP/MAC configuration, pairing-token plaintext, and run history are never exported.
+- 64 rules, 4 AND conditions, and 16 ordered actions per rule;
+- 2 workers, a 32-run queue, and 20 RAM-only results;
+- schedule, power-state, or authenticated webhook triggers;
+- acyclic nested rules, at most 8 levels and 128 total actions per run;
+- no scripts, expression language, retries, outbound HTTP, or persistent
+  history.
 
----
+Webhook bodies are ignored; callers can only trigger predefined actions.
+Plaintext webhook tokens are returned only when created or rotated, while the
+state file stores SHA-256 hashes.
 
-## Device addressing — MAC is primary, IP is resolved at runtime
+## Network and browser requirements
 
-IoT devices keep a fixed **MAC** but their **IP can change** (DHCP). So in Setu:
-
-- `mac` is the **required, stable** identity in config; device IPs are never stored there.
-- You can't address a device by MAC at the application layer (MAC is Layer 2). At runtime Setu
-  resolves the current IP from the MAC, **caches** it, and **re-resolves on send failure** (the
-  device may have a new lease). The `example` template shows this pattern (`resolveIP` /
-  `invalidateIP`).
-
-Resolution sits behind one interface:
-
-```go
-type Resolver interface {
-    Lookup(mac string) (net.IP, error)
-}
-```
-
-- **ARP table** — the default, built now. Reads `/proc/net/arp` and matches the MAC. Requires
-  host networking and only knows devices the host has talked to recently.
-- **Per-device discovery** — built per brand. WiZ answers a UDP broadcast with its MAC;
-  Samsung TVs answer SSDP and are then verified through `/api/v2/`'s `wifiMac` before their
-  current IP is cached.
-- **DHCP lease table** — *future.* OpenWrt `/tmp/dhcp.leases`, RouterOS via API. Same interface.
-
-The same seam runs the other way round for devices that are **not configured yet**:
-
-```go
-type Scanner interface {
-    Scan(ctx context.Context) ([]Candidate, error)
-}
-```
-
-Settings → **Devices** (or `POST /api/discovery/scan`) asks every brand what is on the network,
-marks what you have already added, and lets you add the rest with one tap — brand, model, MAC
-and a starting name all filled in from what the device reported. Devices whose model has no
-driver are listed too, plainly marked, rather than guessed at.
-
----
-
-## Listener options
-
-The `listen` block:
-
-- **TCP (default)** — `port` (default `80`) on `interface`. **Blank `interface` = all
-  interfaces;** set it to one address (e.g. `127.0.0.1` for loopback) to **bind to a trusted
-  interface**, and secure it with a VPN (WireGuard / Tailscale) or a firewall. **Never expose
-  Setu raw to the internet.** Binding to port 80 needs privilege (run as root or grant
-  `CAP_NET_BIND_SERVICE`).
-- **Unix socket** — set `socket: /run/setu.sock` for zero open ports; reach it over an SSH
-  tunnel (`ssh -L 8080:/run/setu.sock user@router`). Laptop-friendly; phones need a tunnel app.
-  When set, it overrides `interface`/`port`.
-- **TLS (optional)** — set `tls.cert` **and** `tls.key` (PEM paths) and Setu serves HTTPS
-  itself (stdlib `crypto/tls`, no proxy). Leave them unset and it serves plain HTTP exactly as
-  before. This is what makes the LAN address a *secure context* so the PWA can install and run
-  its service worker (see below). Bring your own cert (self-signed is fine on a LAN) — there is
-  **no** ACME/Let's Encrypt auto-cert.
-
-Graceful shutdown is handled on `SIGINT`/`SIGTERM`.
-
-### Reaching Setu by name (e.g. `http://setu.lan`)
-
-Setu's server answers on **any hostname** that resolves to its IP — no Setu config is
-needed for this; it's purely **DNS**. With port 80 as the default, `http://setu.lan` (no
-`:port`) just works once the name resolves. `.lan` is your router's local domain, so set it up
-there:
-
-- **Router DNS (recommended).** On most home routers / OpenWrt (dnsmasq), set the Setu host's
-  hostname to `setu` — it's then auto-served as `setu.lan`. Or add a static record, e.g.
-  dnsmasq `address=/setu.lan/192.168.0.50`. RouterOS: a static DNS entry.
-- **Per-client (no router access).** Add `192.168.0.50  setu.lan` to each device's hosts file
-  (`/etc/hosts`, or `C:\Windows\System32\drivers\etc\hosts`).
-
-> mDNS/Bonjour can give a zero-config name too, but only under **`.local`** (`setu.local`), not
-> `.lan`, and would add a dependency — so for `.lan`, router DNS is the lightweight path.
-> Note: `http://setu.lan` is still plain HTTP (not a secure context), so PWA install stays
-> blocked — see below.
-
-### PWA & the secure-context requirement
-
-Service workers and "Add to Home Screen" (install, fullscreen, offline app shell) only work in
-a **secure context** — HTTPS **or** `localhost`. Plain `http://<lan-ip>` loads fine but
-the browser blocks PWA features (the frontend feature-detects this and simply skips the service
-worker over plain HTTP). No proxy is needed — Go serves TLS natively. Easiest options:
-
-- **Tailscale** — gives automatic HTTPS on your `*.ts.net` name, zero config in Setu.
-- **`localhost`** via an SSH tunnel — counts as secure, nothing else needed.
-- **Own / self-signed cert** — set `SETU_TLS_CERT` + `SETU_TLS_KEY` (see *Listener options*)
-  and trust the cert once on each device. Generate one with, e.g.:
-
-  ```sh
-  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-    -keyout key.pem -out cert.pem -subj "/CN=setu.lan" \
-    -addext "subjectAltName=DNS:setu.lan,IP:192.168.0.50"
-  ```
-
-Once on HTTPS, the app is installable across iOS, Android, macOS, Windows and Linux — one PWA,
-no app store. Long-press / right-click the installed icon for the **All on / All off** shortcuts.
-
-If upgrading from a build whose installed app goes blank specifically after refresh, open
-`https://<your-setu-host>/api/recover` once. It removes only Setu's service worker and shell
-cache, keeps the access token and UI preferences, and returns to the fixed app automatically.
-
----
-
-## Supported devices
-
-| Brand · model (`brand`/`model`) | Capabilities | Transport |
-| --- | --- | --- |
-| Philips WiZ — `WiZ`/`color_bulb` | switch, brightness, color, color_temp, scene | UDP :38899 (local, no cloud) |
-| Philips WiZ White — `WiZ`/`tunable_white` | switch, brightness, color_temp, scene | UDP :38899 (local, no cloud) |
-| Samsung Tizen TV — `Samsung`/`tizen` | switch (power), volume (absolute + mute), key, key_hold, app, text | REST :8001 + WebSocket/TLS :8002 + UPnP :9197 + Wake-on-LAN |
-| Atomberg fan — `Atomberg`/`fan` | switch, speed (1–6), sleep, timer, light (on/off) | UDP :5600 out, :5625 in (local, no cloud) |
-| Atomberg fan + light — `Atomberg`/`fan_light` | switch, speed (1–6), sleep, timer, brightness, scene (light colour) | UDP :5600 out, :5625 in (local, no cloud) |
-
-### Philips WiZ (`WiZ`/`color_bulb`, `WiZ`/`tunable_white`)
-
-- Pure local control over UDP — no cloud, login, or key. On/off, brightness (10–100; the WiZ
-  hardware floor is 10%, so lower values clamp), RGB color, **white temperature** (2200–6500 K),
-  and the **32 predefined scenes** (color / white-temp / scene are exclusive modes on the bulb).
-- IP resolution chain: ARP table → **WiZ UDP broadcast discovery** (matches the bulb by MAC).
-  Discovery means a DHCP IP change is handled automatically — this is the
-  per-brand discovery the `Resolver` seam anticipates (`internal/devices/wiz/discovery.go`).
-- Tunable-white-only WiZ bulbs use `model: tunable_white`: switch, brightness,
-  2700–6500 K color temperature, and the supported white scenes (ids 9–16).
-  They deliberately omit RGB/color modes, which this hardware ignores.
-
-### Samsung Tizen TV (`Samsung`/`tizen`)
-
-- **MAC-only addressing:** only the MAC is stored. Setu discovers DIAL receivers over
-  SSDP, verifies the candidate TV's `/api/v2/` `wifiMac` against the stored MAC, caches the
-  current IP, and repeats discovery after a transport failure invalidates that cache.
-- **Power on** = Wake-on-LAN (sprayed at each interface's directed broadcast + the limited
-  broadcast, ports 9 & 7). ✅ Verified to wake a UA50AU7700KLXL from off. ⚠️ WoL over Wi-Fi can
-  still fail if the TV's network-standby ("Power On with Mobile") is off — that's a Samsung/Wi-Fi
-  limit, not Setu. **Power off**, volume, and navigation keys (over the WebSocket) work when the
-  TV is on.
-- **Volume & mute are real state:** the slider sets an absolute level over UPnP
-  (RenderingControl) and Setu reads volume + mute back on every poll, so changes made with the
-  physical remote show up in the UI within a tick.
-- **Press-and-hold** on every remote button (`key_down`/`key_up`): a hold the client never ends
-  is auto-released by a watchdog — a stuck key would otherwise freeze the TV's remote channel.
-- **Text input:** type into whatever field is focused on the TV; the card mirrors the TV-side
-  field live (focused or not, current contents) from the TV's IME events.
-- **First-use pairing:** the first power-off/key/volume command makes the TV show an **Allow**
-  prompt — accept it once. Setu captures the returned token and caches it. Set the TV's *General →
-  External Device Manager → Device Connection Manager → Access Notification* to "First Time Only".
-- **Token cache:** `$SETU_STATE_DIR/setu-samsung-<id>.token` (defaults to the OS temp dir). Point
-  `SETU_STATE_DIR` at a persistent path so the token survives reboots.
-- **Same L2 segment required:** Samsung blocks the remote WebSocket across subnets/VLANs — keep
-  Setu and the TV on the same segment.
-- The TV serves its WebSocket/HTTPS with a self-signed cert, which Setu trusts (a known LAN device
-  resolved from its MAC). Remote keys are validated against `KEY_[A-Z0-9_]+`; `KEY_FACTORY`
-  (service menu) is refused.
-
-### Atomberg fans (`Atomberg`/`fan`, `Atomberg`/`fan_light`)
-
-- **Pure local control over UDP** — no cloud, login or key. Atomberg documents this LAN protocol
-  themselves. Their cloud API is deliberately unused: it is capped at **100 calls/day**, which
-  cannot support polling.
-- **The fan finds itself.** Every Atomberg fan broadcasts `<mac>_<series>` on UDP :5625 once a
-  second, so addressing needs no ARP and a DHCP change corrects itself within a second. The same
-  beacon is what the device scan lists, and it doubles as liveness.
-- **Changes made elsewhere show up immediately.** The hardware broadcasts its full state after
-  *any* change, so turning the fan up with the **physical remote or the Atomberg app** updates the
-  card in well under a second — pushed, not waiting for the next poll.
-- On/off, **speed 1–6** (6 is the boost step), **sleep mode**, and an **auto-off timer**
-  (1, 2, 3 or 6 hours, with the time remaining shown on the card).
-- **The fan's light is its own control.** Power is the fan, so the lamp gets a small `light`
-  capability — an on/off toggle, exactly like sleep mode — and it stays usable with the blades
-  stopped. `fan_light` models (series I1/I5/M1/S1/S2) dim instead, 10–100% with **warm / cool /
-  daylight** as three scene presets. A model never offers both.
-- **Which model to add** is decided by the series the scan reports — the scan labels it for you,
-  and an unrecognised series is shown as "No driver" rather than guessed at.
-- ⚠️ Verified end to end against a protocol-faithful simulator, **not yet against physical
-  hardware**. See [`docs/devices/atomberg.md`](docs/devices/atomberg.md) §9.
-- ⚠️ The protocol has **no authentication** — anyone on the LAN can command a fan. That is
-  Atomberg's design, not Setu's; keep IoT devices on a segment you trust.
-
-## Adding a device
-
-This is the core next step, and the whole architecture is built around making it small and
-local. Three real packages show the pattern applied to hardware: `internal/devices/wiz` (a compact
-UDP device), `internal/devices/samsung` (REST + WebSocket + Wake-on-LAN, and how new
-capabilities like `volume`/`key` light up matching UI controls), and `internal/devices/atomberg`
-(a broadcast protocol: one listener shared by every device, pushing state instead of only polling).
-Each device lives in its own package, organised **by brand → model**. Use
-[`internal/devices/example`](internal/devices/example/example.go) as the blueprint — it is a
-fully-commented, compiling template (a brand `base` with the transport, an embedded model type,
-capability methods, resolver usage, and factory registration).
-
-1. **Copy the template:** `internal/devices/example/` → `internal/devices/<brand>/`. Set the
-   `Brand` / `Model` constants.
-2. **Implement the transport** in the brand `base` (`send`) — the UDP/TCP/HTTP protocol. On a
-   network error, call `invalidateIP()` so the next call re-resolves the MAC.
-3. **Per model**, define a type embedding `base` and implement `Model()`, `Capabilities()`, and
-   only the capability interfaces that model supports (`Switchable`, `Dimmable`,
-   `ColorControl`). Different models of the same brand can differ. Update the compile-time
-   `var _ device.X = (*T)(nil)` assertions.
-4. **Implement `Poll()`** to read real hardware state (or omit `Pollable` entirely).
-5. **Export** `New` (a `config.Constructor`) and `Register(*config.Factory)`.
-6. **Register it** with one line in `cmd/setu/main.go`:
-   ```go
-   wiz.Register(factory)   // next to example.Register(factory)
-   ```
-7. **Optionally implement `Scan`** on the brand's discoverer (same transport as `Lookup`, no
-   MAC filter) and add it to the `scanners` slice in `main.go`. That is all it takes for the
-   brand to be found by Settings → **Devices** → *Scan network*.
-8. **Add the device** from Settings → Devices — found by the scan, or typed in by hand
-   (brand, model, name, MAC). It is stored, built and live immediately; nothing to edit on
-   disk and no restart.
-
-The frontend needs **no changes** as long as the device reuses **existing** capabilities —
-`DeviceCard` renders the right controls from the device's reported `capabilities`.
-
-Introducing a *new* capability is the one case that does reach the UI, and it has a trap: every
-capability must belong to one of `DeviceCard`'s groups (`hasLight`, `hasMedia`, `hasFan`). One that
-belongs to none leaves the expand chevron hidden and its controls unreachable. A new capability
-means: the constant + interface in `internal/device`, a case in `internal/control`, any range/list
-in `manager.metaView`, an entry in `automation.safeActions`, and on the web side `api.ts`
-(state fields, `Device` fields, both action unions, `asState`), a control component, the
-`DeviceCard` group + block, `store.ts` (`applyOptimistic`, `snapshotCommands`),
-`Automations.svelte` (`actionOptions`, `resetAction`), and `backup.ts` (`supportsAction` — miss it
-and restored automations using the action are silently dropped). The `speed` / `sleep` / `timer`
-capabilities added for Atomberg fans are a worked example of all of it.
-
-### Not yet (by design)
-
-- No scripting, generic nested rules, outbound webhooks, MQTT, or persistent automation history.
-- No HomeKit — but the front-end-protocol seam (the `api` package over the manager/bus) keeps it
-  addable later without touching device code.
-- A TV's power state is read from REST `device.PowerState` (on vs. standby), volume/mute over
-  UPnP — all real, polled state. Only firmware too old to report `PowerState` falls back to
-  reachability (where network standby can read as "on").
-
----
-
-## Deployment notes
-
-**General.** Setu must share the **host network** (LAN reachability, ARP, and future UDP
-broadcast / mDNS). Set `SETU_STATE_DIR` to a writable persistent
-directory for automations and Samsung pairing tokens; otherwise the OS temp directory is used.
-
-**MikroTik RouterOS (container).** Build the `linux/arm64` (or your arch) image, import it into
-the `container` package, attach it to a veth on your LAN bridge, and mount a config volume.
-Cross-compile locally with `make build-arm64` if building off-device.
-
-**OpenWrt.** Drop the static `linux/<arch>` binary on the router (e.g. `/usr/bin/setu`), add a
-small procd/init script that exports `SETU_TOKEN` and `SETU_STATE_DIR`, and (future) read leases from
-`/tmp/dhcp.leases` via a DHCP resolver. The binary is fully static (`CGO_ENABLED=0`), so it has
-no libc dependency.
-
----
+- Keep Setu on a trusted LAN/VPN. Do not expose it directly to the internet.
+- Samsung remote control and LAN broadcasts generally require the same L2
+  segment as the device.
+- A Unix socket can provide tunnel-only access.
+- PWA install and service workers require HTTPS or `localhost`. Plain LAN HTTP
+  still works as a normal web app. Setu can serve TLS directly with the two TLS
+  environment variables.
+- If an old installed PWA is stuck on a broken app shell, open
+  `/api/recover`; it clears only Setu's service worker/cache and preserves the
+  token and UI preferences.
 
 ## Documentation
 
-Beyond this file, docs are kept **point-to-point** for humans and AI assistants:
-
-- **Native device protocols:** [`docs/devices/wiz.md`](docs/devices/wiz.md),
-  [`docs/devices/samsung.md`](docs/devices/samsung.md),
-  [`docs/devices/atomberg.md`](docs/devices/atomberg.md) — how to call each device on the wire.
-- **Per-module context:** every package has its own `README.md`
-  (`internal/*/README.md`, `cmd/setu/`, `web/`) — purpose, key types, flow, gotchas, how to extend.
-- **Index:** [`docs/README.md`](docs/README.md).
-
-## Why these dependencies?
-
-Kept deliberately minimal (standard library does the rest):
-
-- **`github.com/coder/websocket`** — small, context-aware, zero-dependency WebSocket library.
-  It is now the *only* Go dependency: settings moved to environment variables and state to
-  one JSON file, so the YAML parser went with them.
-- **Frontend:** Svelte 5 (tiny runtime → small JS heap, important on mobile), Vite, Tailwind.
-  No heavy UI kit.
+[`docs/README.md`](docs/README.md) indexes the runtime, protocol, and package
+references. Package READMEs describe only local ownership and invariants; wire
+details stay under `docs/devices`.
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-3.0. See [`LICENSE`](LICENSE).

@@ -1,26 +1,15 @@
-# wol — Wake-on-LAN
+# `internal/devices/wol`
 
-`import "setu/internal/devices/wol"` · wake a machine (PC, NAS, router) by MAC.
+Generic `wol/device` for a PC, NAS, router, or other Wake-on-LAN target.
 
-## Purpose
-- The simplest possible device: a MAC address with one action, **Wake**, which
-  broadcasts a Wake-on-LAN magic packet to power the machine on.
+It implements only `device.WakeOnLAN`:
 
-## What it is
-- One model `Device` implementing only `device.WakeOnLAN` (`Wake() error`).
-- No `base`, no transport, no resolver/bus: WoL is a layer-2 broadcast, so there
-  is no IP to resolve, no state to poll, and no events (waking is fire-and-forget).
-- `State` reports `Online: true` always so the UI keeps the Wake button enabled.
+- no IP resolver;
+- no polling or readable power state;
+- no event publisher;
+- one `wake` action using the shared `internal/wol` sender.
 
-## Config
-```yaml
-- id: desktop_pc
-  brand: wol
-  model: device
-  name: "Desktop PC"
-  mac: "aa:bb:cc:dd:ee:ff"   # no ip needed — WoL is broadcast
-```
-
-The frontend renders a card with the name, the MAC, and a single **Wake** button
-(capability `wol`). Note: the target must have Wake-on-LAN enabled in its BIOS/OS,
-and a Wi-Fi machine in standby may not honour it — same caveat as `../samsung/`.
+`State.Online` is always true so the fire-and-forget Wake button remains
+available. Add the target manually from **Settings → Devices** using its MAC.
+The target must have Wake-on-LAN/network standby enabled and share the broadcast
+domain.

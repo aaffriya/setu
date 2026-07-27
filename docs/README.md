@@ -1,26 +1,43 @@
-# Setu docs
+# Documentation index
 
-Reference docs for humans **and** AI assistants — point-to-point, so a module can
-be understood or extended without re-deriving context.
+Read only the document closest to the change.
 
-## Cross-module behavior
-- [`runtime.md`](runtime.md) — command/state flow, timing model, socket
-  lifecycles (browser + TV), the three caching layers, addressing invariants.
-  **Read first when touching anything that spans packages.**
+## Cross-package behavior
 
-## Native device protocols
-- [`devices/wiz.md`](devices/wiz.md) — Philips WiZ (UDP getPilot/setPilot, discovery).
-- [`devices/samsung.md`](devices/samsung.md) — Samsung Tizen (REST + WebSocket + Wake-on-LAN, key codes, app IDs).
-- [`devices/atomberg.md`](devices/atomberg.md) — Atomberg fans (UDP commands, beacon discovery, state bitfield).
+- [`runtime.md`](runtime.md): command/event flow, poll timing, online semantics,
+  browser lifecycle, persistence, and address caching.
 
-## Per-module context (a `README.md` lives in each package)
-- Core: [`internal/device`](../internal/device/README.md) · [`internal/events`](../internal/events/README.md) · [`internal/resolver`](../internal/resolver/README.md) · [`internal/config`](../internal/config/README.md) · [`internal/manager`](../internal/manager/README.md) · [`internal/api`](../internal/api/README.md)
-- Devices: [`internal/devices`](../internal/devices/README.md) · [`example`](../internal/devices/example/README.md) · [`wiz`](../internal/devices/wiz/README.md) · [`samsung`](../internal/devices/samsung/README.md) · [`atomberg`](../internal/devices/atomberg/README.md)
-- Entry & UI: [`cmd/setu`](../cmd/setu/README.md) · [`web`](../web/README.md)
+## Native protocols
 
-## Architecture & usage
-- Root [`README.md`](../README.md) — how it fits together, build/run, config, addressing, deployment, adding a device.
+- [`devices/wiz.md`](devices/wiz.md)
+- [`devices/samsung.md`](devices/samsung.md)
+- [`devices/atomberg.md`](devices/atomberg.md)
 
-## Conventions
-- Each package `README.md`: **Purpose · Key types · Flow/Files · Gotchas · Extend**.
-- A device protocol doc: **at-a-glance · commands · discovery · gotchas · how Setu maps it**.
+## Core packages
+
+- [`api`](../internal/api/README.md)
+- [`automation`](../internal/automation/README.md)
+- [`config`](../internal/config/README.md)
+- [`control`](../internal/control/README.md)
+- [`device`](../internal/device/README.md)
+- [`events`](../internal/events/README.md)
+- [`inventory`](../internal/inventory/README.md)
+- [`manager`](../internal/manager/README.md)
+- [`resolver`](../internal/resolver/README.md)
+- [`store`](../internal/store/README.md)
+- [`wol`](../internal/wol/README.md)
+
+## Device packages
+
+- [`devices`](../internal/devices/README.md)
+- [`example`](../internal/devices/example/README.md)
+- [`wiz`](../internal/devices/wiz/README.md)
+- [`samsung`](../internal/devices/samsung/README.md)
+- [`atomberg`](../internal/devices/atomberg/README.md)
+- [`wol`](../internal/devices/wol/README.md)
+
+## Entry points
+
+- [`cmd/setu`](../cmd/setu/README.md)
+- [`web`](../web/README.md)
+- [Root usage and architecture](../README.md)

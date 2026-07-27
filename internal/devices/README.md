@@ -1,18 +1,22 @@
-# devices — brand/model packages
+# `internal/devices`
 
-`internal/devices/<brand>/` · one package per brand, one type per model.
+One package per brand; one concrete type per supported model.
 
-## Packages
-- `example/` — the documented **blueprint** (compiles; no real protocol).
-- `wiz/` — Philips WiZ bulbs (UDP). Protocol: `docs/devices/wiz.md`.
-- `samsung/` — Samsung Tizen TVs (REST + WebSocket + Wake-on-LAN). Protocol: `docs/devices/samsung.md`.
-- `atomberg/` — Atomberg BLDC fans (UDP; one shared beacon listener). Protocol: `docs/devices/atomberg.md`.
+| Package | Models | Protocol |
+| --- | --- | --- |
+| `example` | `bulb` | compiling template/stub |
+| `wiz` | `color_bulb`, `tunable_white` | UDP |
+| `samsung` | `tizen` | REST, WSS, UPnP, WoL |
+| `atomberg` | `fan`, `fan_light` | UDP beacon/state |
+| `wol` | `device` | Wake-on-LAN |
 
-## Pattern (every brand)
-- A brand `base` struct holds identity + transport + cached state; models **embed** it (composition, not inheritance).
-- Each model implements `Model()`, `Capabilities()`, and **only** the capability interfaces it supports.
-- Exports `New` (matches `config.Constructor`) + `Register(*config.Factory)`.
-- Resolution + re-resolve-on-failure follows the `resolver.Resolver` seam.
+Brand packages usually contain an embedded `base` for identity, transport,
+address caching, and state; models implement only their real capabilities.
+Each package exports constructors and `Register(*config.Factory)`.
 
-## Add a device
-- Copy `example/`, implement the protocol, add one `Register` line in `cmd/setu/main.go`, then add the device from Settings → Devices. Full steps: root README → "Adding a device".
+Addressable drivers cache the resolved IP and invalidate it after transport
+failure. Scan-capable brands also implement `resolver.Scanner`. Unknown scan
+models stay empty rather than being guessed.
+
+Use [`example`](example/README.md) and the root
+[`Adding a driver`](../../README.md#adding-a-driver) checklist.

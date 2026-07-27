@@ -5,7 +5,7 @@ PKG     := ./cmd/setu
 WEB     := web
 LDFLAGS := -s -w
 
-.PHONY: all web build build-arm64 run dev docker fmt vet test tidy clean clean-web help
+.PHONY: all web build run dev docker fmt vet test tidy clean clean-web help
 
 all: build ## Build frontend + host binary (default)
 

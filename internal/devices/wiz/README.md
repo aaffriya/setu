@@ -1,52 +1,20 @@
-# wiz — Philips WiZ bulbs
+# `internal/devices/wiz`
 
-`import "setu/internal/devices/wiz"` · local UDP control, port 38899, no cloud.
+Local UDP `38899` WiZ driver. Full wire reference:
+[`docs/devices/wiz.md`](../../../docs/devices/wiz.md).
 
-## Protocol
-- Full native reference: **`docs/devices/wiz.md`**.
+- `wiz.go`: shared UDP transport/state plus `ColorBulb` and
+  `TunableWhiteBulb`.
+- `discovery.go`: MAC lookup with `getPilot`; scan and model selection with
+  `getSystemConfig`.
+- `scenes.go`: names and dynamic flags for the built-in scene IDs.
 
-## Files
-- `wiz.go` — `base` (UDP `getPilot`/`setPilot`, resolve chain, state) +
-  `ColorBulb` and `TunableWhiteBulb` models.
-- `discovery.go` — `Discoverer` implements `resolver.Resolver` (`Lookup`: broadcast
-  `getPilot`, match by MAC) **and** `resolver.Scanner` (`Scan`: broadcast
-  `getSystemConfig`, list every bulb for `POST /api/discovery/scan`).
-- `scenes.go` — the 32 named WiZ scenes, exposed via `Scenes()`.
+`color_bulb` exposes power, brightness, RGB, 2200–6500 K temperature, and all
+scenes. `tunable_white` exposes power, brightness, 2700–6500 K temperature, and
+white scenes 9–16; it deliberately omits RGB.
 
-## Capabilities → protocol
-- `switch` → `setPilot {state}`
-- `brightness` → `setPilot {dimming}` (clamped to ≥10, the WiZ floor)
-- `color` → `setPilot {r,g,b}`
-- `color_temp` → `setPilot {temp}` (Kelvin, clamped to the model range:
-  2200–6500 for `color_bulb`, 2700–6500 for `tunable_white`)
-- `scene` → `setPilot {sceneId}` (ids 1–32; `Scenes()` lists names)
-- scene speed → `setPilot {speed}` (10–200, `color_bulb` dynamic scenes;
-  `tunable_white` exposes only static scenes and no-ops speed)
-- `Poll` → `getPilot` (maps present fields into `device.State`)
+Resolution is cached IP → ARP → WiZ broadcast. Commands require a valid reply;
+any UDP failure clears the cached address. Brightness below the hardware's 10%
+floor is clamped.
 
-`color_bulb` exposes all five capabilities. `tunable_white` exposes switch,
-brightness, color temperature, and its supported white scenes (ids 9–16); it
-does not implement `ColorControl`, so the UI does not render an RGB picker.
-
-## Modes and readback
-- Color, direct white temperature, and scene commands select mutually exclusive
-  modes. A white scene can still report both its `sceneId` and underlying `temp`;
-  `sceneId` is authoritative for saving/replaying the selected preset.
-
-## Resolution
-- cached IP → ARP → **WiZ broadcast discovery** → `ip` hint. Any UDP failure invalidates the cache → next call re-resolves.
-- Every broadcast goes out **several times** inside its reply window (2 probes for
-  `Lookup`, 4 for `Scan`): a bulb drops the odd datagram, and on a real segment a
-  single-probe scan missed a live bulb about half the time.
-
-## Scan → model
-- `getSystemConfig.moduleName` names the light engine and is the only thing that
-  tells the models apart: `…RGB…` → `color_bulb`, `…TW…` → `tunable_white`.
-- Anything else (plugs, dimmable-white `DW`, fans) is reported with an **empty
-  model** — found, but no driver — never guessed at.
-
-## Status
-- **Verified live** (read + write), 2026-06-03 — confirmed a color bulb (accepts RGB).
-- **Verified live** (read + write), 2026-07-17 — confirmed an
-  `ESP25_SHTW_01` tunable-white bulb: RGB and colour scene 1 are ignored; white
-  scenes 9–16 and the reported 2700–6500 K range work.
+Both model paths have physical-hardware verification.

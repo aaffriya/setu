@@ -1,24 +1,20 @@
-# example — device template (blueprint)
+# `internal/devices/example`
 
-`import "setu/internal/devices/example"` · copy this package to add a real device.
+Compiling device-driver blueprint and no-hardware UI/API stand-in.
 
-## Purpose
-- A compiling, fully-commented template. **No real protocol** — every network call is a documented stub.
-- Also a usable stand-in device: `discovery.go` resolves to loopback and `send` is a stub, so an `example`
-  entry in a config answers commands on any machine. Handy for working on the UI/API with no hardware.
+It demonstrates:
 
-## What it shows
-- A brand `base`: transport seam (`send`), MAC→IP cache + re-resolve (`resolveIP`/`invalidateIP`), state mutate + publish (`applyState`).
-- Resolution order — cached → injected ARP → brand discovery (`discovery.go`), the same chain `../wiz/` and `../samsung/` use.
-- Both directions of that seam: `Lookup` (where is this configured MAC?) and `Scan` (what is on
-  the network that is not configured yet — the UI's device scan). The template's `Scan` finds
-  nothing and documents what a real one does.
-- A model `Bulb` embedding `base`; implements `Switchable`, `Dimmable`, `ColorControl`, `Pollable`.
-- The `Poll` contract: wrap `device.ErrPollNoResponse` when a failed read still returns meaningful state,
-  or the manager discards it and the device keeps rendering as online (see the `Poll` doc comment).
-- Compile-time proof: `var _ device.X = (*Bulb)(nil)`.
-- `New` (a `config.Constructor`) + `Register(*config.Factory)`.
+- an embedded brand `base`;
+- cached MAC-to-IP resolution with ARP then brand discovery;
+- invalidation after transport failure;
+- immediate command events versus quiet poll updates;
+- a model implementing only selected capabilities;
+- compile-time interface assertions;
+- `New`, `Register`, `Poll`, `Resolver`, and `Scanner` shapes.
 
-## Use it
-- Follow the 7-step CHECKLIST at the bottom of `example.go`.
-- Real instances built from this pattern: `../wiz/`, `../samsung/`.
+The transport is a stub and discovery resolves to loopback, so the registered
+`example/bulb` can exercise UI and API behavior without hardware. It is not a
+real protocol implementation.
+
+Copy the package, replace the stubs, remove unsupported capabilities, and follow
+the checklist at the bottom of `example.go`.

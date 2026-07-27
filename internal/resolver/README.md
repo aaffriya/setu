@@ -1,32 +1,21 @@
-# resolver — MAC → IP
+# `internal/resolver`
 
-`import "setu/internal/resolver"` · turns a stable MAC into a current IP.
+The address/discovery seam.
 
-## Purpose
-- IoT IPs change (DHCP); the MAC is the identity. This is the resolution seam.
+- `Resolver.Lookup(mac)`: find the current IP for one configured MAC.
+- `Scanner.Scan(ctx)`: enumerate devices heard on the LAN.
+- `Candidate`: reported brand, supported model or empty, labels, MAC, and source
+  IP.
+- `ARPResolver`: Linux `/proc/net/arp` implementation.
+- `NormalizeMAC` and `FormatMAC`: canonical comparison and display.
 
-## Key types
-- `Resolver` interface — `Lookup(mac) (net.IP, error)`.
-- `Scanner` interface — `Scan(ctx) ([]Candidate, error)`: the same seam the other
-  way round. `Lookup` = "where is this configured MAC now?", `Scan` = "what is on
-  the network that has **not** been added yet?" (see `POST /api/discovery/scan`).
-- `Candidate` — one scan result: brand, model (empty = no driver for it), the
-  device-reported series/name, MAC, and the IP it answered from.
-- `ARPResolver` — default impl; reads `/proc/net/arp` (Linux; needs host networking). `NewARPResolver()`.
-- `NormalizeMAC(s)` — canonical separator-free hex; accepts `:` / `-` / `.`-separated **or** bare hex (e.g. WiZ reports `d8a011ff5ef0`).
-- `FormatMAC(s)` — the colon form, for config files and the UI. Comparison always goes through `NormalizeMAC`.
+Brand drivers compose strategies:
 
-## Strategies (all behind `Resolver`)
-- **ARP** — now (default).
-- **Per-brand discovery** — WiZ UDP broadcast and Samsung SSDP + REST `wifiMac`
-  verification, both implementing the same `Resolver` seam (and both also `Scanner`).
-- **DHCP leases** — future (OpenWrt `/tmp/dhcp.leases`, RouterOS API).
+- WiZ: ARP then UDP MAC discovery.
+- Samsung: ARP then SSDP candidates verified by REST `wifiMac`.
+- Atomberg: its own beacon then ARP.
 
-## Gotchas
-- On non-Linux dev (macOS) ARP returns an error → WiZ and Samsung fall back to their
-  cross-platform brand discovery.
-- Reading `/proc/net/arp` only sees devices the host has talked to recently.
-- A `Scanner` must never invent a device it did not hear from, and never guess a
-  model: an unrecognised reply is a `Candidate` with an empty `Model`. Broadcast
-  probes are repeated inside the reply window — one datagram is not enough on real
-  Wi-Fi, and a missed reply is indistinguishable from an absent device.
+ARP is unavailable on non-Linux development hosts and only knows recent
+neighbors, so brand discovery must remain functional. Scanners repeat lossy
+broadcast probes, stop on context cancellation, and return unknown hardware
+with an empty model. Never invent a candidate or guess its driver.

@@ -1,34 +1,31 @@
-# config — settings, device spec, factory
+# `internal/config`
 
-`import "setu/internal/config"` · config is **data**; the factory turns it into devices.
+Runtime settings, persisted device specs, and the brand/model factory.
 
-## Purpose
-- Read the server settings from the **environment**, and map `(brand, model)` → a device constructor.
-- There is no configuration file. Devices are stored state, not config (`internal/store` + `internal/inventory`).
+## Environment
 
-## Environment (all optional; unset = the shipped default)
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SETU_TOKEN` | `CHANGE_ME` | bearer token for `/api` and `/ws` (the composition root warns while it is the default) |
-| `SETU_INTERFACE` | all interfaces | bind address, e.g. `192.168.1.10` |
-| `SETU_PORT` | `80` | TCP port |
-| `SETU_SOCKET` | — | Unix socket path; overrides interface/port |
-| `SETU_TLS_CERT` / `SETU_TLS_KEY` | — | PEM pair → serves HTTPS. Both or neither |
-| `SETU_POLL_INTERVAL` | `45s` | active poll cadence (idle backs off) |
-| `SETU_STATE_DIR` | OS temp | where the state file lives (read by `internal/store`) |
+| `SETU_TOKEN` | `CHANGE_ME` | API/WebSocket bearer token |
+| `SETU_INTERFACE` | all interfaces | TCP bind address |
+| `SETU_PORT` | `80`, or `443` with TLS | TCP port |
+| `SETU_SOCKET` | unset | Unix socket, overriding TCP |
+| `SETU_TLS_CERT`, `SETU_TLS_KEY` | unset | native HTTPS PEM pair |
+| `SETU_POLL_INTERVAL` | `45s` | active cadence |
+| `SETU_STATE_DIR` | OS temp | read by store and Samsung token code |
 
-## Key types
-- `Config{Listen, Token, PollInterval}`, `Load()` — environment → defaults → `validate()`.
-- `ListenConfig{Interface, Port, Socket, TLS}` — `Network()` returns the `net.Listen` args; `String()` renders it for logs.
-- `DeviceSpec{ID, Brand, Model, Series, Name, MAC}` — one stored device. `Validate()` and `Normalized()` are the single gate for everything that reaches the state file: a scan result, a typed-in form, a restored backup.
-- `Factory` — `Register(brand, model, Constructor)`, `Build`, `BuildAll`, `Supports`, `Types()` (the catalog the UI's manual-add form lists).
-- `Constructor func(DeviceSpec, Deps) (device.Device, error)`; `Deps{Resolver, Bus}`.
+Bad ports, durations, or incomplete TLS pairs fail startup.
 
-## Design rule
-- The factory imports **no device packages** — device packages depend on `config`, never the reverse. The composition root (`cmd/setu`) registers each constructor.
+## Types and rules
 
-## Gotchas
-- Ids double as file names (the Samsung pairing token is stored per device id), so `Validate()` restricts them to `a-z 0-9 _ -`, max 32, not starting with `_`/`-`.
-- `Normalized()` rewrites the MAC to one canonical notation, so two spellings of one device cannot both be stored.
-- **Brand/model matching is case-insensitive** (`key()` lowercases both). The device's *display* brand is whatever it reports (`Device.Brand`), e.g. `WiZ`.
-- A bad environment value fails at startup with a message naming the variable — never a silent fallback.
+- `Config` and `Load`: environment → defaults → validation.
+- `DeviceSpec`: `id`, `brand`, `model`, optional `series`, `name`, and `mac`.
+- `Factory`: case-insensitive `(brand, model)` registration and construction.
+- `Deps`: injected resolver and event bus.
+
+`DeviceSpec.Validate` is the gate for scan, manual add, and restore. IDs are
+lowercase `a-z0-9_-`, 1–32 characters, and cannot start with punctuation.
+Names are capped at 48 characters, series at 32, and MACs are canonicalized.
+
+The factory never imports device packages. `cmd/setu` owns registration so
+dependency direction remains device package → config, not the reverse.

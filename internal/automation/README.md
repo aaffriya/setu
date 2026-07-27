@@ -1,25 +1,36 @@
-# automation — bounded local rules
+# `internal/automation`
 
-`import "setu/internal/automation"` · persistent schedules, device power
-relations, and authenticated incoming webhook triggers.
+Bounded server-side rules that continue running when no browser is open.
 
-## Limits
+## Model and limits
 
-- one trigger per rule; up to 4 simple AND conditions and 16 ordered actions
-- 64 rules, two fixed workers, a 32-entry queue, and 20 RAM-only run results
-- an action may run another enabled automation inline; call graphs must be
-  acyclic, are capped at 8 rules deep, and share 128-action / 960-second delay
-  budgets per run
-- no scripts, nested expression tree, per-rule goroutine, database, retries, or
-  outbound HTTP
+- Trigger: minute schedule, device power edge, or authenticated webhook.
+- Up to 64 rules, 4 AND conditions, and 16 ordered actions per rule.
+- Optional stable time up to 300 seconds, cooldown up to 3600 seconds, and
+  per-action delay up to 60 seconds.
+- Two workers, queue size 32, last 20 run results in RAM.
+- A rule may call another enabled rule inline. Calls must be acyclic, at most 8
+  levels, 128 actions, and 960 delay-seconds per run.
+- Power relations that form a device cycle are rejected.
 
-Rules persist atomically in the `automations` section of `$SETU_STATE_DIR/setu.json`
-— the same file that holds the devices, written through `internal/store` (OS temp
-fallback). Webhook plaintext secrets are returned once; only SHA-256 hashes are
-stored. The engine subscribes through the event bus's recoverable subscription
-and atomically replaces a stale event buffer with a fresh device snapshot after
-overflow. Rules whose configured devices/capabilities changed are disabled at
-startup instead of preventing the bridge from serving its normal controls;
-callers of those newly disabled nested rules are disabled in the same pass.
-Device commands and polls are serialized per device by the manager, so a stale
-poll response cannot reverse a successful automation action.
+Only bounded, idempotent device actions are allowed automatically. Remote-key
+taps/holds, relative volume, mute toggles, and text input are intentionally not
+automation-safe.
+
+## Persistence and runtime
+
+Rules occupy the `automations` section of `$SETU_STATE_DIR/setu.json` through
+`internal/store`. Queue state, rate limits, cooldown clocks, and run history are
+not persisted.
+
+Webhook plaintext is returned only on creation/rotation. The stored/exported
+form contains its SHA-256 hash. Webhook payloads never select actions.
+
+The engine waits for the poller's initial baseline before arming power edges.
+It uses a recoverable event subscription and replaces incomplete event history
+with a fresh power snapshot after overflow. Rules that no longer match current
+devices/capabilities are disabled at startup rather than blocking device
+control.
+
+Do not add scripts, expression trees, per-rule goroutines, retries, a database,
+outbound HTTP, or persistent history.

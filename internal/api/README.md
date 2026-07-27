@@ -1,46 +1,56 @@
-# api — HTTP, WebSocket, static
+# `internal/api`
 
-`import "setu/internal/api"` · the front-end protocol layer. Device code knows
-nothing about it.
-
-## Purpose
-- One `net/http` mux serves the embedded UI (`/`), the JSON API (`/api`), and live events (`/ws`).
-- Translates uniform commands through the shared control executor into capability calls.
+The HTTP/WebSocket protocol layer. One `net/http` mux serves the embedded app,
+authenticated JSON routes, and live state events.
 
 ## Routes
-- `GET /api/devices` → cached `manager.Snapshot()`; `?refresh=true` performs a one-shot hardware poll and overlays its successful states first.
-- `GET /api/diagnostics` → latest per-device poll/command outcomes from bounded backend RAM; no hardware I/O.
-- `POST /api/devices/{id}/refresh` → one serialized hardware read for that device; returns its refreshed view, including fallback state with a 502 when no live response arrives.
-- `POST /api/activity` → reset the adaptive poller's idle backoff without touching hardware.
-- `POST /api/discovery/scan` → asks every registered `resolver.Scanner` what is on the LAN; answers `{candidates, errors}`. Each candidate carries the device's own labels plus `configured`/`device_id` (matched by brand + MAC against the devices already added). POST because it actively broadcasts; one scan at a time (`409` otherwise); `501` when no scanner is registered. It stores nothing — adding is a separate, deliberate `POST /api/devices`.
-- `GET /api/device-types` → the `(brand, model)` pairs this build can drive, for the UI's manual add form.
-- `POST /api/devices` → add one device (id optional, derived from brand + MAC); it is stored, brought online, polled once, and returned as a live view (`201`).
-- `PATCH /api/devices/{id}` → edit the labels (`name`, `series`). Identity (brand, model, MAC) is not editable — that would be a different device.
-- `DELETE /api/devices/{id}` → remove it (`204`).
-- `GET /api/devices/export` → the stored specs (`{version, items}`) — the backup form. `PUT /api/devices` replays it (restore); the whole list is validated and built before anything is replaced.
-- `GET /api/recover` → self-contained service-worker/cache recovery page; preserves token and UI preferences.
-- `POST /api/devices/{id}/command` → shared control executor: `on`/`off`, `set_brightness`, `set_color`, `set_color_temp`, `set_scene`, `set_scene_speed`, `volume_up`/`volume_down`/`set_volume`/`mute`, `key`, `key_down`/`key_up` (press-and-hold), `send_text`, `launch_app`.
-- `GET|PUT /api/automations` → list/update the complete bounded rule set (revision checked).
-- `GET /api/automations/export` → backup form, including webhook hashes but never plaintext tokens.
-- `POST /api/automations/{id}/run` → manual run; `POST .../{id}/token` → rotate a webhook token and return it once.
-- `POST /api/automation-hooks/{id}` → incoming trigger authenticated before reading its ignored payload; 4 KB body cap and a 10 s read deadline.
-- `GET /ws` → per-connection recoverable bus subscription; pushes `snapshot` (on connect) then `state_changed`. A client that falls behind is closed so its automatic reconnect receives a fresh snapshot.
-- `/` → embedded `web/dist` with SPA fallback (a built-in placeholder if the UI isn't built).
 
-## Files
-- server.go (routing + JSON helpers), auth.go (bearer; also `?token=` for the WS), handlers.go (device commands), devices.go (add/edit/remove/export), discovery.go (LAN scan → annotated candidates), automations.go (rule/webhook endpoints), ws.go (hub), static.go (embed + SPA + MIME).
+| Route | Purpose |
+| --- | --- |
+| `GET /api/devices` | cached views; `?refresh=true` runs a coalesced hardware refresh |
+| `GET /api/diagnostics` | latest bounded RAM-only operation status; no I/O |
+| `POST /api/activity` | reset poll idle backoff |
+| `POST /api/devices/{id}/refresh` | serialized one-device poll |
+| `POST /api/devices/{id}/command` | execute a uniform `control.Request` |
+| `GET /api/device-types` | registered brand/model catalog |
+| `POST /api/devices` | validate, store, start, and poll a device |
+| `PATCH /api/devices/{id}` | edit `name` or `series` only |
+| `DELETE /api/devices/{id}` | remove and close a device |
+| `GET /api/devices/export`, `PUT /api/devices` | export/replace inventory |
+| `POST /api/discovery/scan` | parallel read-only LAN scan; one scan at a time |
+| `GET`, `PUT /api/automations` | snapshot/replace revisioned rules |
+| `GET /api/automations/export` | persistent form including webhook hashes |
+| `POST /api/automations/{id}/run` | manual trigger |
+| `POST /api/automations/{id}/token` | rotate and return a webhook token once |
+| `POST /api/automation-hooks/{id}` | separately authenticated predefined trigger |
+| `GET /ws` | snapshot, then `state_changed` events |
+| `GET /api/recover` | public app-cache recovery page |
 
-## Gotchas
-- ws.go: every write has a 10 s deadline (`wsWriteTimeout`) — half-open mobile sockets must die at the next event, not at kernel TCP timeout (~15 min of leaked goroutine + bus subscription).
-- Device commands go through manager `Command()`, which serializes them with polling for that device and updates the read model before returning. A `502` may include a reconciled `device` view when the command result was ambiguous but the follow-up read succeeded.
-- static.go: `/assets/*` is served `immutable, max-age=1y` (Vite content-hashes the names); `service-worker.js` is `no-cache`. The embedded FS has zero modtimes → no Last-Modified/ETag, so these explicit headers are the only caching signal browsers get.
-- static.go: unknown non-asset paths return 200 + index.html (SPA fallback); missing `/assets/*` paths return 404 so HTML cannot masquerade as stale JS/CSS.
+The static shell is public; device data and actions require the admin bearer
+token. Browsers may pass the WebSocket token as `?token=`. Automation webhooks
+use only their rule-specific bearer token, ignore the body, and cap it at 4 KB.
 
-## Errors
-- `400` unsupported capability / bad input · `401` missing/wrong token · `404` unknown item · `409` stale revision/paused rule/scan already running · `429` webhook limit · `501` no scanners registered · `502` device or I/O failure · `503` full automation queue.
+## Ownership
 
-## Device management
-- The device-management routes are mounted only when an `Inventory` is configured. The API validates nothing itself: it hands the spec to `internal/inventory`, which owns the rules (valid spec, registered brand, free id, one brand per MAC) and reports a plain message the UI shows as-is.
+- `server.go`: route registration and JSON helpers.
+- `handlers.go`: list, diagnostics, refresh, activity, commands.
+- `devices.go`: inventory management and export/restore.
+- `discovery.go`: concurrent scanners plus configured annotations.
+- `automations.go`: rule and webhook endpoints.
+- `ws.go`: recoverable bus subscription.
+- `static.go`: embedded assets, SPA fallback, cache headers, recovery.
 
-## Seam
-- A second front-end (e.g. an Apple HomeKit bridge) is added **beside** this package, talking to the same manager + event bus — no device changes.
+Commands go through `manager.Command`; the API contains no device-specific
+behavior. Inventory validation stays in `internal/inventory`.
+
+## Important behavior
+
+- Input/capability errors are `400`; unknown items `404`; revision/scan conflicts
+  `409`; webhook rate limit `429`; no scanners `501`; device I/O `502`; full
+  automation queue `503`.
+- A `502` may include a reconciled device view after ambiguous transport
+  failure.
+- WebSocket writes have a 10-second deadline; lagging clients reconnect for a
+  fresh snapshot.
+- `/assets/*` is immutable. Entry HTML and the service worker revalidate.
+  Missing assets return `404`; only non-asset paths use SPA fallback.
