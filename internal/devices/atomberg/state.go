@@ -28,10 +28,15 @@ import (
 const maxBeaconLen = 24
 
 // beacon is one fan announcing itself: its MAC (canonical colon form) and the
-// series string that decides which model driver can drive it.
+// model code the fan reports.
+//
+// Atomberg calls that code the "series" on the wire — "R1", "I1" — and it is
+// the only hardware identifier a fan gives, so it is Setu's Model for this
+// brand. It is also what driverFor reads to pick a driver. This is the one
+// place the two words meet; everything past here says model.
 type beacon struct {
-	MAC    string
-	Series string
+	MAC   string
+	Model string
 }
 
 // stateMessage is the decoded JSON of a state broadcast. MessageID lets a
@@ -65,15 +70,15 @@ func parseBeacon(payload []byte) (beacon, bool) {
 	if text == "" || len(text) > maxBeaconLen {
 		return beacon{}, false
 	}
-	mac, series, found := strings.Cut(text, "_")
-	if !found || series == "" {
+	mac, model, found := strings.Cut(text, "_")
+	if !found || model == "" {
 		return beacon{}, false
 	}
 	normalized, err := resolver.NormalizeMAC(mac)
 	if err != nil {
 		return beacon{}, false
 	}
-	return beacon{MAC: resolver.FormatMAC(normalized), Series: strings.ToUpper(series)}, true
+	return beacon{MAC: resolver.FormatMAC(normalized), Model: strings.ToUpper(model)}, true
 }
 
 // parseState decodes a hex-encoded state broadcast. The bool reports whether
@@ -126,7 +131,7 @@ type fanState struct {
 	LightMode  string // "warm", "cool", "daylight", or "" when not reported
 	TimerHours int
 	Elapsed    int
-	Series     string
+	Model      string // the fan's model code, e.g. "R1" (the beacon's "series")
 }
 
 // Light modes, as the fan names them on the wire.
@@ -136,12 +141,12 @@ const (
 	lightDaylight = "daylight"
 )
 
-// seriesField is the index of the series within state_string. The remaining
+// modelField is the index of the model code within state_string. The remaining
 // fields are undocumented vendor diagnostics and are deliberately ignored.
-const seriesField = 7
+const modelField = 7
 
 // decodeStateString turns a state_string into the fan's state. Only field 0
-// (the bitfield) and field 7 (the series) are read.
+// (the bitfield) and field 7 (the model code) are read.
 func decodeStateString(stateString string) (fanState, error) {
 	fields := strings.Split(stateString, ",")
 	if len(fields) == 0 || fields[0] == "" {
@@ -166,7 +171,7 @@ func decodeStateString(stateString string) (fanState, error) {
 		Elapsed:    int(value>>shiftElapsed) * elapsedMinutes,
 	}
 	// The two colour bits are a 2-bit enum, not two independent flags: both set
-	// means daylight. Neither set means the model has no colour control, so the
+	// means daylight. Neither set means this fan has no colour control, so the
 	// mode stays empty rather than being reported as a mode the fan lacks.
 	cool, warm := value&maskCool != 0, value&maskWarm != 0
 	switch {
@@ -177,16 +182,16 @@ func decodeStateString(stateString string) (fanState, error) {
 	case warm:
 		s.LightMode = lightWarm
 	}
-	if len(fields) > seriesField {
-		s.Series = strings.ToUpper(strings.TrimSpace(fields[seriesField]))
+	if len(fields) > modelField {
+		s.Model = strings.ToUpper(strings.TrimSpace(fields[modelField]))
 	}
 	return s, nil
 }
 
-// lightSupport says what a model's light can do. The state bits are identical
-// across models, so only this decides how they are projected: reporting a level
-// for a lamp that has no levels would make the UI offer a dimmer that does
-// nothing.
+// lightSupport says what a fan's light can do. The state bits are identical
+// across drivers, so only this decides how they are projected: reporting a
+// level for a lamp that has no levels would make the UI offer a dimmer that
+// does nothing.
 type lightSupport int
 
 const (

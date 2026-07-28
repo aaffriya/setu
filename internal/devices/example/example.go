@@ -6,14 +6,14 @@
 // The pattern it demonstrates:
 //
 //   - a brand "base" struct holding identity + the brand's transport, embedded
-//     into each model (composition, not inheritance — principle 2);
-//   - one exported type per model (here Bulb), implementing only the capability
-//     interfaces that model supports;
+//     into each driver type (composition, not inheritance — principle 2);
+//   - one exported type per driver (here Bulb), implementing only the capability
+//     interfaces that hardware supports;
 //   - runtime MAC→IP resolution with caching and re-resolution on failure
 //     (principle 5);
 //   - state changes published to the event bus (principle 6);
 //   - a Constructor matching config.Constructor and a Register function that
-//     wires (brand, model) pairs into the factory.
+//     wires (brand, driver) pairs into the factory.
 //
 // A step-by-step checklist for adding a real device is at the bottom of the file
 // (and in the README's "Adding a device" section).
@@ -30,25 +30,28 @@ import (
 	"setu/internal/resolver"
 )
 
-// Brand and model identifiers. These are the exact strings a stored device spec
-// carries (brand/model) and the ones used in the factory registration below.
+// Brand and driver identifiers. These are the exact strings a stored device
+// spec carries and the ones used in the factory registration below. Brand is
+// also the vendor name the UI prints, so it is spelled the way the vendor does;
+// a driver key never reaches a screen (Register gives it a label for that).
 const (
-	Brand     = "example"
-	ModelBulb = "bulb"
+	Brand      = "Example"
+	DriverBulb = "bulb"
 )
 
-// base is the shared brand foundation embedded by every model of this brand. A
+// base is the shared brand foundation embedded by every driver of this brand. A
 // real brand puts its transport here — e.g. a *net.UDPConn for WiZ, or an HTTP
 // client + token for a LAN API. It also owns identity metadata, the cached
 // resolved IP, and the cached device State.
 //
-// All Device-metadata methods that are identical across models hang off base, so
-// each model gets them for free by embedding base. Methods that differ per model
-// (Model, Capabilities, and the capability methods) live on the model type.
+// All Device-metadata methods that are identical across drivers hang off base,
+// so each driver gets them for free by embedding base. Methods that differ per
+// driver (Driver, Capabilities, and the capability methods) live on the driver
+// type.
 type base struct {
 	id         string
 	name       string
-	series     string
+	model      string
 	mac        string
 	arp        resolver.Resolver // injected fallback (the host's ARP table)
 	discoverer resolver.Resolver // this brand's own discovery (see discovery.go)
@@ -61,11 +64,15 @@ type base struct {
 
 // --- Device metadata shared by all models via embedding ---
 
-func (b *base) ID() string     { return b.id }
-func (b *base) Name() string   { return b.name }
-func (b *base) Brand() string  { return Brand }
-func (b *base) MAC() string    { return b.mac }
-func (b *base) Series() string { return b.series }
+func (b *base) ID() string    { return b.id }
+func (b *base) Name() string  { return b.name }
+func (b *base) Brand() string { return Brand }
+func (b *base) MAC() string   { return b.mac }
+
+// Model is instance data, not a property of this driver: it is whatever the
+// scan read off the hardware or the user typed, and it is empty when nobody has
+// said. Nothing may branch on it — Driver is what decides behaviour.
+func (b *base) Model() string { return b.model }
 
 // State returns the cached state. It must not do I/O (the poller refreshes it).
 func (b *base) State() device.State {
@@ -186,8 +193,8 @@ var (
 	_ device.Pollable     = (*Bulb)(nil)
 )
 
-// Model and Capabilities live on the model type because they vary per model.
-func (b *Bulb) Model() string { return ModelBulb }
+// Driver and Capabilities live on the driver type because they vary per driver.
+func (b *Bulb) Driver() string { return DriverBulb }
 
 func (b *Bulb) Capabilities() []string {
 	return []string{device.CapSwitch, device.CapBrightness, device.CapColor}
@@ -277,7 +284,7 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	b := &Bulb{base: base{
 		id:         spec.ID,
 		name:       spec.Name,
-		series:     spec.Series,
+		model:      spec.Model,
 		mac:        spec.MAC,
 		arp:        deps.Resolver,
 		discoverer: NewDiscoverer(),
@@ -288,30 +295,36 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	return b, nil
 }
 
-// Register wires this brand's (brand, model) pairs into the factory. The
-// composition root (cmd/setu/main.go) calls this once — that single call is the
-// "register one factory line" step when adding a device.
+// Register wires this brand's drivers into the factory. The composition root
+// (cmd/setu/main.go) calls this once — that single call is the "register one
+// factory line" step when adding a device.
+//
+// The third argument is the label the UI shows wherever a person picks a driver
+// (the manual add form, an unnamed scan result). Write it as the shortest thing
+// a user would recognise on the box, not as the key.
 func Register(f *config.Factory) {
-	f.Register(Brand, ModelBulb, New)
-	// A second model of the same brand would be added here, e.g.:
-	//   f.Register(Brand, ModelPlug, NewPlug)
+	f.Register(Brand, DriverBulb, "Bulb", New)
+	// A second driver of the same brand would be added here, e.g.:
+	//   f.Register(Brand, DriverPlug, "Smart plug", NewPlug)
 }
 
 // ---------------------------------------------------------------------------
 // CHECKLIST — adding a real device, by brand and model:
 //
-//  1. Copy this package to internal/devices/<brand>/ and set Brand/Model consts.
+//  1. Copy this package to internal/devices/<brand>/ and set the Brand/Driver
+//     consts.
 //  2. Put the brand's transport (UDP/TCP/HTTP client) in `base` and implement
 //     `send`; replace discovery.go's stub Lookup with the brand's real discovery,
 //     and its Scan if the brand can enumerate its devices (the UI's device scan).
-//  3. For each model, define a type embedding base and implement Model,
+//  3. For each driver, define a type embedding base and implement Driver,
 //     Capabilities, and only the capability interfaces it supports. Update the
 //     compile-time `var _ = ...` assertions to match.
 //  4. Implement Poll to read real hardware state (or omit Pollable entirely).
 //     Wrap device.ErrPollNoResponse on a failed read whose state is still
 //     meaningful — see the Poll doc comment; getting this wrong makes an
 //     unreachable device render as a healthy one.
-//  5. Export New (a config.Constructor) and a Register(*config.Factory).
+//  5. Export New (a config.Constructor) and a Register(*config.Factory), giving
+//     every driver a human label there.
 //  6. Call <brand>.Register(factory) once in cmd/setu/main.go — and add the
 //     discoverer to the `scanners` slice there if it implements Scan.
 //  7. Add the device from Settings → Devices: a network scan finds it, or it

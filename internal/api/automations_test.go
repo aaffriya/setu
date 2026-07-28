@@ -35,7 +35,8 @@ func (r *readTracker) Read([]byte) (int, error) {
 func (*automationSwitch) ID() string             { return "lamp" }
 func (*automationSwitch) Name() string           { return "Lamp" }
 func (*automationSwitch) Brand() string          { return "test" }
-func (*automationSwitch) Model() string          { return "switch" }
+func (*automationSwitch) Driver() string         { return "switch" }
+func (*automationSwitch) Model() string          { return "" }
 func (*automationSwitch) MAC() string            { return "02:00:00:00:00:02" }
 func (*automationSwitch) Capabilities() []string { return []string{device.CapSwitch} }
 func (d *automationSwitch) State() device.State  { d.mu.Lock(); defer d.mu.Unlock(); return d.state }
@@ -48,7 +49,7 @@ func automationServer(t *testing.T) (*Server, string) {
 	mgr := manager.New(bus, []device.Device{&automationSwitch{}})
 	t.Cleanup(mgr.Close)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	engine, err := automation.New(mgr, bus, automation.NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))), log)
+	engine, err := automation.New(mgr, bus, automation.NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))), nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}

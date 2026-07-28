@@ -95,11 +95,22 @@ type State struct {
 // exposes stable identity/metadata plus a cached State snapshot. Behaviour
 // (turning on, dimming, …) lives in the capability interfaces below, which a
 // device implements only for the features its hardware actually has.
+//
+// Three words describe a device, each with exactly one job:
+//
+//   - Brand is the vendor, in the one spelling that brand package chose.
+//   - Driver is which code drives it. With Brand it is identity: the pair picks
+//     a constructor out of the factory. It is a key, not prose, and is never
+//     shown to a user — the factory carries a human label for each pair.
+//   - Model is the hardware itself, as the device reported it or as the user
+//     typed it. It is presentation only: nothing branches on it, and it is
+//     empty whenever nothing has said what the hardware is.
 type Device interface {
 	ID() string             // stable, unique instance id (from config)
 	Name() string           // human-friendly label
-	Brand() string          // e.g. "wiz"
-	Model() string          // e.g. "color_bulb"
+	Brand() string          // vendor, e.g. "Samsung"
+	Driver() string         // driver key within the brand, e.g. "tizen"
+	Model() string          // the hardware, e.g. "UE43AU7700"; "" when unknown
 	MAC() string            // primary identity; IP is resolved at runtime
 	Capabilities() []string // e.g. ["switch","brightness","color"]
 	State() State           // cheap, cached snapshot (must not do I/O)
@@ -111,14 +122,6 @@ type Device interface {
 // release simply does not implement it.
 type Closer interface {
 	Close() error
-}
-
-// Described is optional presentation metadata: a human-friendly product or
-// series name (e.g. "AU7700") distinct from the Model driver key. A device opts
-// in by implementing it (like the capability interfaces); the API omits the
-// field when absent, so the UI simply falls back to the model.
-type Described interface {
-	Series() string
 }
 
 // Switchable is implemented by devices that can be powered on and off.

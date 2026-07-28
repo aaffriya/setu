@@ -2,7 +2,7 @@
 // (port 38899, JSON getPilot/setPilot) — no cloud, login, or local key needed.
 //
 // It is a worked instance of the blueprint in internal/devices/example: a brand
-// `base` holding the transport, model types implementing only their hardware
+// `base` holding the transport, driver types implementing only their hardware
 // capabilities, MAC→IP resolution with caching + re-resolution, and a brand
 // Resolver (UDP broadcast discovery, see discovery.go) that demonstrates the
 // per-brand discovery seam the resolver package documents.
@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	Brand             = "WiZ"
-	ModelColorBulb    = "color_bulb"
-	ModelTunableWhite = "tunable_white"
+	Brand              = "WiZ"
+	DriverColorBulb    = "color_bulb"
+	DriverTunableWhite = "tunable_white"
 
 	port           = 38899
 	minDimming     = 10 // WiZ hardware floor; lower values are ignored by the bulb
@@ -56,24 +56,24 @@ type pilotResponse struct {
 }
 
 // base is the shared WiZ brand foundation: identity, the resolution strategy,
-// and the UDP transport. Models embed it.
+// and the UDP transport. The driver types embed it.
 type base struct {
-	id, name, series, mac string
-	arp                   resolver.Resolver // injected fallback (ARP table)
-	discoverer            *Discoverer       // brand-specific UDP discovery
-	bus                   *events.Bus
-	timeout               time.Duration
+	id, name, model, mac string
+	arp                  resolver.Resolver // injected fallback (ARP table)
+	discoverer           *Discoverer       // brand-specific UDP discovery
+	bus                  *events.Bus
+	timeout              time.Duration
 
 	mu    sync.Mutex
 	ip    net.IP // cached resolved IP (nil until resolved)
 	state device.State
 }
 
-func (b *base) ID() string     { return b.id }
-func (b *base) Name() string   { return b.name }
-func (b *base) Brand() string  { return Brand }
-func (b *base) MAC() string    { return b.mac }
-func (b *base) Series() string { return b.series }
+func (b *base) ID() string    { return b.id }
+func (b *base) Name() string  { return b.name }
+func (b *base) Brand() string { return Brand }
+func (b *base) MAC() string   { return b.mac }
+func (b *base) Model() string { return b.model }
 
 func (b *base) State() device.State {
 	b.mu.Lock()
@@ -177,7 +177,7 @@ func (b *base) updateState(mutate func(*device.State)) {
 }
 
 // The helpers below keep transport/state behavior shared while each concrete
-// model exposes only the capability methods its hardware actually supports.
+// driver exposes only the capability methods its hardware actually supports.
 func (b *base) setPower(on bool) error {
 	if err := b.setPilot(map[string]any{"state": on}); err != nil {
 		return err
@@ -237,7 +237,7 @@ func (b *base) setScene(supported []device.Scene, id int) error {
 		})
 		return nil
 	}
-	return fmt.Errorf("wiz %s: scene %d is not supported by this model", b.id, id)
+	return fmt.Errorf("wiz %s: scene %d is not supported by this bulb", b.id, id)
 }
 
 func (b *base) setSceneSpeed(speed int) error {
@@ -325,7 +325,7 @@ var (
 	_ device.Pollable         = (*ColorBulb)(nil)
 )
 
-func (b *ColorBulb) Model() string { return ModelColorBulb }
+func (b *ColorBulb) Driver() string { return DriverColorBulb }
 
 func (b *ColorBulb) Capabilities() []string {
 	return []string{
@@ -391,7 +391,7 @@ var (
 	_ device.Pollable         = (*TunableWhiteBulb)(nil)
 )
 
-func (b *TunableWhiteBulb) Model() string { return ModelTunableWhite }
+func (b *TunableWhiteBulb) Driver() string { return DriverTunableWhite }
 
 func (b *TunableWhiteBulb) Capabilities() []string {
 	return []string{
@@ -436,7 +436,7 @@ func newBase(spec config.DeviceSpec, deps config.Deps) base {
 	return base{
 		id:         spec.ID,
 		name:       spec.Name,
-		series:     spec.Series,
+		model:      spec.Model,
 		mac:        spec.MAC,
 		arp:        deps.Resolver,
 		discoverer: NewDiscoverer(),
@@ -456,8 +456,8 @@ func NewTunableWhite(spec config.DeviceSpec, deps config.Deps) (device.Device, e
 	return &TunableWhiteBulb{base: newBase(spec, deps)}, nil
 }
 
-// Register wires WiZ models into the factory (called from cmd/setu/main.go).
+// Register wires the WiZ drivers into the factory (called from cmd/setu/main.go).
 func Register(f *config.Factory) {
-	f.Register(Brand, ModelColorBulb, New)
-	f.Register(Brand, ModelTunableWhite, NewTunableWhite)
+	f.Register(Brand, DriverColorBulb, "Colour bulb", New)
+	f.Register(Brand, DriverTunableWhite, "Tunable-white bulb", NewTunableWhite)
 }

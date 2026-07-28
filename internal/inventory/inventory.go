@@ -74,8 +74,8 @@ func New(file *store.Store, factory *config.Factory, deps config.Deps, mgr *mana
 	return inv, nil
 }
 
-// Types returns the (brand, model) pairs Setu can build, for the UI's manual
-// add form.
+// Types returns the drivers Setu can build, labelled, for the UI's manual add
+// form and to describe scan results.
 func (i *Inventory) Types() []config.DeviceType { return i.factory.Types() }
 
 // Specs returns the stored device list — the backup form of an installation.
@@ -125,12 +125,13 @@ func (i *Inventory) Add(spec config.DeviceSpec) (config.DeviceSpec, error) {
 	return spec, nil
 }
 
-// Labels are a device's editable fields. A nil field is left exactly as it is:
-// the UI edits name and series in two separate inputs, and saving one must not
-// send — and possibly revert — a stale copy of the other.
+// Labels are a device's editable fields — everything that is not identity. A
+// nil field is left exactly as it is: the UI edits the name and the model in two
+// separate inputs, and saving one must not send — and possibly revert — a stale
+// copy of the other.
 type Labels struct {
-	Name   *string
-	Series *string
+	Name  *string
+	Model *string
 }
 
 // Update edits a device's labels. The device is rebuilt because its name is
@@ -148,8 +149,8 @@ func (i *Inventory) Update(id string, labels Labels) (config.DeviceSpec, error) 
 	if labels.Name != nil {
 		spec.Name = *labels.Name
 	}
-	if labels.Series != nil {
-		spec.Series = *labels.Series
+	if labels.Model != nil {
+		spec.Model = *labels.Model
 	}
 	spec = spec.Normalized()
 	if err := spec.Validate(); err != nil {

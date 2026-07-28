@@ -19,7 +19,8 @@ type rangedWhiteDevice struct{}
 func (rangedWhiteDevice) ID() string                 { return "white" }
 func (rangedWhiteDevice) Name() string               { return "White" }
 func (rangedWhiteDevice) Brand() string              { return "test" }
-func (rangedWhiteDevice) Model() string              { return "ranged_white" }
+func (rangedWhiteDevice) Driver() string             { return "ranged_white" }
+func (rangedWhiteDevice) Model() string              { return "" }
 func (rangedWhiteDevice) MAC() string                { return "00:11:22:33:44:55" }
 func (rangedWhiteDevice) Capabilities() []string     { return []string{device.CapColorTemp} }
 func (rangedWhiteDevice) State() device.State        { return device.State{} }
@@ -44,7 +45,8 @@ type stalePollDevice struct {
 func (*stalePollDevice) ID() string             { return "race" }
 func (*stalePollDevice) Name() string           { return "Race" }
 func (*stalePollDevice) Brand() string          { return "test" }
-func (*stalePollDevice) Model() string          { return "race" }
+func (*stalePollDevice) Driver() string         { return "race" }
+func (*stalePollDevice) Model() string          { return "" }
 func (*stalePollDevice) MAC() string            { return "02:00:00:00:00:02" }
 func (*stalePollDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (d *stalePollDevice) State() device.State {
@@ -123,7 +125,8 @@ type lifecycleDevice struct {
 func (d *lifecycleDevice) ID() string           { return d.id }
 func (d *lifecycleDevice) Name() string         { return d.id }
 func (*lifecycleDevice) Brand() string          { return "test" }
-func (*lifecycleDevice) Model() string          { return "lifecycle" }
+func (*lifecycleDevice) Driver() string         { return "lifecycle" }
+func (*lifecycleDevice) Model() string          { return "" }
 func (*lifecycleDevice) MAC() string            { return "02:00:00:00:00:09" }
 func (*lifecycleDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (*lifecycleDevice) State() device.State    { return device.State{Online: true} }
@@ -223,7 +226,8 @@ type shutdownDevice struct {
 func (d *shutdownDevice) ID() string           { return d.id }
 func (d *shutdownDevice) Name() string         { return d.id }
 func (*shutdownDevice) Brand() string          { return "test" }
-func (*shutdownDevice) Model() string          { return "shutdown" }
+func (*shutdownDevice) Driver() string         { return "shutdown" }
+func (*shutdownDevice) Model() string          { return "" }
 func (*shutdownDevice) MAC() string            { return "02:00:00:00:00:0a" }
 func (*shutdownDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (*shutdownDevice) State() device.State    { return device.State{Online: true} }
@@ -319,7 +323,8 @@ type uncertainCommandDevice struct {
 func (*uncertainCommandDevice) ID() string             { return "uncertain" }
 func (*uncertainCommandDevice) Name() string           { return "Uncertain" }
 func (*uncertainCommandDevice) Brand() string          { return "test" }
-func (*uncertainCommandDevice) Model() string          { return "uncertain" }
+func (*uncertainCommandDevice) Driver() string         { return "uncertain" }
+func (*uncertainCommandDevice) Model() string          { return "" }
 func (*uncertainCommandDevice) MAC() string            { return "02:00:00:00:00:03" }
 func (*uncertainCommandDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (d *uncertainCommandDevice) State() device.State {
@@ -474,7 +479,8 @@ type failingPollDevice struct {
 func (*failingPollDevice) ID() string             { return "failing" }
 func (*failingPollDevice) Name() string           { return "Failing" }
 func (*failingPollDevice) Brand() string          { return "test" }
-func (*failingPollDevice) Model() string          { return "failing" }
+func (*failingPollDevice) Driver() string         { return "failing" }
+func (*failingPollDevice) Model() string          { return "" }
 func (*failingPollDevice) MAC() string            { return "02:00:00:00:00:04" }
 func (*failingPollDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (*failingPollDevice) State() device.State    { return device.State{Online: false} }

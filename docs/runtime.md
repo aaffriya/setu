@@ -81,7 +81,7 @@ RAM-only diagnostics entry. Diagnostics never trigger I/O.
 
 | Owner | Data |
 | --- | --- |
-| `$SETU_STATE_DIR/setu.json` | device specs and automations |
+| `$SETU_STATE_DIR/setu.json` | device specs, automations, and user accounts |
 | Samsung token files | TV pairing tokens |
 | `localStorage` | access token, cached cards, favourites, rooms, manual scenes, order, expanded state, theme |
 | service worker | versioned app shell only; never `/api` or `/ws` |

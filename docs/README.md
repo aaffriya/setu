@@ -25,6 +25,7 @@ Read only the document closest to the change.
 - [`manager`](../internal/manager/README.md)
 - [`resolver`](../internal/resolver/README.md)
 - [`store`](../internal/store/README.md)
+- [`users`](../internal/users/README.md)
 - [`wol`](../internal/wol/README.md)
 
 ## Device packages

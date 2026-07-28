@@ -20,6 +20,7 @@ import (
 	"setu/internal/inventory"
 	"setu/internal/manager"
 	"setu/internal/resolver"
+	"setu/internal/users"
 )
 
 // Server wires the manager and event bus to HTTP handlers.
@@ -29,8 +30,10 @@ type Server struct {
 	bus        *events.Bus
 	automation *automation.Engine
 	inventory  *inventory.Inventory
+	users      *users.Registry
 	scanners   []resolver.Scanner
 	scanMu     sync.Mutex // one LAN scan at a time (see discovery.go)
+	commands   *limiter   // per-caller, per-device command budget (see ratelimit.go)
 	token      string
 	dist       fs.FS // embedded frontend, rooted at the dist dir
 	log        *slog.Logger
@@ -45,12 +48,16 @@ type Options struct {
 	// Inventory owns the stored device list. Without one the device-management
 	// endpoints are not mounted (the manager still serves what it holds).
 	Inventory *inventory.Inventory
+	// Users owns the accounts that exist besides the administrator. Without one
+	// the user endpoints are not mounted and Token is the only way in.
+	Users *users.Registry
 	// Scanners list the brands that can enumerate their devices on the LAN, in
 	// the order the composition root registered them. Empty = no scan endpoint.
 	Scanners []resolver.Scanner
-	Token    string
-	Dist     fs.FS
-	Logger   *slog.Logger
+	// Token is the administrator's bearer token, from the environment.
+	Token  string
+	Dist   fs.FS
+	Logger *slog.Logger
 }
 
 // emptyFS stands in for an absent frontend. Serving from a nil fs.FS would
@@ -73,7 +80,9 @@ func New(o Options) *Server {
 		bus:        o.Bus,
 		automation: o.Automation,
 		inventory:  o.Inventory,
+		users:      o.Users,
 		scanners:   o.Scanners,
+		commands:   newLimiter(),
 		token:      o.Token,
 		dist:       dist,
 		log:        o.Logger,
@@ -91,7 +100,19 @@ func (s *Server) Handler() http.Handler {
 	// normal cached app shell cannot navigate. It clears no token/preferences.
 	mux.HandleFunc("GET /api/recover", s.handleAppRecovery)
 
+	// Public liveness probe for systemd, Docker and uptime checks. It answers
+	// only "this process is serving HTTP" and deliberately discloses nothing
+	// about the installation, so it needs no token (see handlers.go).
+	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("HEAD /healthz", s.handleHealth)
+
 	// JSON API (token-protected). Go 1.22+ method+pattern routing.
+	//
+	// Three levels guard these routes: auth accepts any account, authModify adds
+	// "may change the installation", and authAdmin means the SETU_TOKEN holder
+	// only. Routes naming a device additionally check that this account was
+	// granted it — the middleware knows the account, not the device.
+	mux.Handle("GET /api/session", s.auth(http.HandlerFunc(s.handleSession)))
 	mux.Handle("GET /api/devices", s.auth(http.HandlerFunc(s.handleListDevices)))
 	mux.Handle("GET /api/diagnostics", s.auth(http.HandlerFunc(s.handleDiagnostics)))
 	mux.Handle("POST /api/activity", s.auth(http.HandlerFunc(s.handleActivity)))
@@ -101,21 +122,31 @@ func (s *Server) Handler() http.Handler {
 		// Managing which devices exist: added from a scan or by hand, renamed,
 		// removed, and exported/replaced as one list for backup and restore.
 		mux.Handle("GET /api/device-types", s.auth(http.HandlerFunc(s.handleDeviceTypes)))
-		mux.Handle("POST /api/devices", s.auth(http.HandlerFunc(s.handleAddDevice)))
-		mux.Handle("PATCH /api/devices/{id}", s.auth(http.HandlerFunc(s.handleUpdateDevice)))
-		mux.Handle("DELETE /api/devices/{id}", s.auth(http.HandlerFunc(s.handleDeleteDevice)))
-		mux.Handle("GET /api/devices/export", s.auth(http.HandlerFunc(s.handleExportDevices)))
-		mux.Handle("PUT /api/devices", s.auth(http.HandlerFunc(s.handleReplaceDevices)))
+		mux.Handle("POST /api/devices", s.authModify(http.HandlerFunc(s.handleAddDevice)))
+		mux.Handle("PATCH /api/devices/{id}", s.authModify(http.HandlerFunc(s.handleUpdateDevice)))
+		mux.Handle("DELETE /api/devices/{id}", s.authModify(http.HandlerFunc(s.handleDeleteDevice)))
+		// Export and restore are whole-installation operations: they read and
+		// rewrite devices no single user may be able to see, so they stay with
+		// the administrator even when other accounts may add hardware.
+		mux.Handle("GET /api/devices/export", s.authAdmin(http.HandlerFunc(s.handleExportDevices)))
+		mux.Handle("PUT /api/devices", s.authAdmin(http.HandlerFunc(s.handleReplaceDevices)))
 		// A scan actively broadcasts on the LAN, so it is a POST: never
 		// prefetched, never cached, never replayed by a bored browser.
-		mux.Handle("POST /api/discovery/scan", s.auth(http.HandlerFunc(s.handleScan)))
+		mux.Handle("POST /api/discovery/scan", s.authModify(http.HandlerFunc(s.handleScan)))
+	}
+	if s.users != nil {
+		mux.Handle("GET /api/users", s.authAdmin(http.HandlerFunc(s.handleListUsers)))
+		mux.Handle("POST /api/users", s.authAdmin(http.HandlerFunc(s.handleCreateUser)))
+		mux.Handle("PATCH /api/users/{id}", s.authAdmin(http.HandlerFunc(s.handleUpdateUser)))
+		mux.Handle("DELETE /api/users/{id}", s.authAdmin(http.HandlerFunc(s.handleDeleteUser)))
+		mux.Handle("POST /api/users/{id}/token", s.authAdmin(http.HandlerFunc(s.handleRotateUserToken)))
 	}
 	if s.automation != nil {
 		mux.Handle("GET /api/automations", s.auth(http.HandlerFunc(s.handleAutomations)))
-		mux.Handle("PUT /api/automations", s.auth(http.HandlerFunc(s.handleReplaceAutomations)))
-		mux.Handle("GET /api/automations/export", s.auth(http.HandlerFunc(s.handleAutomationExport)))
+		mux.Handle("PUT /api/automations", s.authModify(http.HandlerFunc(s.handleReplaceAutomations)))
+		mux.Handle("GET /api/automations/export", s.authAdmin(http.HandlerFunc(s.handleAutomationExport)))
 		mux.Handle("POST /api/automations/{id}/run", s.auth(http.HandlerFunc(s.handleRunAutomation)))
-		mux.Handle("POST /api/automations/{id}/token", s.auth(http.HandlerFunc(s.handleRotateWebhook)))
+		mux.Handle("POST /api/automations/{id}/token", s.authModify(http.HandlerFunc(s.handleRotateWebhook)))
 		mux.HandleFunc("POST /api/automation-hooks/{id}", s.handleAutomationWebhook)
 	}
 

@@ -5,9 +5,9 @@ capabilities.
 
 ## Contracts
 
-- `Device`: ID, name, brand, model, MAC, capability IDs, and a cheap cached
-  `State()`; it must not perform I/O.
-- Optional lifecycle/metadata: `Closer`, `Described`, and internal `Pollable`.
+- `Device`: ID, name, brand, driver, model, MAC, capability IDs, and a cheap
+  cached `State()`; it must not perform I/O.
+- Optional lifecycle: `Closer`, and internal `Pollable`.
 - Power/light: `Switchable`, `Dimmable`, `ColorControl`,
   `ColorTempControl`, `SceneControl`, `LightSwitch`.
 - Fan: `SpeedControl`, `SleepMode`, `TimerControl`.

@@ -58,11 +58,19 @@
     }
   }
 
-  const typeKey = (type: DeviceType) => `${type.brand}/${type.model}`
-  const humanModel = (model: string) => model.replaceAll('_', ' ')
+  const typeKey = (type: DeviceType) => `${type.brand}/${type.driver}`
+  const typeLabel = (type: DeviceType) => `${type.brand} · ${type.label}`
 
+  // What to call a device that has not been named yet. The server labels each
+  // driver ("Tizen TV"), so nothing here has to turn a driver key into English.
   function candidateName(candidate: DiscoveredDevice): string {
-    return candidate.name || `${candidate.brand} ${humanModel(candidate.model || 'device')}`
+    return candidate.name || [candidate.brand, candidate.label].filter(Boolean).join(' ')
+  }
+
+  // The line under a scan result: what the device says it is, or failing that
+  // what the driver that would run it is called.
+  function candidateDetail(candidate: DiscoveredDevice): string {
+    return [candidate.brand, candidate.model || candidate.label].filter(Boolean).join(' · ')
   }
 
   async function scan() {
@@ -90,6 +98,9 @@
     try {
       const added = await addDevice({
         brand: candidate.brand,
+        driver: candidate.driver,
+        // Keep what the scan read off the hardware. Asking the user to retype
+        // a model number Setu has already been told is busywork.
         model: candidate.model,
         name: candidateName(candidate),
         mac: candidate.mac,
@@ -114,17 +125,17 @@
 
   async function addManual() {
     if (busy) return
-    const [brand, model] = manualType.split('/')
-    if (!brand || !model) {
+    const type = types.find((candidate) => typeKey(candidate) === manualType)
+    if (!type) {
       report(new Error('Pick a device type.'), 'Pick a device type.')
       return
     }
     busy = true
     try {
       const added = await addDevice({
-        brand,
-        model,
-        name: manualName.trim() || `${brand} ${humanModel(model)}`,
+        brand: type.brand,
+        driver: type.driver,
+        name: manualName.trim() || `${type.brand} ${type.label}`,
         mac: manualMAC.trim(),
       })
       manualName = ''
@@ -138,13 +149,13 @@
     }
   }
 
-  // One field at a time, so saving the name can never carry a stale series
-  // (or the other way round) while the previous save is still in flight. The
-  // input is put back on failure: text that was refused must not sit there
-  // looking saved.
+  // One field at a time, so saving the name can never carry a stale model (or
+  // the other way round) while the previous save is still in flight. The input
+  // is put back on failure: text that was refused must not sit there looking
+  // saved.
   async function rename(
     device: Device,
-    field: 'name' | 'series',
+    field: 'name' | 'model',
     input: HTMLInputElement,
   ) {
     const value = input.value.trim()
@@ -291,16 +302,16 @@
                     />
                     <input
                       class="{field} w-20 shrink-0"
-                      value={device.series ?? ''}
+                      value={device.model ?? ''}
                       maxlength="32"
                       placeholder="model"
-                      aria-label={`Model label for ${device.name}`}
-                      onchange={(event) => rename(device, 'series', event.currentTarget)}
+                      aria-label={`Model for ${device.name}`}
+                      onchange={(event) => rename(device, 'model', event.currentTarget)}
                     />
                   </div>
                   <div class="mt-1.5 flex items-center gap-2">
                     <span class="min-w-0 flex-1 truncate text-[11px] text-ink/40">
-                      {device.brand} · {humanModel(device.model)} · <span class="font-mono">{device.mac}</span>
+                      {device.brand} · <span class="font-mono">{device.mac}</span>
                     </span>
                     <button
                       type="button"
@@ -346,20 +357,18 @@
             <div class="mt-2 space-y-2">
               {#each result.candidates as candidate (candidate.brand + candidate.mac)}
                 <div class="flex items-start gap-2.5 rounded-xl border border-ink/10 bg-ink/[0.03] p-2.5">
-                  <span class="mt-1 h-2.5 w-2.5 shrink-0 rounded-full {candidate.configured ? 'bg-emerald-400' : candidate.model ? 'bg-indigo-400' : 'bg-amber-400'}"></span>
+                  <span class="mt-1 h-2.5 w-2.5 shrink-0 rounded-full {candidate.configured ? 'bg-emerald-400' : candidate.driver ? 'bg-indigo-400' : 'bg-amber-400'}"></span>
                   <div class="min-w-0 flex-1">
                     <p class="truncate text-sm font-medium text-ink/80">{candidateName(candidate)}</p>
-                    <p class="mt-0.5 truncate text-[11px] text-ink/45">
-                      {candidate.brand}{candidate.model ? ` · ${humanModel(candidate.model)}` : ''}{candidate.series ? ` · ${candidate.series}` : ''}
-                    </p>
+                    <p class="mt-0.5 truncate text-[11px] text-ink/45">{candidateDetail(candidate)}</p>
                     <p class="mt-0.5 truncate font-mono text-[11px] text-ink/35">
                       {candidate.mac}{candidate.ip ? ` · ${candidate.ip}` : ''}
                     </p>
                   </div>
                   {#if candidate.configured}
                     <span class="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-300">Added</span>
-                  {:else if !candidate.model}
-                    <span class="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-300" title="Setu has no driver for this model yet">No driver</span>
+                  {:else if !candidate.driver}
+                    <span class="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-300" title="Setu has no driver for this hardware yet">No driver</span>
                   {:else}
                     <button
                       type="button"
@@ -401,7 +410,7 @@
             <div class="mt-2 space-y-1.5">
               <select class="{field} w-full" bind:value={manualType} aria-label="Device type">
                 {#each types as type (typeKey(type))}
-                  <option value={typeKey(type)}>{type.brand} · {humanModel(type.model)}</option>
+                  <option value={typeKey(type)}>{typeLabel(type)}</option>
                 {/each}
               </select>
               <input class="{field} w-full" bind:value={manualName} maxlength="48" placeholder="Name (e.g. Home NAS)" aria-label="Device name" />

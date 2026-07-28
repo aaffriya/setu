@@ -74,8 +74,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // A device entry is only worth restoring if it carries the identity Setu needs
-// to build it. The server validates again; this keeps an obviously wrong file
-// from reaching it.
+// to build it: a brand, the driver to run it with, and the MAC that is the
+// device. The server validates again; this keeps an obviously wrong file from
+// reaching it.
+//
+// A backup written before the driver key was called `driver` said `model`
+// instead, so that shape is accepted too and upgraded on restore — a backup
+// exists to survive the version that follows it.
 function isDeviceSection(value: unknown): boolean {
   return (
     Array.isArray(value) &&
@@ -83,11 +88,21 @@ function isDeviceSection(value: unknown): boolean {
       (item) =>
         isRecord(item) &&
         typeof item.brand === 'string' &&
-        typeof item.model === 'string' &&
+        (typeof item.driver === 'string' || typeof item.model === 'string') &&
         typeof item.name === 'string' &&
         typeof item.mac === 'string',
     )
   )
+}
+
+// upgradeDevices rewrites a pre-`driver` device section: what it called the
+// model was the driver key, and what it called the series was the model.
+function upgradeDevices(items: DeviceSpec[]): DeviceSpec[] {
+  return items.map((item) => {
+    if (item.driver) return item
+    const legacy = item as DeviceSpec & { series?: string }
+    return { ...legacy, driver: legacy.model ?? '', model: legacy.series, series: undefined }
+  })
 }
 
 function isStringRecord(value: unknown): boolean {
@@ -267,15 +282,37 @@ function supportsAction(device: Device, action: AutomationAction): boolean {
   return false
 }
 
+// The capability a device must report for a watched value to mean anything.
+// Mirrors metricCapability in internal/automation.
+const METRIC_CAPABILITY: Record<string, string> = {
+  power: 'switch',
+  brightness: 'brightness',
+  speed: 'speed',
+  volume: 'volume',
+  color_temp: 'color_temp',
+  timer_hours: 'timer',
+}
+
 function ruleMatchesInstall(
   rule: AutomationRule,
   devices: Map<string, Device>,
   enabledAutomationIDs: Set<string>,
+  presence: boolean,
 ): boolean {
   if (rule.trigger.type === 'device_state') {
     const source = devices.get(rule.trigger.device.device_id)
-    if (!source?.capabilities.includes('switch')) return false
+    const capability = METRIC_CAPABILITY[rule.trigger.device.metric ?? 'power']
+    if (!capability || !source?.capabilities.includes(capability)) return false
   }
+  if (rule.trigger.type === 'device_offline') {
+    // Reachability is only observable for a device Setu can read back; a
+    // write-only Wake-on-LAN target never answers either way.
+    const source = devices.get(rule.trigger.offline.device_id)
+    if (!source || source.capabilities.every((capability) => capability === 'wol')) return false
+  }
+  // A presence rule restored onto a host that cannot read its neighbour table
+  // would be refused, taking the whole restore with it.
+  if (rule.trigger.type === 'presence' && !presence) return false
   for (const condition of rule.conditions ?? []) {
     if (!devices.get(condition.device_id)?.capabilities.includes('switch')) return false
   }
@@ -291,7 +328,11 @@ function ruleMatchesInstall(
   })
 }
 
-function portableAutomations(state: AutomationState, devices: Device[]): AutomationState {
+function portableAutomations(
+  state: AutomationState,
+  devices: Device[],
+  presence: boolean,
+): AutomationState {
   const available = new Map(devices.map((device) => [device.id, device]))
   const copy = JSON.parse(JSON.stringify(state)) as AutomationState
   let changed = true
@@ -301,7 +342,7 @@ function portableAutomations(state: AutomationState, devices: Device[]): Automat
       copy.items.filter((rule) => rule.enabled).map((rule) => rule.id),
     )
     for (const rule of copy.items) {
-      if (rule.enabled && !ruleMatchesInstall(rule, available, enabledAutomationIDs)) {
+      if (rule.enabled && !ruleMatchesInstall(rule, available, enabledAutomationIDs, presence)) {
         rule.enabled = false
         changed = true
       }
@@ -366,14 +407,18 @@ function rollbackLocal(previous: RawSnapshot): void {
 export async function restoreBackup(backup: SetuBackup, devices: Device[]): Promise<void> {
   let installed = devices
   if (backup.sections.devices) {
-    await replaceDevices(backup.sections.devices)
+    await replaceDevices(upgradeDevices(backup.sections.devices))
     installed = await listDevices()
   }
 
   let automation: AutomationState | undefined
   if (backup.sections.automations) {
     const current = await getAutomations()
-    automation = portableAutomations(backup.sections.automations, installed)
+    automation = portableAutomations(
+      backup.sections.automations,
+      installed,
+      current.presence !== false,
+    )
     automation.version = 1
     automation.revision = current.revision
   }

@@ -96,8 +96,8 @@ func (d *Discoverer) Scan(ctx context.Context) ([]resolver.Candidate, error) {
 		seen[info.MAC] = struct{}{}
 		found = append(found, resolver.Candidate{
 			Brand:  Brand,
-			Model:  ModelTizen,
-			Series: info.Model,
+			Driver: DriverTizen,
+			Model:  info.Model,
 			Name:   info.Name,
 			MAC:    resolver.FormatMAC(info.MAC),
 			IP:     ip.String(),
@@ -189,7 +189,7 @@ func (d *Discoverer) search(ctx context.Context, visit func(net.IP, time.Time) b
 type deviceInfo struct {
 	MAC   string // normalized
 	Name  string // user-set TV name, e.g. "[TV] Living Room"
-	Model string // product/series name, e.g. "UE43AU7700"
+	Model string // the model name the TV reports, e.g. "UE43AU7700"
 }
 
 func (d *Discoverer) deviceInfo(ip net.IP, deadline time.Time) (deviceInfo, error) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -34,13 +35,31 @@ func (r *ARPResolver) Lookup(mac string) (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
+	table, err := r.Neighbours()
+	if err != nil {
+		return nil, err
+	}
+	if ip, ok := table[want]; ok {
+		return ip, nil
+	}
+	return nil, fmt.Errorf("resolver: mac %s not found in arp table", want)
+}
 
+// Neighbours returns every MAC the host currently has a resolved entry for,
+// keyed by its normalized form. Incomplete entries — an address the kernel has
+// asked about but not heard back from — are left out, so a stale probe never
+// looks like a device that is present.
+//
+// It exists so a caller watching several addresses reads the table once instead
+// of once per address; Lookup is that caller with one address.
+func (r *ARPResolver) Neighbours() (map[string]net.IP, error) {
 	f, err := os.Open(arpTablePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolver: open arp table: %w", err)
 	}
 	defer f.Close()
 
+	table := make(map[string]net.IP)
 	sc := bufio.NewScanner(f)
 	// The first line is a header: "IP address  HW type  Flags  HW address ...".
 	if sc.Scan() {
@@ -49,23 +68,39 @@ func (r *ARPResolver) Lookup(mac string) (net.IP, error) {
 	for sc.Scan() {
 		// Columns: 0=IP 1=HWtype 2=Flags 3=HWaddress 4=Mask 5=Device.
 		fields := strings.Fields(sc.Text())
-		if len(fields) < 4 {
+		if len(fields) < 4 || !complete(fields[2]) {
 			continue
 		}
-		got, err := NormalizeMAC(fields[3])
-		if err != nil || got != want {
+		mac, err := NormalizeMAC(fields[3])
+		if err != nil {
 			continue
 		}
 		ip := net.ParseIP(fields[0])
 		if ip == nil {
 			continue
 		}
-		return ip, nil
+		// The first entry wins: a MAC reachable on two interfaces is still one
+		// device, and the earlier row is the one Lookup has always returned.
+		if _, seen := table[mac]; !seen {
+			table[mac] = ip
+		}
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("resolver: read arp table: %w", err)
 	}
-	return nil, fmt.Errorf("resolver: mac %s not found in arp table", want)
+	return table, nil
+}
+
+// complete reports whether an ARP flags column marks a resolved entry
+// (ATF_COM, 0x2). An unparseable value is treated as complete, which is how
+// this file behaved before flags were read at all.
+func complete(flags string) bool {
+	value, err := strconv.ParseUint(strings.TrimPrefix(flags, "0x"), 16, 32)
+	if err != nil {
+		return true
+	}
+	const atfCom = 0x2
+	return value&atfCom != 0
 }
 
 // NormalizeMAC reduces a 48-bit MAC to a canonical lowercase, separator-free

@@ -31,8 +31,10 @@ const (
 	// into the state file. See Load.
 	legacyAutomationFileName = "setu-automations.json"
 
-	// FormatVersion is the state file's schema version.
-	FormatVersion = 1
+	// FormatVersion is the state file's schema version. Version 1 called the
+	// driver key "model" and the reported hardware "series"; loadLocked upgrades
+	// such a file on read.
+	FormatVersion = 2
 
 	// MaxBytes bounds the whole file. The automation section is separately
 	// capped at 256 KB where it enters the API; the rest is headroom for the
@@ -46,6 +48,10 @@ type State struct {
 	Devices []config.DeviceSpec `json:"devices"`
 	// Automations is opaque here: internal/automation owns that schema.
 	Automations json.RawMessage `json:"automations,omitempty"`
+	// Users is opaque here too: internal/users owns that schema. The
+	// administrator is not in it — they come from the environment — so an
+	// installation that has never added anyone simply has no section.
+	Users json.RawMessage `json:"users,omitempty"`
 }
 
 // Store reads and writes the state file. It is safe for concurrent use: every
@@ -63,7 +69,7 @@ func New(path string) *Store { return &Store{path: path} }
 // temporary-directory fallback is in use, so the composition root can warn that
 // state may not survive a reboot.
 func DefaultPath() (string, bool) {
-	dir := os.Getenv("SETU_STATE_DIR")
+	dir := os.Getenv(config.EnvStateDir)
 	temporary := dir == ""
 	if temporary {
 		dir = os.TempDir()
@@ -80,9 +86,9 @@ func (s *Store) Load() (State, error) {
 }
 
 func (s *Store) loadLocked() (State, error) {
-	state := State{Version: FormatVersion, Devices: []config.DeviceSpec{}}
 	data, err := read(s.path)
 	if errors.Is(err, os.ErrNotExist) {
+		state := State{Version: FormatVersion, Devices: []config.DeviceSpec{}}
 		// One-time upgrade: automations used to have their own file next door.
 		// Adopt it so rules survive, and let the next write produce the merged
 		// file. Removable once no installation predates the state file.
@@ -100,22 +106,70 @@ func (s *Store) loadLocked() (State, error) {
 		return State{}, err
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&state); err != nil {
+	// The version decides which shape to decode, so it is read first — with a
+	// lenient pass, since the older shape's fields are unknown to the current
+	// one and a strict decode would fail before the version could be seen.
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
 		return State{}, fmt.Errorf("store: decode state: %w", err)
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return State{}, fmt.Errorf("store: state has trailing data")
+
+	var state State
+	switch probe.Version {
+	case FormatVersion:
+		if err := decodeExactly(data, &state); err != nil {
+			return State{}, err
+		}
+	case 1:
+		var legacy legacyState
+		if err := decodeExactly(data, &legacy); err != nil {
+			return State{}, err
+		}
+		state = State{
+			Version:     FormatVersion,
+			Devices:     config.UpgradeDeviceSpecs(legacy.Devices),
+			Automations: legacy.Automations,
+			Users:       legacy.Users,
+		}
+	default:
+		return State{}, fmt.Errorf("store: unsupported state version %d (want %d)", probe.Version, FormatVersion)
 	}
+
 	if state.Devices == nil {
 		state.Devices = []config.DeviceSpec{}
 	}
 	return state, nil
 }
 
-// Update applies mutate to the current state and writes the result. The whole
-// file is rewritten atomically, so a failure leaves the previous file intact.
+// legacyState is the version-1 document. Only the device shape changed, so the
+// opaque sections ride across untouched. Removable together with
+// config.LegacyDeviceSpec.
+type legacyState struct {
+	Version     int                       `json:"version"`
+	Devices     []config.LegacyDeviceSpec `json:"devices"`
+	Automations json.RawMessage           `json:"automations,omitempty"`
+	Users       json.RawMessage           `json:"users,omitempty"`
+}
+
+// decodeExactly decodes the whole document into v and accepts nothing it does
+// not recognise: no unknown fields, no trailing data. A state file is written
+// only by Setu, so anything else in it is damage or a hand edit, and silently
+// dropping it would lose a user's devices without a word.
+func decodeExactly(data []byte, v any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		return fmt.Errorf("store: decode state: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("store: state has trailing data")
+	}
+	return nil
+}
+
+// Update applies mutate to the current state and atomically replaces the file.
 func (s *Store) Update(mutate func(*State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,8 +204,8 @@ func read(path string) ([]byte, error) {
 	return data, nil
 }
 
-// save writes the state through a temporary file and one rename, so a crash or
-// a full disk can never leave a half-written state file behind.
+// save writes and syncs a temporary file, atomically renames it, then syncs the
+// parent directory so the replacement survives a power loss.
 func (s *Store) save(state State) error {
 	var encoded bytes.Buffer
 	if err := json.NewEncoder(&encoded).Encode(state); err != nil {
@@ -170,10 +224,10 @@ func (s *Store) save(state State) error {
 		return fmt.Errorf("store: create temporary state: %w", err)
 	}
 	tmpName := tmp.Name()
-	ok := false
+	removeTemp := true
 	defer func() {
 		_ = tmp.Close()
-		if !ok {
+		if removeTemp {
 			_ = os.Remove(tmpName)
 		}
 	}()
@@ -192,6 +246,21 @@ func (s *Store) save(state State) error {
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("store: replace state: %w", err)
 	}
-	ok = true
+	removeTemp = false
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("store: sync state directory: %w", err)
+	}
 	return nil
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
 }

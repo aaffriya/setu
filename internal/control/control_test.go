@@ -12,7 +12,8 @@ type dimmer struct{ brightness int }
 func (*dimmer) ID() string             { return "dimmer" }
 func (*dimmer) Name() string           { return "Dimmer" }
 func (*dimmer) Brand() string          { return "test" }
-func (*dimmer) Model() string          { return "dimmer" }
+func (*dimmer) Driver() string         { return "dimmer" }
+func (*dimmer) Model() string          { return "" }
 func (*dimmer) MAC() string            { return "02:00:00:00:00:03" }
 func (*dimmer) Capabilities() []string { return []string{device.CapBrightness} }
 func (*dimmer) State() device.State    { return device.State{} }
@@ -26,7 +27,8 @@ type catalogDevice struct{}
 func (*catalogDevice) ID() string             { return "catalog" }
 func (*catalogDevice) Name() string           { return "Catalog" }
 func (*catalogDevice) Brand() string          { return "test" }
-func (*catalogDevice) Model() string          { return "catalog" }
+func (*catalogDevice) Driver() string         { return "catalog" }
+func (*catalogDevice) Model() string          { return "" }
 func (*catalogDevice) MAC() string            { return "02:00:00:00:00:04" }
 func (*catalogDevice) Capabilities() []string { return nil }
 func (*catalogDevice) State() device.State    { return device.State{} }

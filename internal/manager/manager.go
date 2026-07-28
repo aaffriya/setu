@@ -504,11 +504,14 @@ func (m *Manager) Devices() []device.Device {
 
 // DeviceView is the API/JSON projection of a device: static metadata plus state.
 type DeviceView struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Brand and Model are what the card shows: the vendor, and the hardware
+	// when anything has said what it is. Driver rides along because adding and
+	// matching a device needs it — the UI never renders it.
 	Brand        string         `json:"brand"`
-	Model        string         `json:"model"`
-	Series       string         `json:"series,omitempty"` // friendly product/series name, when the device provides one
+	Driver       string         `json:"driver"`
+	Model        string         `json:"model,omitempty"`
 	MAC          string         `json:"mac"`
 	Capabilities []string       `json:"capabilities"`
 	ColorTempMin int            `json:"color_temp_min,omitempty"` // hardware Kelvin range, for ColorTempControl devices
@@ -527,12 +530,10 @@ func metaView(d device.Device) DeviceView {
 		ID:           d.ID(),
 		Name:         d.Name(),
 		Brand:        d.Brand(),
+		Driver:       d.Driver(),
 		Model:        d.Model(),
 		MAC:          d.MAC(),
 		Capabilities: d.Capabilities(),
-	}
-	if ds, ok := d.(device.Described); ok {
-		v.Series = ds.Series()
 	}
 	if ct, ok := d.(device.ColorTempControl); ok {
 		v.ColorTempMin, v.ColorTempMax = ct.ColorTempRange()

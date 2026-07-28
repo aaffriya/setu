@@ -15,8 +15,9 @@ the poll cadence.
 
 `fan` exposes power, speed, sleep, timer, and a light toggle. `fan_light`
 replaces the light toggle with brightness and warm/cool/daylight scenes.
-Series-to-model mapping is explicit in `modelFor`; unknown series are scanned
-with no model.
+Model-to-driver mapping is explicit in `driverFor`; the beacon's "series" code
+("R1", "I1") is this brand's model, and an unknown one is scanned with no
+driver.
 
 Resolution is fresh beacon → cached IP → cold-cache beacon wait → ARP. Commands
 have no acknowledgement; `Poll` sends `speedDelta:0` and waits for a newer

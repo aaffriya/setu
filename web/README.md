@@ -12,7 +12,7 @@ no SSR or UI framework.
   reconnect, and local UI state.
 - `lib/backup.ts`: versioned selective backup and rollback-aware restore.
 - `lib/components`: capability-driven controls, device management,
-  diagnostics, rooms, scenes, automations, and backup/restore.
+  diagnostics, rooms, scenes, automations, people, and backup/restore.
 - `public/service-worker.js`: production app-shell cache only.
 
 ## State boundaries
@@ -20,7 +20,8 @@ no SSR or UI framework.
 Server-owned:
 
 - device inventory and live state;
-- automations.
+- automations;
+- people: accounts, roles, and per-device access.
 
 `localStorage`:
 
@@ -44,6 +45,12 @@ include both server and client sections, but never exports the access token.
   the socket. Newer refreshes supersede older ones.
 - Optional browser features such as vibration and wake lock are feature-tested
   and fail soft.
+- `GET /api/session` says what the signed-in account may do, and the UI hides
+  the rest. This is presentation only: the server re-checks every request, so an
+  unanswered session (an older or unreachable Setu) shows everything rather than
+  locking someone out of what they are entitled to.
+- A generated token is shown once, in the response that created or rotated it.
+  Any screen that receives one must display it before moving on.
 - Use `ink`, `panel`, and `--card-shadow` theme tokens for neutral surfaces.
   The user can follow the OS or force light/dark; do not hardcode neutral
   white/black/slate colors.

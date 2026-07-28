@@ -19,59 +19,59 @@ func TestDecodeStateString(t *testing.T) {
 		{
 			name:  "vendor example: on at speed 4",
 			input: "20,1,B,5,50.00,0,0,R1,2802,1,45142,0,0,0,0,0.00,0.00,0,0,0,END",
-			want:  fanState{Power: true, Speed: 4, Series: "R1"},
+			want:  fanState{Power: true, Speed: 4, Model: "R1"},
 		},
 		{
 			name:  "off",
 			input: "0,1,B,5,50.00,0,0,R1,END",
-			want:  fanState{Series: "R1"},
+			want:  fanState{Model: "R1"},
 		},
 		{
 			name:  "speed 6 is the boost step",
 			input: "22,1,B,5,50.00,0,0,R1,END",
-			want:  fanState{Power: true, Speed: 6, Series: "R1"},
+			want:  fanState{Power: true, Speed: 6, Model: "R1"},
 		},
 		{
 			name:  "led on",
 			input: "48,1,B,5,50.00,0,0,R1,END", // 0x30 = power|led
-			want:  fanState{Power: true, LED: true, Series: "R1"},
+			want:  fanState{Power: true, LED: true, Model: "R1"},
 		},
 		{
 			name:  "sleep on",
 			input: "144,1,B,5,50.00,0,0,R1,END", // 0x90 = power|sleep
-			want:  fanState{Power: true, Sleep: true, Series: "R1"},
+			want:  fanState{Power: true, Sleep: true, Model: "R1"},
 		},
 		{
 			name:  "brightness 100 with a warm light",
 			input: "58416,1,B,5,50.00,0,0,I1,END", // 0xE430 = power|led|warm|brightness 100
 			want: fanState{
 				Power: true, LED: true, Brightness: 100,
-				LightMode: lightWarm, Series: "I1",
+				LightMode: lightWarm, Model: "I1",
 			},
 		},
 		{
 			name:  "cool light",
 			input: "56,1,B,5,50.00,0,0,I1,END", // 0x38 = power|led|cool
 			want: fanState{
-				Power: true, LED: true, LightMode: lightCool, Series: "I1",
+				Power: true, LED: true, LightMode: lightCool, Model: "I1",
 			},
 		},
 		{
 			name:  "cool and warm together mean daylight",
 			input: "32824,1,B,5,50.00,0,0,I1,END", // 0x8038
 			want: fanState{
-				Power: true, LED: true, LightMode: lightDaylight, Series: "I1",
+				Power: true, LED: true, LightMode: lightDaylight, Model: "I1",
 			},
 		},
 		{
 			name:  "six-hour timer reads back as hours, not the command index",
 			input: "393232,1,B,5,50.00,0,0,R1,END", // 0x60010
-			want:  fanState{Power: true, TimerHours: 6, Series: "R1"},
+			want:  fanState{Power: true, TimerHours: 6, Model: "R1"},
 		},
 		{
 			name:  "elapsed minutes are four-minute ticks in the top byte",
 			input: "83886096,1,B,5,50.00,0,0,R1,END", // 0x05000010
-			want:  fanState{Power: true, Elapsed: 20, Series: "R1"},
+			want:  fanState{Power: true, Elapsed: 20, Model: "R1"},
 		},
 	}
 
@@ -163,14 +163,14 @@ func TestParseBeacon(t *testing.T) {
 		if got.MAC != "a0:76:4e:5a:ee:98" {
 			t.Errorf("MAC = %q", got.MAC)
 		}
-		if got.Series != "R1" {
-			t.Errorf("Series = %q", got.Series)
+		if got.Model != "R1" {
+			t.Errorf("Model = %q", got.Model)
 		}
 	})
 
-	t.Run("lower-case series is normalised", func(t *testing.T) {
+	t.Run("lower-case model code is normalised", func(t *testing.T) {
 		got, ok := parseBeacon([]byte("a0764e5aee98_i1"))
-		if !ok || got.Series != "I1" {
+		if !ok || got.Model != "I1" {
 			t.Errorf("got %+v ok=%v", got, ok)
 		}
 	})

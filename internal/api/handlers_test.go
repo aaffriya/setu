@@ -30,7 +30,8 @@ type unpollableDevice struct{}
 func (*unpollableDevice) ID() string             { return "wake-only" }
 func (*unpollableDevice) Name() string           { return "Wake only" }
 func (*unpollableDevice) Brand() string          { return "test" }
-func (*unpollableDevice) Model() string          { return "wake" }
+func (*unpollableDevice) Driver() string         { return "wake" }
+func (*unpollableDevice) Model() string          { return "" }
 func (*unpollableDevice) MAC() string            { return "02:00:00:00:00:02" }
 func (*unpollableDevice) Capabilities() []string { return []string{device.CapWoL} }
 func (*unpollableDevice) State() device.State    { return device.State{Online: true} }
@@ -38,7 +39,8 @@ func (*unpollableDevice) State() device.State    { return device.State{Online: t
 func (*refreshDevice) ID() string             { return "refreshable" }
 func (*refreshDevice) Name() string           { return "Refreshable" }
 func (*refreshDevice) Brand() string          { return "test" }
-func (*refreshDevice) Model() string          { return "test" }
+func (*refreshDevice) Driver() string         { return "test" }
+func (*refreshDevice) Model() string          { return "" }
 func (*refreshDevice) MAC() string            { return "02:00:00:00:00:01" }
 func (*refreshDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (d *refreshDevice) State() device.State {

@@ -209,10 +209,10 @@ func TestScanReportsTVIdentity(t *testing.T) {
 		t.Fatalf("Scan() = %+v; want one TV", found)
 	}
 	got := found[0]
-	if got.Brand != Brand || got.Model != ModelTizen {
-		t.Errorf("candidate type = %s/%s; want %s/%s", got.Brand, got.Model, Brand, ModelTizen)
+	if got.Brand != Brand || got.Driver != DriverTizen {
+		t.Errorf("candidate driver = %s/%s; want %s/%s", got.Brand, got.Driver, Brand, DriverTizen)
 	}
-	if got.MAC != "a0:d7:f3:9e:74:b2" || got.Name != "[TV] Living Room" || got.Series != "UE43AU7700" {
+	if got.MAC != "a0:d7:f3:9e:74:b2" || got.Name != "[TV] Living Room" || got.Model != "UE43AU7700" {
 		t.Errorf("candidate = %+v; want the TV's own mac, name and model name", got)
 	}
 }
@@ -226,7 +226,7 @@ func TestLiveMACOnlyDiscoveryAfterCacheClear(t *testing.T) {
 	dev, err := New(config.DeviceSpec{
 		ID:    "live_mac_only_test",
 		Brand: Brand,
-		Model: ModelTizen,
+		Model: DriverTizen,
 		Name:  "Live Samsung TV",
 		MAC:   mac,
 	}, config.Deps{})

@@ -13,8 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"setu/internal/device"
 	"setu/internal/events"
 	"setu/internal/manager"
+	"setu/internal/resolver"
 )
 
 var (
@@ -41,7 +43,19 @@ const (
 	webhookRate       = 30
 	idempotencyLimit  = 32
 	idempotencyWindow = 5 * time.Minute
+	// presenceInterval is how often the neighbour table is read. Presence is
+	// inherently coarse — an entry lingers for minutes after a device leaves —
+	// so reading it faster would cost work without telling us anything new.
+	presenceInterval = 30 * time.Second
 )
+
+// PresenceFunc reports which MAC addresses are currently visible on the LAN,
+// keyed by their normalized form. A nil PresenceFunc means this host cannot see
+// its neighbours, and presence rules are refused rather than silently inert.
+//
+// It is a function, not an interface: there is one implementation
+// (resolver.ARPResolver) and nothing here varies but the answer.
+type PresenceFunc func() (map[string]bool, error)
 
 type Update struct {
 	State           State             `json:"state"`
@@ -72,10 +86,11 @@ type delivery struct {
 // Engine owns a small immutable-at-execution rule set plus bounded runtime
 // bookkeeping. Persistent writes happen only when configuration changes.
 type Engine struct {
-	mgr   *manager.Manager
-	bus   *events.Bus
-	store *Store
-	log   *slog.Logger
+	mgr      *manager.Manager
+	bus      *events.Bus
+	store    *Store
+	presence PresenceFunc
+	log      *slog.Logger
 
 	mu            sync.RWMutex
 	state         State
@@ -84,21 +99,31 @@ type Engine struct {
 	running       map[string]bool
 	lastTriggered map[string]time.Time
 	lastSchedule  map[string]string
-	latestPower   map[string]bool
-	stableTimers  map[string]*time.Timer
-	rates         map[string]rateWindow
-	deliveries    map[string]map[string]delivery
-	queue         chan runRequest
-	ctx           context.Context
+	latestStates  map[string]device.State
+	// offlineSince records when a device was first seen unreachable; an absent
+	// entry means it is reachable. offlineFired keeps an offline rule to one run
+	// per episode, and is cleared when its device returns.
+	offlineSince map[string]time.Time
+	offlineFired map[string]bool
+	// latestPresence is the last neighbour-table answer per watched MAC.
+	latestPresence map[string]bool
+	stableTimers   map[string]*time.Timer
+	rates          map[string]rateWindow
+	deliveries     map[string]map[string]delivery
+	queue          chan runRequest
+	ctx            context.Context
 }
 
-func New(mgr *manager.Manager, bus *events.Bus, store *Store, log *slog.Logger) (*Engine, error) {
+// New loads and validates the stored rules. presence may be nil on a host whose
+// neighbour table cannot be read; presence rules are then rejected instead of
+// being accepted and never firing.
+func New(mgr *manager.Manager, bus *events.Bus, store *Store, presence PresenceFunc, log *slog.Logger) (*Engine, error) {
 	state, err := store.Load()
 	if err != nil {
 		return nil, err
 	}
-	disabled := disableInvalidRules(&state, mgr)
-	if err := validateState(state, mgr); err != nil {
+	disabled := disableInvalidRules(&state, mgr, presence != nil)
+	if err := validateState(state, mgr, presence != nil); err != nil {
 		return nil, fmt.Errorf("automations: invalid state: %w", err)
 	}
 	if len(disabled) > 0 {
@@ -109,20 +134,24 @@ func New(mgr *manager.Manager, bus *events.Bus, store *Store, log *slog.Logger) 
 		log.Warn("disabled automations that no longer match configured devices", "automations", disabled)
 	}
 	e := &Engine{
-		mgr:           mgr,
-		bus:           bus,
-		store:         store,
-		log:           log,
-		state:         cloneState(state),
-		pending:       make(map[string]bool),
-		running:       make(map[string]bool),
-		lastTriggered: make(map[string]time.Time),
-		lastSchedule:  make(map[string]string),
-		latestPower:   make(map[string]bool),
-		stableTimers:  make(map[string]*time.Timer),
-		rates:         make(map[string]rateWindow),
-		deliveries:    make(map[string]map[string]delivery),
-		queue:         make(chan runRequest, queueSize),
+		mgr:            mgr,
+		bus:            bus,
+		store:          store,
+		presence:       presence,
+		log:            log,
+		state:          cloneState(state),
+		pending:        make(map[string]bool),
+		running:        make(map[string]bool),
+		lastTriggered:  make(map[string]time.Time),
+		lastSchedule:   make(map[string]string),
+		latestStates:   make(map[string]device.State),
+		offlineSince:   make(map[string]time.Time),
+		offlineFired:   make(map[string]bool),
+		latestPresence: make(map[string]bool),
+		stableTimers:   make(map[string]*time.Timer),
+		rates:          make(map[string]rateWindow),
+		deliveries:     make(map[string]map[string]delivery),
+		queue:          make(chan runRequest, queueSize),
 	}
 	return e, nil
 }
@@ -152,16 +181,30 @@ func (e *Engine) Run(ctx context.Context, ready <-chan struct{}) {
 		return
 	}
 
-	baseline := e.readPower()
+	baseline := e.readStates()
+	now := time.Now()
 	e.mu.Lock()
-	e.latestPower = baseline
+	e.latestStates = baseline
+	// Startup is a baseline, not a transition: a device that is already
+	// unreachable starts its clock now rather than looking like it just left.
+	for id, state := range baseline {
+		if !state.Online {
+			e.offlineSince[id] = now
+		}
+	}
 	e.mu.Unlock()
 
 	// Evaluate the current schedule minute once, then wake only on minute
 	// boundaries. There is no per-rule ticker.
-	e.evaluateSchedules(time.Now())
-	timer := time.NewTimer(untilNextMinute(time.Now()))
+	e.evaluateSchedules(now)
+	timer := time.NewTimer(untilNextMinute(now))
 	defer timer.Stop()
+
+	// Presence has its own, slower clock. Seed it before the first tick so the
+	// devices already on the LAN at startup are a baseline too.
+	presence := newPresenceTicker(e.presence)
+	defer presence.Stop()
+	e.syncPresence()
 
 	for {
 		select {
@@ -173,7 +216,7 @@ func (e *Engine) Run(ctx context.Context, ready <-chan struct{}) {
 				return
 			}
 			if event.Type == events.StateChanged {
-				e.handlePower(event.DeviceID, event.State.On)
+				e.handleState(event.DeviceID, event.State)
 			}
 		case _, ok := <-resync:
 			if !ok {
@@ -181,22 +224,37 @@ func (e *Engine) Run(ctx context.Context, ready <-chan struct{}) {
 			}
 			// Overflow means the buffered stream is no longer a complete history.
 			// Drop those stale entries before installing one authoritative snapshot;
-			// replaying them afterwards could manufacture a false power edge.
+			// replaying them afterwards could manufacture a false edge.
 			alive := true
 			e.bus.Resync(func() {
 				alive = drainPendingEvents(stream)
 				if alive {
-					e.resyncPower()
+					e.resyncStates()
 				}
 			})
 			if !alive {
 				return
 			}
+		case <-presence.C:
+			e.syncPresence()
 		case now := <-timer.C:
 			e.evaluateSchedules(now)
+			// Offline rules are measured in minutes, so the schedule clock is
+			// exactly the right one to check them on — no extra goroutine.
+			e.evaluateOffline(now)
 			timer.Reset(untilNextMinute(time.Now()))
 		}
 	}
+}
+
+// newPresenceTicker returns a ticker that never fires when presence cannot be
+// read, so the select above needs no special case for an unsupported host.
+func newPresenceTicker(presence PresenceFunc) *time.Ticker {
+	ticker := time.NewTicker(presenceInterval)
+	if presence == nil {
+		ticker.Stop()
+	}
+	return ticker
 }
 
 func drainPendingEvents(stream <-chan events.Event) bool {
@@ -225,7 +283,7 @@ func (e *Engine) Snapshot() Snapshot {
 	defer e.mu.RUnlock()
 	runs := make([]Run, len(e.runs))
 	copy(runs, e.runs)
-	return Snapshot{State: publicState(e.state), Runs: runs}
+	return Snapshot{State: publicState(e.state), Runs: runs, Presence: e.presence != nil}
 }
 
 // Export returns the persistent form, including webhook hashes, for the single
@@ -252,7 +310,7 @@ func (e *Engine) Replace(incoming State) (Update, error) {
 	if err != nil {
 		return Update{}, err
 	}
-	if err := validateState(candidate, e.mgr); err != nil {
+	if err := validateState(candidate, e.mgr, e.presence != nil); err != nil {
 		return Update{}, ValidationError{Err: err}
 	}
 	if err := e.store.Save(candidate); err != nil {
@@ -266,6 +324,30 @@ func (e *Engine) Replace(incoming State) (Update, error) {
 	e.lastSchedule = make(map[string]string)
 	e.rates = make(map[string]rateWindow)
 	e.deliveries = make(map[string]map[string]delivery)
+	// Both of these are pruned rather than cleared, because clearing and keeping
+	// are each wrong in one direction.
+	//
+	// Clearing which offline rules have fired would rearm every one of them, so
+	// editing an unrelated rule during an outage would announce that outage
+	// again; an offline rule rearms when its device is seen back, and nowhere
+	// else. Keeping what a MAC last looked like for a rule that has gone would
+	// fire that rule the moment it came back, comparing against an answer from
+	// before it existed. Pruning gives both the behaviour that survives an edit
+	// and a fresh baseline for anything genuinely new.
+	surviving := make(map[string]bool, len(e.offlineFired))
+	for _, rule := range candidate.Items {
+		if rule.Trigger.Offline != nil && e.offlineFired[rule.ID] {
+			surviving[rule.ID] = true
+		}
+	}
+	e.offlineFired = surviving
+
+	stillWatched := watchedMACs(candidate.Items)
+	for mac := range e.latestPresence {
+		if _, ok := stillWatched[mac]; !ok {
+			delete(e.latestPresence, mac)
+		}
+	}
 	return Update{State: publicState(candidate), GeneratedTokens: generated}, nil
 }
 
@@ -684,39 +766,48 @@ func (e *Engine) runNested(ctx context.Context, id, parentID string, depth int, 
 	return nil
 }
 
-func (e *Engine) readPower() map[string]bool {
-	states := make(map[string]bool)
+func (e *Engine) readStates() map[string]device.State {
+	states := make(map[string]device.State)
 	for _, dev := range e.mgr.Devices() {
-		states[dev.ID()] = dev.State().On
+		states[dev.ID()] = dev.State()
 	}
 	return states
 }
 
-func (e *Engine) resyncPower() {
-	for id, on := range e.readPower() {
-		e.handlePower(id, on)
+func (e *Engine) resyncStates() {
+	for id, state := range e.readStates() {
+		e.handleState(id, state)
 	}
 }
 
-func (e *Engine) handlePower(deviceID string, on bool) {
+// handleState is the edge detector for every device-state trigger: power, and
+// the numeric metrics that compare one reported value. A rule fires when its
+// device stops matching and starts matching, never while it merely keeps
+// matching, so a value that stays above a threshold produces one run and not a
+// stream of them.
+func (e *Engine) handleState(deviceID string, state device.State) {
 	e.mu.Lock()
 	revision := e.state.Revision
-	previous, known := e.latestPower[deviceID]
-	e.latestPower[deviceID] = on
+	previous, known := e.latestStates[deviceID]
+	e.latestStates[deviceID] = state
+	e.trackReachabilityLocked(deviceID, state)
+
 	rules := make([]Rule, 0)
 	for _, rule := range e.state.Items {
 		trigger := rule.Trigger.Device
 		if !rule.Enabled || trigger == nil || trigger.DeviceID != deviceID {
 			continue
 		}
-		if on != trigger.On {
+		if !trigger.matches(state) {
+			// No longer matching: a settle timer that was counting down toward
+			// this rule is now measuring something that stopped being true.
 			if timer := e.stableTimers[rule.ID]; timer != nil {
 				timer.Stop()
 				delete(e.stableTimers, rule.ID)
 			}
 			continue
 		}
-		if !known || previous == on {
+		if !known || trigger.matches(previous) {
 			continue
 		}
 		if trigger.StableSeconds == 0 {
@@ -727,11 +818,11 @@ func (e *Engine) handlePower(deviceID string, on bool) {
 			timer.Stop()
 		}
 		ruleID := rule.ID
-		want := trigger.On
+		want := *trigger
 		e.stableTimers[rule.ID] = time.AfterFunc(time.Duration(trigger.StableSeconds)*time.Second, func() {
 			e.mu.Lock()
 			delete(e.stableTimers, ruleID)
-			still := e.latestPower[deviceID] == want
+			still := want.matches(e.latestStates[deviceID])
 			ctx := e.ctx
 			e.mu.Unlock()
 			if still && ctx != nil && ctx.Err() == nil {
@@ -742,6 +833,141 @@ func (e *Engine) handlePower(deviceID string, on bool) {
 	e.mu.Unlock()
 	for _, rule := range rules {
 		_, _ = e.enqueueAtRevision(rule.ID, "device", revision)
+	}
+}
+
+// trackReachabilityLocked maintains the clock behind offline triggers. The
+// caller must hold e.mu.
+func (e *Engine) trackReachabilityLocked(deviceID string, state device.State) {
+	if state.Online {
+		delete(e.offlineSince, deviceID)
+		// Coming back is what rearms the rules watching this device; without it
+		// a device that flaps would only ever fire once per process.
+		for _, rule := range e.state.Items {
+			if trigger := rule.Trigger.Offline; trigger != nil && trigger.DeviceID == deviceID {
+				delete(e.offlineFired, rule.ID)
+			}
+		}
+		return
+	}
+	if _, counting := e.offlineSince[deviceID]; !counting {
+		e.offlineSince[deviceID] = time.Now()
+	}
+}
+
+// evaluateOffline runs on the minute tick and fires the rules whose device has
+// now been unreachable for long enough. Each fires once per episode.
+func (e *Engine) evaluateOffline(now time.Time) {
+	e.mu.Lock()
+	revision := e.state.Revision
+	rules := make([]Rule, 0)
+	for _, rule := range e.state.Items {
+		trigger := rule.Trigger.Offline
+		if !rule.Enabled || trigger == nil || e.offlineFired[rule.ID] {
+			continue
+		}
+		since, offline := e.offlineSince[trigger.DeviceID]
+		if !offline || now.Sub(since) < time.Duration(trigger.Minutes)*time.Minute {
+			continue
+		}
+		e.offlineFired[rule.ID] = true
+		rules = append(rules, rule)
+	}
+	e.mu.Unlock()
+	for _, rule := range rules {
+		_, _ = e.enqueueAtRevision(rule.ID, "offline", revision)
+	}
+}
+
+// watchedMACs returns the normalized MACs the enabled presence rules watch.
+// Only these are ever remembered, so a busy LAN cannot grow the presence map.
+func watchedMACs(rules []Rule) map[string]struct{} {
+	watched := make(map[string]struct{})
+	for _, rule := range rules {
+		trigger := rule.Trigger.Presence
+		if !rule.Enabled || trigger == nil {
+			continue
+		}
+		if mac, err := resolver.NormalizeMAC(trigger.MAC); err == nil {
+			watched[mac] = struct{}{}
+		}
+	}
+	return watched
+}
+
+// syncPresence reads the neighbour table once and turns it into edges for the
+// MACs presence rules are watching.
+func (e *Engine) syncPresence() {
+	if e.presence == nil {
+		return
+	}
+	e.mu.RLock()
+	watched := watchedMACs(e.state.Items)
+	e.mu.RUnlock()
+	if len(watched) == 0 {
+		return
+	}
+
+	seen, err := e.presence()
+	if err != nil {
+		e.log.Debug("could not read LAN presence", "err", err)
+		return
+	}
+
+	e.mu.Lock()
+	revision := e.state.Revision
+	changed := make(map[string]bool, len(watched))
+	for mac := range watched {
+		present := seen[mac]
+		previous, known := e.latestPresence[mac]
+		e.latestPresence[mac] = present
+		if known && previous != present {
+			changed[mac] = present
+		}
+	}
+
+	rules := make([]Rule, 0)
+	for _, rule := range e.state.Items {
+		trigger := rule.Trigger.Presence
+		if !rule.Enabled || trigger == nil {
+			continue
+		}
+		mac, err := resolver.NormalizeMAC(trigger.MAC)
+		if err != nil {
+			continue
+		}
+		if e.latestPresence[mac] != trigger.Present {
+			if timer := e.stableTimers[rule.ID]; timer != nil {
+				timer.Stop()
+				delete(e.stableTimers, rule.ID)
+			}
+			continue
+		}
+		if _, edge := changed[mac]; !edge {
+			continue
+		}
+		if trigger.StableSeconds == 0 {
+			rules = append(rules, rule)
+			continue
+		}
+		if timer := e.stableTimers[rule.ID]; timer != nil {
+			timer.Stop()
+		}
+		ruleID, want := rule.ID, trigger.Present
+		e.stableTimers[rule.ID] = time.AfterFunc(time.Duration(trigger.StableSeconds)*time.Second, func() {
+			e.mu.Lock()
+			delete(e.stableTimers, ruleID)
+			still := e.latestPresence[mac] == want
+			ctx := e.ctx
+			e.mu.Unlock()
+			if still && ctx != nil && ctx.Err() == nil {
+				_, _ = e.enqueueAtRevision(ruleID, "presence", revision)
+			}
+		})
+	}
+	e.mu.Unlock()
+	for _, rule := range rules {
+		_, _ = e.enqueueAtRevision(rule.ID, "presence", revision)
 	}
 }
 

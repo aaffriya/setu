@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"setu/internal/config"
+	"setu/internal/manager"
 	"setu/internal/resolver"
 )
 
@@ -60,9 +61,9 @@ func TestScanMarksDevicesAlreadyAdded(t *testing.T) {
 		// Reported bare, as WiZ does — it must still match the stored
 		// colon-separated MAC.
 		&stubScanner{found: []resolver.Candidate{
-			{Brand: "test", Model: "lamp", MAC: "9877d5a234f2"},
-			{Brand: "test", Model: "lamp", MAC: "d8:a0:11:ff:5e:f0"},
-			{Brand: "test", Model: "", Series: "ESP10_SOCKET_06", MAC: "d8:a0:11:ff:5e:f1"},
+			{Brand: "test", Driver: "lamp", MAC: "9877d5a234f2"},
+			{Brand: "test", Driver: "lamp", MAC: "d8:a0:11:ff:5e:f0"},
+			{Brand: "test", Driver: "", Model: "ESP10_SOCKET_06", MAC: "d8:a0:11:ff:5e:f1"},
 		}},
 		&stubScanner{err: errors.New("samsung discovery: listen: no route")},
 	)
@@ -101,9 +102,19 @@ func TestScanMarksDevicesAlreadyAdded(t *testing.T) {
 			t.Fatalf("candidate %+v was reported as already added", c)
 		}
 	}
-	// A reply this brand has no driver for is listed, never guessed at.
-	if model := byMAC["d8a011ff5ef1"].Model; model != "" {
-		t.Fatalf("unsupported candidate model = %q; want it left empty", model)
+	// A reply this brand has no driver for is listed, never guessed at — but
+	// what the hardware called itself is kept, so the row can still say what
+	// answered.
+	unsupported := byMAC["d8a011ff5ef1"]
+	if unsupported.Driver != "" || unsupported.Label != "" {
+		t.Fatalf("unsupported candidate = %+v; want no driver and no label", unsupported)
+	}
+	if unsupported.Model != "ESP10_SOCKET_06" {
+		t.Fatalf("unsupported candidate model = %q; want what the device reported", unsupported.Model)
+	}
+	// A driver this build does have is named, so the UI never shows a key.
+	if label := byMAC["d8a011ff5ef0"].Label; label != "Lamp" {
+		t.Fatalf("candidate label = %q; want the registered driver label", label)
 	}
 }
 
@@ -111,7 +122,7 @@ func TestScanMarksDevicesAlreadyAdded(t *testing.T) {
 // become a real device — including the id the server derives for it.
 func TestScannedDeviceCanBeAdded(t *testing.T) {
 	handler := scanServer(t, nil, &stubScanner{found: []resolver.Candidate{
-		{Brand: "test", Model: "lamp", Name: "Hall lamp", MAC: "98:77:d5:a2:34:f2"},
+		{Brand: "test", Driver: "lamp", Model: "A60", Name: "Hall lamp", MAC: "98:77:d5:a2:34:f2"},
 	}})
 
 	var found discoveryResponse
@@ -124,16 +135,27 @@ func TestScannedDeviceCanBeAdded(t *testing.T) {
 
 	candidate := found.Candidates[0]
 	body, err := json.Marshal(config.DeviceSpec{
-		Brand: candidate.Brand,
-		Model: candidate.Model,
-		Name:  candidate.Name,
-		MAC:   candidate.MAC,
+		Brand:  candidate.Brand,
+		Driver: candidate.Driver,
+		Model:  candidate.Model,
+		Name:   candidate.Name,
+		MAC:    candidate.MAC,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := deviceRequest(t, handler, http.MethodPost, "/api/devices", string(body)); w.Code != http.StatusCreated {
-		t.Fatalf("adding a scanned device: status = %d: %s", w.Code, w.Body.String())
+	added := deviceRequest(t, handler, http.MethodPost, "/api/devices", string(body))
+	if added.Code != http.StatusCreated {
+		t.Fatalf("adding a scanned device: status = %d: %s", added.Code, added.Body.String())
+	}
+	// What the scan read off the hardware must survive the add: making the user
+	// retype a model number Setu was already told is the bug this guards.
+	var view manager.DeviceView
+	if err := json.NewDecoder(added.Body).Decode(&view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Model != "A60" {
+		t.Fatalf("added device = %+v; want the scanned model kept", view)
 	}
 
 	// Scanning again must now recognise it as one of the user's own.

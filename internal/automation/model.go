@@ -10,6 +10,7 @@ import (
 	"setu/internal/control"
 	"setu/internal/device"
 	"setu/internal/manager"
+	"setu/internal/resolver"
 )
 
 const (
@@ -24,11 +25,73 @@ const (
 )
 
 const (
-	TriggerSchedule    = "schedule"
-	TriggerDeviceState = "device_state"
-	TriggerWebhook     = "webhook"
-	ActionAutomation   = "run_automation"
+	TriggerSchedule      = "schedule"
+	TriggerDeviceState   = "device_state"
+	TriggerDeviceOffline = "device_offline"
+	TriggerPresence      = "presence"
+	TriggerWebhook       = "webhook"
+	ActionAutomation     = "run_automation"
 )
+
+// Metrics a device-state trigger can watch. MetricPower is the on/off edge and
+// is what an omitted metric means, so rules written before the others existed
+// keep their meaning.
+const (
+	MetricPower      = "power"
+	MetricBrightness = "brightness"
+	MetricSpeed      = "speed"
+	MetricVolume     = "volume"
+	MetricColorTemp  = "color_temp"
+	MetricTimerHours = "timer_hours"
+)
+
+// Comparisons available to a numeric metric.
+const (
+	OpAbove  = "above"
+	OpBelow  = "below"
+	OpEquals = "equals"
+)
+
+const (
+	// MaxStableSeconds bounds the settle time on a device-state trigger.
+	MaxStableSeconds = 300
+	// MaxPresenceStableSeconds is larger because it is doing a different job: a
+	// phone's ARP entry disappears and returns as it sleeps, so "away" usually
+	// needs several minutes of quiet before it means anything.
+	MaxPresenceStableSeconds = 900
+	// MaxOfflineMinutes bounds a "has been unreachable for" trigger at a day.
+	MaxOfflineMinutes = 1440
+	// MaxMetricValue covers every metric's range, the largest being colour
+	// temperature in Kelvin.
+	MaxMetricValue = 10000
+)
+
+// metricCapability maps a watchable metric to the capability a device must
+// report for the value to mean anything.
+var metricCapability = map[string]string{
+	MetricBrightness: device.CapBrightness,
+	MetricSpeed:      device.CapSpeed,
+	MetricVolume:     device.CapVolume,
+	MetricColorTemp:  device.CapColorTemp,
+	MetricTimerHours: device.CapTimer,
+}
+
+// metricValue reads one watchable number out of a device state.
+func metricValue(metric string, state device.State) (int, bool) {
+	switch metric {
+	case MetricBrightness:
+		return state.Brightness, true
+	case MetricSpeed:
+		return state.Speed, true
+	case MetricVolume:
+		return state.Volume, true
+	case MetricColorTemp:
+		return state.ColorTemp, true
+	case MetricTimerHours:
+		return state.TimerHours, true
+	}
+	return 0, false
+}
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
@@ -52,10 +115,12 @@ type Rule struct {
 }
 
 type Trigger struct {
-	Type     string         `json:"type"`
-	Schedule *Schedule      `json:"schedule,omitempty"`
-	Device   *DeviceTrigger `json:"device,omitempty"`
-	Webhook  *Webhook       `json:"webhook,omitempty"`
+	Type     string          `json:"type"`
+	Schedule *Schedule       `json:"schedule,omitempty"`
+	Device   *DeviceTrigger  `json:"device,omitempty"`
+	Offline  *OfflineTrigger `json:"offline,omitempty"`
+	Presence *Presence       `json:"presence,omitempty"`
+	Webhook  *Webhook        `json:"webhook,omitempty"`
 }
 
 type Schedule struct {
@@ -64,9 +129,83 @@ type Schedule struct {
 	UTCOffsetMinutes int    `json:"utc_offset_minutes"`
 }
 
+// DeviceTrigger fires on the edge where a device's state starts matching it.
+//
+// With no Metric — or MetricPower — that edge is the on/off transition this
+// trigger has always meant. A numeric metric instead compares one reported value
+// against Value, and fires the moment the comparison starts holding: crossing 50%
+// brightness is an event, sitting above it is not.
 type DeviceTrigger struct {
-	DeviceID      string `json:"device_id"`
-	On            bool   `json:"on"`
+	DeviceID string `json:"device_id"`
+	On       bool   `json:"on"`
+	// StableSeconds holds the trigger back until the device has matched
+	// continuously for that long.
+	StableSeconds int `json:"stable_seconds,omitempty"`
+	// Metric names the value to watch; empty means power.
+	Metric string `json:"metric,omitempty"`
+	// Operator and Value apply to numeric metrics only.
+	Operator string `json:"operator,omitempty"`
+	Value    int    `json:"value,omitempty"`
+}
+
+// power reports whether this trigger watches the on/off edge.
+func (t DeviceTrigger) power() bool { return t.Metric == "" || t.Metric == MetricPower }
+
+// metric returns the metric this trigger watches, normalising the empty default.
+func (t DeviceTrigger) metric() string {
+	if t.power() {
+		return MetricPower
+	}
+	return t.Metric
+}
+
+// matches reports whether a state satisfies this trigger right now.
+//
+// A numeric metric additionally requires the device to be reachable: an
+// unreachable device reports zeros, and a bulb that has merely lost Wi-Fi must
+// not read as "brightness fell below 20". Power keeps its original behaviour,
+// where losing contact is itself meaningful.
+func (t DeviceTrigger) matches(state device.State) bool {
+	if t.power() {
+		return state.On == t.On
+	}
+	if !state.Online {
+		return false
+	}
+	value, ok := metricValue(t.Metric, state)
+	if !ok {
+		return false
+	}
+	switch t.Operator {
+	case OpAbove:
+		return value > t.Value
+	case OpBelow:
+		return value < t.Value
+	case OpEquals:
+		return value == t.Value
+	}
+	return false
+}
+
+// OfflineTrigger fires once when a device has been unreachable for Minutes,
+// and arms again only after it has been seen online. It is the "did the NAS
+// fall off the network?" rule, and it is deliberately not an edge on the online
+// flag: a device that flaps every few seconds must not produce a run each time.
+type OfflineTrigger struct {
+	DeviceID string `json:"device_id"`
+	Minutes  int    `json:"minutes"`
+}
+
+// Presence fires when a MAC appears on — or disappears from — the LAN, as seen
+// in the kernel's neighbour table. It is how "when my phone gets home" is
+// written without any device being added for the phone.
+//
+// It is best-effort by nature. A neighbour entry can linger after a device
+// leaves and can vanish while a phone merely sleeps, which is what StableSeconds
+// is for: require the new answer to hold for several minutes before acting.
+type Presence struct {
+	MAC           string `json:"mac"`
+	Present       bool   `json:"present"`
 	StableSeconds int    `json:"stable_seconds,omitempty"`
 }
 
@@ -115,6 +254,10 @@ type Run struct {
 type Snapshot struct {
 	State
 	Runs []Run `json:"runs"`
+	// Presence reports whether this host can read its neighbour table. Without
+	// it a presence rule cannot be armed and is refused on save, so the app is
+	// told here rather than at the end of a form.
+	Presence bool `json:"presence"`
 }
 
 var safeActions = map[string]struct{}{
@@ -124,7 +267,19 @@ var safeActions = map[string]struct{}{
 	"set_volume": {}, "launch_app": {}, "wake": {}, ActionAutomation: {},
 }
 
-func validateState(state State, mgr *manager.Manager) error {
+// capabilities reports whether a device advertises a capability. Capabilities
+// are the vocabulary the whole app shares, so a trigger checks them rather than
+// type-asserting the driver.
+func hasCapability(dev device.Device, capability string) bool {
+	for _, reported := range dev.Capabilities() {
+		if reported == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func validateState(state State, mgr *manager.Manager, presence bool) error {
 	if state.Version != FormatVersion {
 		return fmt.Errorf("automation version must be %d", FormatVersion)
 	}
@@ -148,7 +303,7 @@ func validateState(state State, mgr *manager.Manager) error {
 		if rule.CooldownSeconds < 0 || rule.CooldownSeconds > 3600 {
 			return fmt.Errorf("automation %q cooldown must be 0-3600 seconds", rule.ID)
 		}
-		if err := validateTrigger(rule.ID, rule.Enabled, rule.Trigger, mgr); err != nil {
+		if err := validateTrigger(rule.ID, rule.Enabled, rule.Trigger, mgr, presence); err != nil {
 			return err
 		}
 		if len(rule.Conditions) > MaxConditions {
@@ -206,7 +361,7 @@ func validateState(state State, mgr *manager.Manager) error {
 	if err := validateAutomationCalls(state.Items); err != nil {
 		return err
 	}
-	return validatePowerCycles(state.Items)
+	return validateFeedbackLoops(state.Items)
 }
 
 func validateAutomationCalls(rules []Rule) error {
@@ -271,10 +426,36 @@ func validateAutomationCalls(rules []Rule) error {
 	return nil
 }
 
-func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.Manager) error {
+// exactlyOne rejects a trigger carrying a payload that does not belong to its
+// type. Each trigger type owns one field, and the others must be absent.
+func exactlyOne(trigger Trigger, want string) bool {
+	payloads := [...]struct {
+		kind    string
+		present bool
+	}{
+		{TriggerSchedule, trigger.Schedule != nil},
+		{TriggerDeviceState, trigger.Device != nil},
+		{TriggerDeviceOffline, trigger.Offline != nil},
+		{TriggerPresence, trigger.Presence != nil},
+		{TriggerWebhook, trigger.Webhook != nil},
+	}
+	found := false
+	for _, payload := range payloads {
+		if !payload.present {
+			continue
+		}
+		if payload.kind != want {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.Manager, presence bool) error {
 	switch trigger.Type {
 	case TriggerSchedule:
-		if trigger.Schedule == nil || trigger.Device != nil || trigger.Webhook != nil {
+		if !exactlyOne(trigger, TriggerSchedule) {
 			return fmt.Errorf("automation %q has an invalid schedule trigger", ruleID)
 		}
 		if _, err := time.Parse("15:04", trigger.Schedule.Time); err != nil {
@@ -294,24 +475,75 @@ func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.
 			return fmt.Errorf("automation %q timezone offset is invalid", ruleID)
 		}
 	case TriggerDeviceState:
-		if trigger.Device == nil || trigger.Schedule != nil || trigger.Webhook != nil {
+		if !exactlyOne(trigger, TriggerDeviceState) {
 			return fmt.Errorf("automation %q has an invalid device trigger", ruleID)
 		}
-		if trigger.Device.StableSeconds < 0 || trigger.Device.StableSeconds > 300 {
-			return fmt.Errorf("automation %q stable time must be 0-300 seconds", ruleID)
+		watch := trigger.Device
+		if watch.StableSeconds < 0 || watch.StableSeconds > MaxStableSeconds {
+			return fmt.Errorf("automation %q stable time must be 0-%d seconds", ruleID, MaxStableSeconds)
+		}
+		if !watch.power() {
+			if _, known := metricCapability[watch.Metric]; !known {
+				return fmt.Errorf("automation %q watches unknown metric %q", ruleID, watch.Metric)
+			}
+			if watch.Operator != OpAbove && watch.Operator != OpBelow && watch.Operator != OpEquals {
+				return fmt.Errorf("automation %q comparison must be %q, %q or %q", ruleID, OpAbove, OpBelow, OpEquals)
+			}
+			if watch.Value < 0 || watch.Value > MaxMetricValue {
+				return fmt.Errorf("automation %q compared value must be 0-%d", ruleID, MaxMetricValue)
+			}
 		}
 		if !enabled {
 			return nil
 		}
-		dev, ok := mgr.Device(trigger.Device.DeviceID)
+		dev, ok := mgr.Device(watch.DeviceID)
 		if !ok {
-			return fmt.Errorf("automation %q trigger references unknown device %q", ruleID, trigger.Device.DeviceID)
+			return fmt.Errorf("automation %q trigger references unknown device %q", ruleID, watch.DeviceID)
 		}
-		if _, ok := dev.(device.Switchable); !ok {
-			return fmt.Errorf("automation %q trigger device %q has no power state", ruleID, trigger.Device.DeviceID)
+		if watch.power() {
+			if _, ok := dev.(device.Switchable); !ok {
+				return fmt.Errorf("automation %q trigger device %q has no power state", ruleID, watch.DeviceID)
+			}
+			return nil
+		}
+		if !hasCapability(dev, metricCapability[watch.Metric]) {
+			return fmt.Errorf("automation %q trigger device %q does not report %s", ruleID, watch.DeviceID, watch.Metric)
+		}
+	case TriggerDeviceOffline:
+		if !exactlyOne(trigger, TriggerDeviceOffline) {
+			return fmt.Errorf("automation %q has an invalid offline trigger", ruleID)
+		}
+		if trigger.Offline.Minutes < 1 || trigger.Offline.Minutes > MaxOfflineMinutes {
+			return fmt.Errorf("automation %q offline time must be 1-%d minutes", ruleID, MaxOfflineMinutes)
+		}
+		if !enabled {
+			return nil
+		}
+		dev, ok := mgr.Device(trigger.Offline.DeviceID)
+		if !ok {
+			return fmt.Errorf("automation %q trigger references unknown device %q", ruleID, trigger.Offline.DeviceID)
+		}
+		// Reachability is only observable for a device Setu can read back. A
+		// write-only target (a Wake-on-LAN card) is never "offline" in any sense
+		// this trigger could act on.
+		if _, ok := dev.(device.Pollable); !ok {
+			return fmt.Errorf("automation %q trigger device %q cannot report whether it is reachable", ruleID, trigger.Offline.DeviceID)
+		}
+	case TriggerPresence:
+		if !exactlyOne(trigger, TriggerPresence) {
+			return fmt.Errorf("automation %q has an invalid presence trigger", ruleID)
+		}
+		if _, err := resolver.NormalizeMAC(trigger.Presence.MAC); err != nil {
+			return fmt.Errorf("automation %q presence trigger needs a MAC address", ruleID)
+		}
+		if trigger.Presence.StableSeconds < 0 || trigger.Presence.StableSeconds > MaxPresenceStableSeconds {
+			return fmt.Errorf("automation %q stable time must be 0-%d seconds", ruleID, MaxPresenceStableSeconds)
+		}
+		if enabled && !presence {
+			return fmt.Errorf("automation %q needs LAN presence, which this host cannot read", ruleID)
 		}
 	case TriggerWebhook:
-		if trigger.Webhook == nil || trigger.Schedule != nil || trigger.Device != nil {
+		if !exactlyOne(trigger, TriggerWebhook) {
 			return fmt.Errorf("automation %q has an invalid webhook trigger", ruleID)
 		}
 		if trigger.Webhook.SecretHash != "" {
@@ -329,7 +561,7 @@ func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.
 // disableInvalidRules reconciles operational rules with the devices available
 // in this boot. Structural validation still runs afterwards; only rules that
 // were enabled and can no longer bind safely are made inert.
-func disableInvalidRules(state *State, mgr *manager.Manager) []string {
+func disableInvalidRules(state *State, mgr *manager.Manager, presence bool) []string {
 	var disabled []string
 	for {
 		byID := make(map[string]Rule, len(state.Items))
@@ -341,7 +573,7 @@ func disableInvalidRules(state *State, mgr *manager.Manager) []string {
 			if !state.Items[i].Enabled {
 				continue
 			}
-			if err := ruleBindingError(state.Items[i], byID, mgr); err != nil {
+			if err := ruleBindingError(state.Items[i], byID, mgr, presence); err != nil {
 				state.Items[i].Enabled = false
 				disabled = append(disabled, state.Items[i].ID)
 				changed = true
@@ -354,8 +586,8 @@ func disableInvalidRules(state *State, mgr *manager.Manager) []string {
 	return disabled
 }
 
-func ruleBindingError(rule Rule, rules map[string]Rule, mgr *manager.Manager) error {
-	if err := validateTrigger(rule.ID, true, rule.Trigger, mgr); err != nil {
+func ruleBindingError(rule Rule, rules map[string]Rule, mgr *manager.Manager, presence bool) error {
+	if err := validateTrigger(rule.ID, true, rule.Trigger, mgr, presence); err != nil {
 		return err
 	}
 	for _, condition := range rule.Conditions {
@@ -386,22 +618,121 @@ func ruleBindingError(rule Rule, rules map[string]Rule, mgr *manager.Manager) er
 	return nil
 }
 
-// Reject cycles made from power-changing device relations. Non-power actions
-// cannot retrigger an on/off edge and therefore do not belong in this graph.
-func validatePowerCycles(rules []Rule) error {
+// effect is one device value an action can change, with the value it writes
+// when that can be read from the action.
+type effect struct {
+	deviceID string
+	metric   string
+	value    int
+	// known distinguishes "writes 40" from "writes something we could not read".
+	// An unreadable value is treated as able to match anything.
+	known bool
+}
+
+// retriggers reports whether this effect could satisfy a trigger watching the
+// same value.
+//
+// Power stays deliberately coarse: any on/off is treated as able to feed any
+// power trigger, which is the guarantee this validation has always given. A
+// numeric action writes a value we can read, so it is compared exactly — "dim
+// to 40% when it goes above 70%" settles at 40 and cannot run again, and
+// refusing it would rule out a whole class of useful rules for no reason.
+func (e effect) retriggers(trigger DeviceTrigger) bool {
+	if e.metric == MetricPower || !e.known {
+		return true
+	}
+	switch trigger.Operator {
+	case OpAbove:
+		return e.value > trigger.Value
+	case OpBelow:
+		return e.value < trigger.Value
+	case OpEquals:
+		return e.value == trigger.Value
+	}
+	return true
+}
+
+// actionEffects reports which watchable values an action can move, and to what.
+//
+// Several actions move more than the obvious one: on most hardware, setting a
+// brightness or a fan speed also switches the device on. Listing that here is
+// what stops "dim the lamp when it turns on" plus "turn the lamp off when it
+// dims" from being accepted as a pair.
+func actionEffects(action Action) []effect {
+	written, ok := actionNumber(action)
+	numeric := func(metric string) effect {
+		return effect{metric: metric, value: written, known: ok}
+	}
+	power := effect{metric: MetricPower}
+	switch action.Action {
+	case "on", "off", "wake":
+		return []effect{power}
+	case "set_brightness":
+		return []effect{numeric(MetricBrightness), power}
+	case "set_speed":
+		return []effect{numeric(MetricSpeed), power}
+	case "set_volume":
+		return []effect{numeric(MetricVolume)}
+	case "set_color_temp":
+		return []effect{numeric(MetricColorTemp)}
+	case "set_timer":
+		return []effect{numeric(MetricTimerHours)}
+	}
+	return nil
+}
+
+// actionNumber reads the literal an action writes. Validation has already
+// accepted the action, so an unreadable value here means a shape this check
+// cannot reason about — reported as unknown, never as zero.
+func actionNumber(action Action) (int, bool) {
+	var value int
+	if err := json.Unmarshal(action.Value, &value); err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+// Reject rule sets whose device-state triggers and actions form a feedback loop:
+// a chain where running one rule can retrigger a rule that leads back to it.
+//
+// Only device-state triggers take part. A schedule and a webhook come from
+// outside; a presence trigger watches a MAC no action can move; an offline
+// trigger fires once per unreachable episode and rearms only after the device is
+// seen again, so none of them can be driven round a loop by an action.
+func validateFeedbackLoops(rules []Rule) error {
 	byID := make(map[string]Rule, len(rules))
 	for _, rule := range rules {
 		byID[rule.ID] = rule
 	}
-	graph := make(map[string][]string)
-	powerMemo := make(map[string][]string)
+	// Which rules watch which device value.
+	type watched struct{ deviceID, metric string }
+	watchers := make(map[watched][]Rule)
 	for _, rule := range rules {
 		if !rule.Enabled || rule.Trigger.Type != TriggerDeviceState || rule.Trigger.Device == nil {
 			continue
 		}
-		from := rule.Trigger.Device.DeviceID
-		graph[from] = append(graph[from], nestedPowerTargets(rule, byID, powerMemo)...)
+		key := watched{deviceID: rule.Trigger.Device.DeviceID, metric: rule.Trigger.Device.metric()}
+		watchers[key] = append(watchers[key], rule)
 	}
+
+	memo := make(map[string][]effect)
+	graph := make(map[string][]string)
+	for _, rule := range rules {
+		if !rule.Enabled || rule.Trigger.Type != TriggerDeviceState || rule.Trigger.Device == nil {
+			continue
+		}
+		seen := make(map[string]bool)
+		for _, caused := range nestedEffects(rule, byID, memo) {
+			for _, target := range watchers[watched{deviceID: caused.deviceID, metric: caused.metric}] {
+				if seen[target.ID] || !caused.retriggers(*target.Trigger.Device) {
+					continue
+				}
+				seen[target.ID] = true
+				graph[rule.ID] = append(graph[rule.ID], target.ID)
+			}
+		}
+	}
+
 	visiting := make(map[string]bool)
 	visited := make(map[string]bool)
 	var visit func(string) bool
@@ -424,41 +755,46 @@ func validatePowerCycles(rules []Rule) error {
 	}
 	for node := range graph {
 		if visit(node) {
-			return fmt.Errorf("device power relations contain a cycle")
+			return fmt.Errorf("these automations would retrigger each other in a loop")
 		}
 	}
 	return nil
 }
 
-// nestedPowerTargets treats an inline automation call as part of its caller.
+// nestedEffects treats an inline automation call as part of its caller.
 // validateAutomationCalls has already made the enabled call graph acyclic and
 // bounded, so this small recursive walk cannot loop indefinitely.
-func nestedPowerTargets(rule Rule, byID map[string]Rule, memo map[string][]string) []string {
-	if targets, ok := memo[rule.ID]; ok {
-		return targets
+func nestedEffects(rule Rule, byID map[string]Rule, memo map[string][]effect) []effect {
+	if effects, ok := memo[rule.ID]; ok {
+		return effects
 	}
-	var targets []string
-	seen := make(map[string]bool)
-	for _, action := range rule.Actions {
-		switch action.Action {
-		case "on", "off":
-			if !seen[action.DeviceID] {
-				seen[action.DeviceID] = true
-				targets = append(targets, action.DeviceID)
-			}
-		case ActionAutomation:
-			if target, ok := byID[action.AutomationID]; ok && target.Enabled {
-				for _, deviceID := range nestedPowerTargets(target, byID, memo) {
-					if !seen[deviceID] {
-						seen[deviceID] = true
-						targets = append(targets, deviceID)
-					}
-				}
-			}
+	// Guard the walk itself, not just its result: a call graph that is still
+	// being validated may not be acyclic yet.
+	memo[rule.ID] = nil
+	var effects []effect
+	seen := make(map[effect]bool)
+	add := func(item effect) {
+		if !seen[item] {
+			seen[item] = true
+			effects = append(effects, item)
 		}
 	}
-	memo[rule.ID] = targets
-	return targets
+	for _, action := range rule.Actions {
+		if action.Action == ActionAutomation {
+			if target, ok := byID[action.AutomationID]; ok && target.Enabled {
+				for _, item := range nestedEffects(target, byID, memo) {
+					add(item)
+				}
+			}
+			continue
+		}
+		for _, caused := range actionEffects(action) {
+			caused.deviceID = action.DeviceID
+			add(caused)
+		}
+	}
+	memo[rule.ID] = effects
+	return effects
 }
 
 func cloneState(state State) State {
@@ -480,6 +816,14 @@ func cloneState(state State) State {
 		if rule.Trigger.Device != nil {
 			deviceTrigger := *rule.Trigger.Device
 			out.Items[i].Trigger.Device = &deviceTrigger
+		}
+		if rule.Trigger.Offline != nil {
+			offline := *rule.Trigger.Offline
+			out.Items[i].Trigger.Offline = &offline
+		}
+		if rule.Trigger.Presence != nil {
+			presence := *rule.Trigger.Presence
+			out.Items[i].Trigger.Presence = &presence
 		}
 		if rule.Trigger.Webhook != nil {
 			webhook := *rule.Trigger.Webhook

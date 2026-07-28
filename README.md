@@ -40,6 +40,9 @@ SETU_STATE_DIR="$PWD/tmp/state" \
 
 Open `http://localhost:8080`.
 
+`GET /healthz` answers without a token and discloses nothing about the
+installation, for systemd, Docker, or an uptime check.
+
 ## Important
 
 - Change `SETU_TOKEN` and keep Setu on a trusted LAN or VPN. Do not expose it
@@ -53,11 +56,30 @@ Open `http://localhost:8080`.
 
 All optional runtime settings are documented in [`example.env`](example.env).
 
+## People
+
+`SETU_TOKEN` is the administrator: it comes from the environment, so nothing
+written to disk can lock you out. Everyone else is added in the app
+(Settings → People) with just a name — Setu generates their token and shows it
+once.
+
+Each person gets two things:
+
+- **Devices** they can see and control. Nothing is shared by default, and a
+  device added later has to be shared explicitly.
+- **A role**: *Control* uses those devices; *Manage* also adds devices and
+  writes automations — still only for the devices they were given.
+
+A person's device list is enforced everywhere, not just in the UI: the device
+list, the WebSocket, diagnostics and automations all only ever carry what they
+were granted, and an automation counts as theirs only when every rule it calls
+is theirs too. Removing or restoring devices takes their grants with them.
+
 ## Core rules
 
 - MAC is device identity; IP addresses are resolved and cached at runtime.
-- Device inventory and automations are server state. Rooms, favourites, scenes,
-  layout, and theme are browser preferences.
+- Device inventory, automations, and people are server state. Rooms, favourites,
+  scenes, layout, and theme are browser preferences.
 - Device controls come from reported capabilities, not brand-specific UI.
 - Automations stay bounded for router-class hardware: fixed workers and capped
   rules, actions, delays, queue, and RAM-only history.

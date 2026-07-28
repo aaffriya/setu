@@ -18,27 +18,28 @@ import (
 	wolnet "setu/internal/wol"
 )
 
-// Brand and model identifiers — the exact strings a stored device spec uses.
+// Brand and driver identifiers — the exact strings a stored device spec uses.
 const (
-	Brand       = "wol"
-	ModelDevice = "device"
+	Brand        = "WoL"
+	DriverTarget = "device"
 )
 
-// Device is a Wake-on-LAN target: identity plus the MAC to wake.
-type Device struct{ id, name, series, mac string }
+// Device is a Wake-on-LAN target: identity plus the MAC to wake. Model is
+// whatever the user typed, if anything: nothing answers a magic packet, so
+// Setu never learns what the machine is.
+type Device struct{ id, name, model, mac string }
 
 var (
 	_ device.Device    = (*Device)(nil)
 	_ device.WakeOnLAN = (*Device)(nil)
-	_ device.Described = (*Device)(nil)
 )
 
 func (d *Device) ID() string             { return d.id }
 func (d *Device) Name() string           { return d.name }
 func (d *Device) Brand() string          { return Brand }
-func (d *Device) Model() string          { return ModelDevice }
+func (d *Device) Driver() string         { return DriverTarget }
+func (d *Device) Model() string          { return d.model }
 func (d *Device) MAC() string            { return d.mac }
-func (d *Device) Series() string         { return d.series }
 func (d *Device) Capabilities() []string { return []string{device.CapWoL} }
 
 // State is static: Online stays true so the card never dims and the Wake button
@@ -60,10 +61,10 @@ func New(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
 	if spec.MAC == "" {
 		return nil, fmt.Errorf("wol %s: mac is required", spec.ID)
 	}
-	return &Device{id: spec.ID, name: spec.Name, series: spec.Series, mac: spec.MAC}, nil
+	return &Device{id: spec.ID, name: spec.Name, model: spec.Model, mac: spec.MAC}, nil
 }
 
-// Register wires the (brand, model) pair into the factory.
+// Register wires the (brand, driver) pair into the factory.
 func Register(f *config.Factory) {
-	f.Register(Brand, ModelDevice, New)
+	f.Register(Brand, DriverTarget, "Wake-on-LAN target", New)
 }

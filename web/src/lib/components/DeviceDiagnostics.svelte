@@ -175,7 +175,7 @@
                 <span class="h-2.5 w-2.5 shrink-0 rounded-full {checkOK && device.state.online ? 'bg-emerald-400' : checkFailed || (checkOK && !device.state.online) ? 'bg-rose-400' : 'bg-amber-400'}"></span>
                 <div class="min-w-0 flex-1">
                   <h4 class="truncate text-sm font-medium text-ink/80">{device.name || device.id}</h4>
-                  <p class="truncate text-[11px] text-ink/40">{device.series || device.model}</p>
+                  <p class="truncate text-[11px] text-ink/40">{device.model || device.brand}</p>
                 </div>
                 <span class="text-[11px] font-medium {checkOK && device.state.online ? 'text-emerald-600 dark:text-emerald-300' : checkFailed || (checkOK && !device.state.online) ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}">
                   {record

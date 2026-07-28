@@ -55,19 +55,22 @@ func TestScanListsEveryDistinctBulb(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"d8:a0:11:ff:5e:f0": ModelColorBulb,
-		"d8:a0:11:ff:5e:f1": ModelTunableWhite,
+		"d8:a0:11:ff:5e:f0": DriverColorBulb,
+		"d8:a0:11:ff:5e:f1": DriverTunableWhite,
 		"d8:a0:11:ff:5e:f2": "", // a socket: found, but no driver here
 	}
 	for _, c := range found {
-		model, ok := want[c.MAC]
+		driver, ok := want[c.MAC]
 		if !ok {
 			t.Fatalf("Scan() returned unexpected mac %q", c.MAC)
 		}
-		if c.Model != model {
-			t.Errorf("mac %s model = %q; want %q", c.MAC, c.Model, model)
+		if c.Driver != driver {
+			t.Errorf("mac %s driver = %q; want %q", c.MAC, c.Driver, driver)
 		}
-		if c.Brand != Brand || c.IP != "127.0.0.1" || c.Series == "" {
+		// The module name is the only hardware identifier WiZ gives, so it must
+		// travel as the candidate's model — including for the socket, which has
+		// no driver here but is still worth naming on screen.
+		if c.Brand != Brand || c.IP != "127.0.0.1" || c.Model == "" {
 			t.Errorf("candidate = %+v; want brand %q, the reporting IP and its module name", c, Brand)
 		}
 		delete(want, c.MAC)
@@ -121,15 +124,15 @@ func TestLookupPicksTheMatchingBulb(t *testing.T) {
 // wrong means driving a white bulb with colour commands.
 func TestModelForModuleName(t *testing.T) {
 	for name, want := range map[string]string{
-		"ESP01_SHRGB1C_31": ModelColorBulb,
-		"ESP01_SHTW1C_31":  ModelTunableWhite,
-		"ESP20_SHTW_01":    ModelTunableWhite,
+		"ESP01_SHRGB1C_31": DriverColorBulb,
+		"ESP01_SHTW1C_31":  DriverTunableWhite,
+		"ESP20_SHTW_01":    DriverTunableWhite,
 		"ESP10_SOCKET_06":  "",
 		"ESP06_SHDW9_01":   "", // dimmable white: no colour temperature
 		"":                 "",
 	} {
-		if got := modelFor(name); got != want {
-			t.Errorf("modelFor(%q) = %q; want %q", name, got, want)
+		if got := driverFor(name); got != want {
+			t.Errorf("driverFor(%q) = %q; want %q", name, got, want)
 		}
 	}
 }

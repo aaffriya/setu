@@ -32,7 +32,8 @@ type testSwitch struct {
 func (d *testSwitch) ID() string           { return d.id }
 func (d *testSwitch) Name() string         { return d.id }
 func (*testSwitch) Brand() string          { return "test" }
-func (*testSwitch) Model() string          { return "switch" }
+func (*testSwitch) Driver() string         { return "switch" }
+func (*testSwitch) Model() string          { return "" }
 func (*testSwitch) MAC() string            { return "02:00:00:00:00:01" }
 func (*testSwitch) Capabilities() []string { return []string{device.CapSwitch} }
 func (d *testSwitch) State() device.State {
@@ -69,7 +70,7 @@ func newTestEngine(t *testing.T, devices ...device.Device) *Engine {
 	mgr := manager.New(bus, devices)
 	t.Cleanup(mgr.Close)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	engine, err := New(mgr, bus, NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))), log)
+	engine, err := New(mgr, bus, NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))), nil, log)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -209,6 +210,7 @@ func TestFullQueueDoesNotConsumeCooldown(t *testing.T) {
 		mgr,
 		bus,
 		NewStore(store.New(filepath.Join(t.TempDir(), "setu.json"))),
+		nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	if err != nil {
@@ -494,7 +496,7 @@ func TestNewDisablesRuleAfterDeviceCapabilityChanges(t *testing.T) {
 	if err := rules.Save(state); err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(mgr, bus, rules, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine, err := New(mgr, bus, rules, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new engine after capability change: %v", err)
 	}
@@ -533,7 +535,7 @@ func TestNewCascadeDisablesCallerOfInvalidTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine, err := New(mgr, bus, rules, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine, err := New(mgr, bus, rules, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -585,7 +587,7 @@ func TestStoredStateContainsNoPlaintextWebhookToken(t *testing.T) {
 	mgr := manager.New(bus, []device.Device{target})
 	defer mgr.Close()
 	path := filepath.Join(t.TempDir(), "setu.json")
-	engine, err := New(mgr, bus, NewStore(store.New(path)), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine, err := New(mgr, bus, NewStore(store.New(path)), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

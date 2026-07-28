@@ -8,7 +8,7 @@ It demonstrates:
 - cached MAC-to-IP resolution with ARP then brand discovery;
 - invalidation after transport failure;
 - immediate command events versus quiet poll updates;
-- a model implementing only selected capabilities;
+- a driver type implementing only selected capabilities;
 - compile-time interface assertions;
 - `New`, `Register`, `Poll`, `Resolver`, and `Scanner` shapes.
 

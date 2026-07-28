@@ -9,6 +9,8 @@
     saveAutomations,
     type AutomationAction,
     type AutomationActionName,
+    type AutomationComparison,
+    type AutomationMetric,
     type AutomationRule,
     type AutomationSnapshot,
     type AutomationState,
@@ -18,10 +20,25 @@
   import { haptics } from '../haptics'
   import { trapFocus } from '../focus-trap'
 
+  // canModify is what the signed-in account may do. An account that may only
+  // control its devices still sees its automations and can run them by hand —
+  // that is the same power it already has — but the editing paths are hidden
+  // rather than offered and then refused by the server.
+  //
+  // isAdmin gates only the installation-wide pause: it stops rules a restricted
+  // account was never shown, so the server keeps whatever the administrator set
+  // and this hides the switch rather than offering a refused one.
   let {
     disabled = false,
+    canModify = true,
+    isAdmin = true,
     onmodalchange = () => {},
-  }: { disabled?: boolean; onmodalchange?: (open: boolean) => void } = $props()
+  }: {
+    disabled?: boolean
+    canModify?: boolean
+    isAdmin?: boolean
+    onmodalchange?: (open: boolean) => void
+  } = $props()
   let open = $state(false)
   let loading = $state(false)
   let saving = $state(false)
@@ -48,7 +65,42 @@
 
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const AUTOMATION_TARGET = '@automation'
+
+  // The trigger kinds, in the order they appear as tabs. Presence needs a host
+  // that can read its neighbour table; where it cannot, the server refuses such
+  // a rule, so the tab is disabled rather than offered and then rejected.
+  type TriggerKind = 'schedule' | 'device_state' | 'device_offline' | 'presence' | 'webhook'
+  const triggerKinds: Array<{ value: TriggerKind; label: string }> = [
+    { value: 'schedule', label: 'Time' },
+    { value: 'device_state', label: 'Device' },
+    { value: 'device_offline', label: 'Offline' },
+    { value: 'presence', label: 'Presence' },
+    { value: 'webhook', label: 'Webhook' },
+  ]
+  let hasPresence = $derived(snapshot?.presence !== false)
+
+  // The numbers a device trigger can watch, and the capability each one needs.
+  // "power" is the on/off edge and is what an absent metric means.
+  const metrics: Array<{ value: AutomationMetric; label: string; capability: string }> = [
+    { value: 'power', label: 'Power', capability: 'switch' },
+    { value: 'brightness', label: 'Brightness', capability: 'brightness' },
+    { value: 'speed', label: 'Fan speed', capability: 'speed' },
+    { value: 'volume', label: 'Volume', capability: 'volume' },
+    { value: 'color_temp', label: 'White temperature', capability: 'color_temp' },
+    { value: 'timer_hours', label: 'Timer hours', capability: 'timer' },
+  ]
+  const comparisons: Array<{ value: AutomationComparison; label: string }> = [
+    { value: 'above', label: 'rises above' },
+    { value: 'below', label: 'falls below' },
+    { value: 'equals', label: 'reaches' },
+  ]
+
   let switchDevices = $derived($devices.filter((device) => device.capabilities.includes('switch')))
+  // Only a device Setu can read back is ever "offline" in a sense a rule could
+  // act on; a write-only Wake-on-LAN target never answers either way.
+  let reachableDevices = $derived(
+    $devices.filter((device) => !device.capabilities.includes('wol') || device.capabilities.length > 1),
+  )
   let actionDevices = $derived($devices.filter((device) => actionOptions(device).length > 0))
   let callableRules = $derived(
     (snapshot?.items ?? []).filter((rule) => rule.id !== draft?.id && rule.enabled),
@@ -250,7 +302,7 @@
     }
   }
 
-  function setTrigger(type: 'schedule' | 'device_state' | 'webhook') {
+  function setTrigger(type: TriggerKind) {
     if (!draft) return
     if (type === 'schedule') {
       draft.trigger = {
@@ -264,11 +316,80 @@
     } else if (type === 'device_state') {
       draft.trigger = {
         type,
-        device: { device_id: switchDevices[0]?.id ?? '', on: true, stable_seconds: 0 },
+        device: { device_id: switchDevices[0]?.id ?? '', on: true, stable_seconds: 0, metric: 'power' },
       }
+    } else if (type === 'device_offline') {
+      draft.trigger = {
+        type,
+        offline: { device_id: reachableDevices[0]?.id ?? '', minutes: 10 },
+      }
+    } else if (type === 'presence') {
+      draft.trigger = { type, presence: { mac: '', present: true, stable_seconds: 300 } }
     } else {
       draft.trigger = { type, webhook: {} }
     }
+  }
+
+  // Which devices can answer the metric this trigger watches. Power devices are
+  // the switchable ones; everything else needs its own capability.
+  function metricDevices(metric: AutomationMetric): Device[] {
+    const capability = metrics.find((item) => item.value === metric)?.capability ?? 'switch'
+    return $devices.filter((device) => device.capabilities.includes(capability))
+  }
+
+  // setMetric keeps the trigger consistent: switching to a number needs a
+  // comparison and a starting value, and switching back to power needs neither.
+  // The watched device follows too, since not every device reports every value.
+  function setMetric(metric: AutomationMetric) {
+    if (!draft || draft.trigger.type !== 'device_state') return
+    const trigger = draft.trigger.device
+    trigger.metric = metric
+    const candidates = metricDevices(metric)
+    if (!candidates.some((device) => device.id === trigger.device_id)) {
+      trigger.device_id = candidates[0]?.id ?? ''
+    }
+    if (metric === 'power') {
+      delete trigger.operator
+      delete trigger.value
+      return
+    }
+    trigger.operator ??= 'above'
+    trigger.value = defaultMetricValue(metric, trigger.device_id)
+  }
+
+  function defaultMetricValue(metric: AutomationMetric, deviceID: string): number {
+    const device = deviceFor(deviceID)
+    switch (metric) {
+      case 'color_temp':
+        return device?.color_temp_min ?? 2700
+      case 'speed':
+        return device?.speed_min ?? 1
+      case 'timer_hours':
+        return 1
+      default:
+        return 50
+    }
+  }
+
+  function metricMin(trigger: { metric?: AutomationMetric; device_id: string }): number {
+    const device = deviceFor(trigger.device_id)
+    if (trigger.metric === 'color_temp') return device?.color_temp_min ?? 1000
+    if (trigger.metric === 'speed') return device?.speed_min ?? 1
+    return 0
+  }
+
+  function metricMax(trigger: { metric?: AutomationMetric; device_id: string }): number {
+    const device = deviceFor(trigger.device_id)
+    if (trigger.metric === 'color_temp') return device?.color_temp_max ?? 10000
+    if (trigger.metric === 'speed') return device?.speed_max ?? 6
+    if (trigger.metric === 'timer_hours') return 24
+    return 100
+  }
+
+  // A MAC is the identity of a phone or laptop on the LAN. Accept the spellings
+  // people copy from a router — colons, dashes, or nothing at all.
+  function isMAC(value: string): boolean {
+    return /^[0-9a-f]{12}$/.test(value.toLowerCase().replaceAll(/[:.-]/g, ''))
   }
 
   function toggleDay(day: number) {
@@ -421,7 +542,48 @@
         .map((action) => action.device_id),
     ]
     if (rule.trigger.type === 'device_state') ids.push(rule.trigger.device.device_id)
+    if (rule.trigger.type === 'device_offline') ids.push(rule.trigger.offline.device_id)
     return [...new Set(ids.filter((id) => !available.has(id)))]
+  }
+
+  // What the trigger tab summary says under a rule's name.
+  function triggerLabel(rule: AutomationRule): string {
+    switch (rule.trigger.type) {
+      case 'device_offline':
+        return `offline ${rule.trigger.offline.minutes}m`
+      case 'presence':
+        return rule.trigger.presence.present ? 'arrives' : 'leaves'
+      case 'device_state': {
+        // Bound to a local: the narrowing above does not survive into the
+        // closures below.
+        const watched = rule.trigger.device
+        const metric = watched.metric ?? 'power'
+        if (metric === 'power') return watched.on ? 'turns on' : 'turns off'
+        const label = metrics.find((item) => item.value === metric)?.label.toLowerCase() ?? metric
+        const comparison = comparisons.find((item) => item.value === watched.operator)
+        return `${label} ${comparison?.label ?? ''} ${watched.value ?? 0}`.trim()
+      }
+      default:
+        return rule.trigger.type.replace('_', ' ')
+    }
+  }
+
+  // A draft is savable when its trigger is actually complete. Each kind has one
+  // field that cannot be defaulted sensibly.
+  function draftIsComplete(rule: AutomationRule): boolean {
+    if (!rule.name.trim() || rule.actions.length === 0) return false
+    switch (rule.trigger.type) {
+      case 'schedule':
+        return rule.trigger.schedule.weekdays.length > 0
+      case 'device_state':
+        return rule.trigger.device.device_id !== ''
+      case 'device_offline':
+        return rule.trigger.offline.device_id !== '' && rule.trigger.offline.minutes >= 1
+      case 'presence':
+        return isMAC(rule.trigger.presence.mac)
+      default:
+        return true
+    }
   }
 
   function unavailableAutomations(rule: AutomationRule): string[] {
@@ -503,10 +665,16 @@
 
           <div>
             <span class="text-xs text-ink/55">Trigger</span>
-            <div class="mt-1 grid grid-cols-3 gap-1 rounded-xl bg-ink/5 p-1">
-              {#each ['schedule', 'device_state', 'webhook'] as type (type)}
-                <button type="button" onclick={() => setTrigger(type as 'schedule' | 'device_state' | 'webhook')} class="rounded-lg py-2 text-xs font-medium {draft.trigger.type === type ? 'bg-panel shadow-sm' : 'text-ink/50'}">
-                  {type === 'device_state' ? 'Device' : type[0].toUpperCase() + type.slice(1)}
+            <div class="mt-1 grid grid-cols-5 gap-1 rounded-xl bg-ink/5 p-1">
+              {#each triggerKinds as kind (kind.value)}
+                <button
+                  type="button"
+                  onclick={() => setTrigger(kind.value)}
+                  disabled={kind.value === 'presence' && !hasPresence}
+                  title={kind.value === 'presence' && !hasPresence ? 'This host cannot read its LAN neighbour table.' : undefined}
+                  class="rounded-lg py-2 text-[11px] font-medium disabled:opacity-30 {draft.trigger.type === kind.value ? 'bg-panel shadow-sm' : 'text-ink/50'}"
+                >
+                  {kind.label}
                 </button>
               {/each}
             </div>
@@ -523,14 +691,67 @@
               <p class="mt-2 text-[11px] text-ink/40">Uses this browser’s current UTC offset. Update the rule if daylight-saving offset changes.</p>
             </div>
           {:else if draft.trigger.type === 'device_state'}
+            {@const watched = draft.trigger.device}
+            {@const metric = watched.metric ?? 'power'}
             <div class="grid grid-cols-2 gap-2 rounded-xl bg-ink/[0.03] p-3">
-              <select bind:value={draft.trigger.device.device_id} class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
-                {#each switchDevices as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}
+              <select value={metric} onchange={(event) => setMetric(event.currentTarget.value as AutomationMetric)} aria-label="Value to watch" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
+                {#each metrics as item (item.value)}
+                  <option value={item.value} disabled={metricDevices(item.value).length === 0}>{item.label}</option>
+                {/each}
               </select>
-              <select bind:value={draft.trigger.device.on} class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm"><option value={true}>Turns on</option><option value={false}>Turns off</option></select>
+              <select bind:value={watched.device_id} aria-label="Device to watch" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
+                {#each metricDevices(metric) as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}
+              </select>
+              {#if metric === 'power'}
+                <select bind:value={watched.on} class="col-span-2 rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm"><option value={true}>Turns on</option><option value={false}>Turns off</option></select>
+              {:else}
+                <select bind:value={watched.operator} aria-label="Comparison" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
+                  {#each comparisons as comparison (comparison.value)}<option value={comparison.value}>{comparison.label}</option>{/each}
+                </select>
+                <input type="number" bind:value={watched.value} min={metricMin(watched)} max={metricMax(watched)} aria-label="Compared value" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm" />
+                <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
+                  Runs on the crossing, not while the value stays there — and never while the device is unreachable.
+                </p>
+              {/if}
               <label class="col-span-2 text-[11px] text-ink/45">Must stay changed for
-                <input type="number" min="0" max="300" bind:value={draft.trigger.device.stable_seconds} class="ml-2 w-20 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1 text-xs" /> seconds
+                <input type="number" min="0" max="300" bind:value={watched.stable_seconds} class="ml-2 w-20 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1 text-xs" /> seconds
               </label>
+            </div>
+          {:else if draft.trigger.type === 'device_offline'}
+            <div class="grid grid-cols-2 gap-2 rounded-xl bg-ink/[0.03] p-3">
+              <select bind:value={draft.trigger.offline.device_id} aria-label="Device to watch" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
+                {#each reachableDevices as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}
+              </select>
+              <label class="flex items-center gap-2 text-[11px] text-ink/45">
+                <input type="number" min="1" max="1440" bind:value={draft.trigger.offline.minutes} class="w-20 rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm" />
+                minutes
+              </label>
+              <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
+                Runs once when the device has been unreachable that long, and arms again only after it is seen back on the network.
+              </p>
+            </div>
+          {:else if draft.trigger.type === 'presence'}
+            <div class="grid grid-cols-2 gap-2 rounded-xl bg-ink/[0.03] p-3">
+              <input
+                bind:value={draft.trigger.presence.mac}
+                placeholder="a4:83:e7:11:22:33"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck="false"
+                aria-label="MAC address to watch"
+                class="col-span-2 rounded-lg border border-ink/10 bg-ink/5 px-3 py-2 font-mono text-sm outline-none ring-indigo-400/50 focus:ring-2"
+              />
+              <select bind:value={draft.trigger.presence.present} class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm"><option value={true}>Joins the network</option><option value={false}>Leaves the network</option></select>
+              <label class="flex items-center gap-2 text-[11px] text-ink/45">
+                <input type="number" min="0" max="900" bind:value={draft.trigger.presence.stable_seconds} class="w-20 rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm" />
+                seconds
+              </label>
+              <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
+                The MAC of a phone or laptop — no device has to be added for it. Presence is approximate: an entry can linger after a device leaves and can vanish while a phone sleeps, so keep several minutes of settle time, especially for “leaves”.
+              </p>
+              {#if draft.trigger.presence.mac && !isMAC(draft.trigger.presence.mac)}
+                <p class="col-span-2 text-[11px] text-rose-600 dark:text-rose-300">That is not a MAC address.</p>
+              {/if}
             </div>
           {:else}
             <div class="rounded-xl bg-indigo-500/10 p-3 text-xs leading-relaxed text-ink/60">
@@ -599,12 +820,20 @@
         </div>
         <div class="mt-4 flex gap-2">
           <button type="button" onclick={() => (draft = null)} class="flex-1 rounded-xl bg-ink/5 py-2.5 text-sm font-medium text-ink/65">Cancel</button>
-          <button type="button" onclick={saveDraft} disabled={saving || !draft.name.trim() || draft.actions.length === 0 || (draft.trigger.type === 'schedule' && draft.trigger.schedule.weekdays.length === 0)} class="flex-1 rounded-xl bg-indigo-500 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{saving ? 'Saving…' : 'Save'}</button>
+          <button type="button" onclick={saveDraft} disabled={saving || !draftIsComplete(draft)} class="flex-1 rounded-xl bg-indigo-500 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{saving ? 'Saving…' : 'Save'}</button>
         </div>
       {:else}
         <div class="mt-4 flex items-center gap-2">
-          <button type="button" onclick={togglePause} disabled={saving || !snapshot} class="rounded-xl px-3 py-2 text-xs font-medium {snapshot?.paused ? 'bg-amber-500 text-white' : 'bg-ink/5 text-ink/65'}">{snapshot?.paused ? 'Resume all' : 'Pause all'}</button>
-          <button type="button" onclick={newRule} disabled={!snapshot || !canAddAction} class="ml-auto rounded-xl bg-indigo-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">+ New automation</button>
+          {#if isAdmin}
+            <button type="button" onclick={togglePause} disabled={saving || !snapshot} class="rounded-xl px-3 py-2 text-xs font-medium {snapshot?.paused ? 'bg-amber-500 text-white' : 'bg-ink/5 text-ink/65'}">{snapshot?.paused ? 'Resume all' : 'Pause all'}</button>
+          {:else if snapshot?.paused}
+            <p class="text-xs text-amber-600 dark:text-amber-300">Paused by the administrator.</p>
+          {/if}
+          {#if canModify}
+            <button type="button" onclick={newRule} disabled={!snapshot || !canAddAction} class="ml-auto rounded-xl bg-indigo-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">+ New automation</button>
+          {:else if !snapshot?.paused}
+            <p class="text-xs text-ink/45">You can run these by hand; only a manager can change them.</p>
+          {/if}
         </div>
 
         <div class="mt-3 min-h-0 min-w-0 flex-1 space-y-1.5 overflow-x-hidden overflow-y-auto overscroll-contain">
@@ -616,14 +845,16 @@
               {@const unavailableAutomation = unavailableAutomations(rule)}
               <div class="min-w-0 rounded-2xl border border-ink/10 bg-ink/[0.025] p-3" in:fly={{ y: 5, duration: 120 }}>
                 <div class="flex min-w-0 items-center gap-2">
-                  <button type="button" onclick={() => toggleRule(rule)} disabled={saving || missing.length > 0 || unavailableAutomation.length > 0} aria-label={rule.enabled ? `Disable ${rule.name}` : `Enable ${rule.name}`} class="h-5 w-9 shrink-0 rounded-full p-0.5 transition {rule.enabled ? 'bg-emerald-500' : 'bg-ink/15'} disabled:opacity-40"><span class="block h-4 w-4 rounded-full bg-white shadow transition {rule.enabled ? 'translate-x-4' : ''}"></span></button>
-                  <button type="button" onclick={() => (draft = cloneRule(rule))} class="min-w-0 flex-1 text-left"><span class="block truncate text-sm font-medium">{rule.name}</span><span class="block text-[11px] text-ink/40">{rule.trigger.type.replace('_', ' ')} · {rule.actions.length} action{rule.actions.length === 1 ? '' : 's'}</span></button>
+                  <button type="button" onclick={() => toggleRule(rule)} disabled={!canModify || saving || missing.length > 0 || unavailableAutomation.length > 0} aria-label={rule.enabled ? `Disable ${rule.name}` : `Enable ${rule.name}`} class="h-5 w-9 shrink-0 rounded-full p-0.5 transition {rule.enabled ? 'bg-emerald-500' : 'bg-ink/15'} disabled:opacity-40"><span class="block h-4 w-4 rounded-full bg-white shadow transition {rule.enabled ? 'translate-x-4' : ''}"></span></button>
+                  <button type="button" onclick={() => canModify && (draft = cloneRule(rule))} disabled={!canModify} class="min-w-0 flex-1 text-left disabled:cursor-default"><span class="block truncate text-sm font-medium">{rule.name}</span><span class="block text-[11px] text-ink/40">{triggerLabel(rule)} · {rule.actions.length} action{rule.actions.length === 1 ? '' : 's'}</span></button>
                   <button type="button" onclick={() => run(rule)} disabled={saving || snapshot?.paused || !rule.enabled || missing.length > 0 || unavailableAutomation.length > 0} class="shrink-0 rounded-lg bg-indigo-500/10 px-2 py-1.5 text-[11px] font-medium text-indigo-600 disabled:opacity-30 dark:text-indigo-300">Run</button>
-                  <button type="button" onclick={() => removeRule(rule.id)} disabled={saving} class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-rose-500">×</button>
+                  {#if canModify}
+                    <button type="button" onclick={() => removeRule(rule.id)} disabled={saving} class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-rose-500">×</button>
+                  {/if}
                 </div>
                 {#if missing.length}<p class="mt-1 text-[11px] text-amber-600 dark:text-amber-300">Missing device: {missing.join(', ')}. Kept disabled after restore.</p>{/if}
                 {#if unavailableAutomation.length}<p class="mt-1 text-[11px] text-amber-600 dark:text-amber-300">Unavailable automation: {unavailableAutomation.join(', ')}. Enable its target first.</p>{/if}
-                {#if rule.trigger.type === 'webhook'}
+                {#if rule.trigger.type === 'webhook' && canModify}
                   <div class="mt-2 flex min-w-0 items-center gap-2 overflow-hidden rounded-lg bg-ink/[0.03] px-2 py-1.5"><code class="min-w-0 flex-1 truncate text-[10px] text-ink/45">{webhookURL(rule.id)}</code><button type="button" onclick={() => rotate(rule)} disabled={saving} class="shrink-0 whitespace-nowrap text-[10px] font-medium text-indigo-500">New token</button></div>
                 {/if}
               </div>

@@ -42,8 +42,8 @@ func TestTunableWhiteModelCapabilities(t *testing.T) {
 		t.Fatalf("NewTunableWhite: %v", err)
 	}
 
-	if got := dev.Model(); got != ModelTunableWhite {
-		t.Errorf("Model() = %q, want %q", got, ModelTunableWhite)
+	if got := dev.Driver(); got != DriverTunableWhite {
+		t.Errorf("Driver() = %q, want %q", got, DriverTunableWhite)
 	}
 	wantCaps := []string{
 		device.CapSwitch,
@@ -105,9 +105,9 @@ func TestRegisterIncludesTunableWhite(t *testing.T) {
 	Register(factory)
 
 	dev, err := factory.Build(config.DeviceSpec{
-		ID:    "white",
-		Brand: "wiz",
-		Model: "TUNABLE_WHITE",
+		ID:     "white",
+		Brand:  "wiz",
+		Driver: "TUNABLE_WHITE",
 	}, config.Deps{})
 	if err != nil {
 		t.Fatalf("Build tunable-white: %v", err)

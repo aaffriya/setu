@@ -1,5 +1,5 @@
 // Package config holds Setu's runtime settings, the device spec, and the
-// (brand, model) device Factory that turns a spec into a live device.
+// (brand, driver) device Factory that turns a spec into a live device.
 //
 // There is no configuration file. Server settings come from the environment —
 // every variable optional, each falling back to the default Setu has always
@@ -8,7 +8,7 @@
 //
 // Configuration is still data, not behaviour (principle 4): a DeviceSpec
 // supplies only instance data (id, name, mac, …). The mapping from a
-// (brand, model) pair to a concrete Go type lives in code — each device package
+// (brand, driver) pair to a concrete Go type lives in code — each device package
 // registers its constructor with a Factory at startup (see cmd/setu/main.go and
 // factory.go).
 package config
@@ -33,6 +33,7 @@ const (
 	EnvTLSCert      = "SETU_TLS_CERT"      // PEM certificate → serves HTTPS
 	EnvTLSKey       = "SETU_TLS_KEY"       // PEM private key
 	EnvPollInterval = "SETU_POLL_INTERVAL" // active poll cadence, e.g. "45s"
+	EnvStateDir     = "SETU_STATE_DIR"     // directory holding setu.json and pairing tokens
 )
 
 // DefaultToken is the placeholder token an untouched install runs with. The
@@ -167,23 +168,27 @@ func (c *Config) validate() error {
 }
 
 // DeviceSpec is one device the user added: pure instance data. The Factory maps
-// (Brand, Model) to the Go type that implements it. Specs are stored in the
+// (Brand, Driver) to the Go type that implements it. Specs are stored in the
 // state file and edited through the API, never hand-written into a config file.
+//
+// Brand + Driver is identity and must not change after an add — a different
+// driver is a different device, so editing it is a remove and an add. Name and
+// Model are labels the user may edit freely.
 type DeviceSpec struct {
-	ID     string `json:"id"`               // stable, unique instance id
-	Brand  string `json:"brand"`            // selects the device package, e.g. "WiZ"
-	Model  string `json:"model"`            // selects the model within the brand
-	Series string `json:"series,omitempty"` // optional friendly product/series name shown in the UI
-	Name   string `json:"name"`             // human-friendly label
-	MAC    string `json:"mac"`              // PRIMARY identity (stable across DHCP leases)
+	ID     string `json:"id"`              // stable, unique instance id
+	Brand  string `json:"brand"`           // selects the device package, e.g. "WiZ"
+	Driver string `json:"driver"`          // selects the driver within the brand, e.g. "color_bulb"
+	Model  string `json:"model,omitempty"` // the hardware, e.g. "UE43AU7700"; blank until something reports it
+	Name   string `json:"name"`            // human-friendly label
+	MAC    string `json:"mac"`             // PRIMARY identity (stable across DHCP leases)
 }
 
 // Field limits. Ids also become file names (the Samsung pairing token is stored
 // per device id), so they are restricted to a safe, lower-case alphabet.
 const (
-	MaxIDLength     = 32
-	MaxNameLength   = 48
-	MaxSeriesLength = 32
+	MaxIDLength    = 32
+	MaxNameLength  = 48
+	MaxModelLength = 32
 )
 
 // Validate reports whether the spec can be built and stored. It is the single
@@ -197,8 +202,8 @@ func (s DeviceSpec) Validate() error {
 	if !validID(s.ID) {
 		return fmt.Errorf("id %q must be 1-%d characters of a-z, 0-9, _ or -", s.ID, MaxIDLength)
 	}
-	if s.Brand == "" || s.Model == "" {
-		return fmt.Errorf("brand and model are required")
+	if s.Brand == "" || s.Driver == "" {
+		return fmt.Errorf("brand and driver are required")
 	}
 	if s.Name == "" {
 		return fmt.Errorf("a name is required")
@@ -206,8 +211,8 @@ func (s DeviceSpec) Validate() error {
 	if len(s.Name) > MaxNameLength {
 		return fmt.Errorf("the name is longer than %d characters", MaxNameLength)
 	}
-	if len(s.Series) > MaxSeriesLength {
-		return fmt.Errorf("the model label is longer than %d characters", MaxSeriesLength)
+	if len(s.Model) > MaxModelLength {
+		return fmt.Errorf("the model is longer than %d characters", MaxModelLength)
 	}
 	if _, err := resolver.NormalizeMAC(s.MAC); err != nil {
 		return fmt.Errorf("%q is not a MAC address (the device's identity)", s.MAC)
@@ -221,11 +226,47 @@ func (s DeviceSpec) Validate() error {
 func (s DeviceSpec) Normalized() DeviceSpec {
 	s.ID = strings.ToLower(strings.TrimSpace(s.ID))
 	s.Brand = strings.TrimSpace(s.Brand)
+	s.Driver = strings.TrimSpace(s.Driver)
 	s.Model = strings.TrimSpace(s.Model)
 	s.Name = strings.TrimSpace(s.Name)
-	s.Series = strings.TrimSpace(s.Series)
 	s.MAC = resolver.FormatMAC(strings.TrimSpace(s.MAC))
 	return s
+}
+
+// LegacyDeviceSpec is a device as format version 1 wrote it, when "model" meant
+// the driver key and the hardware the device reported was filed under "series".
+// It exists so an existing state file and an older exported backup still load;
+// both call Upgrade and then treat the result as any other spec.
+//
+// Removable once no version-1 data can reach this build.
+type LegacyDeviceSpec struct {
+	ID     string `json:"id"`
+	Brand  string `json:"brand"`
+	Model  string `json:"model"`            // the driver key, in this version
+	Series string `json:"series,omitempty"` // the hardware, in this version
+	Name   string `json:"name"`
+	MAC    string `json:"mac"`
+}
+
+// Upgrade rewrites a version-1 spec into the current one.
+func (l LegacyDeviceSpec) Upgrade() DeviceSpec {
+	return DeviceSpec{
+		ID:     l.ID,
+		Brand:  l.Brand,
+		Driver: l.Model,
+		Model:  l.Series,
+		Name:   l.Name,
+		MAC:    l.MAC,
+	}
+}
+
+// UpgradeDeviceSpecs converts a whole version-1 device list.
+func UpgradeDeviceSpecs(legacy []LegacyDeviceSpec) []DeviceSpec {
+	specs := make([]DeviceSpec, 0, len(legacy))
+	for _, l := range legacy {
+		specs = append(specs, l.Upgrade())
+	}
+	return specs
 }
 
 func validID(id string) bool {

@@ -18,6 +18,7 @@ import {
   deleteDevice as removeStoredDevice,
   wsURL,
   getToken,
+  getSession,
   ApiError,
   normalizeDevices,
   type Device,
@@ -25,6 +26,7 @@ import {
   type DeviceState,
   type Color,
   type CommandAction,
+  type Session,
 } from './api'
 import { isFavoritesSection, isScenesSection } from './backup-validation'
 
@@ -38,6 +40,28 @@ export const lastError = writable<string>('')
 // When we last got fresh state (REST refresh or a WS event), as epoch ms. Drives
 // the header's "updated Xs ago" hint while offline. 0 = never yet.
 export const lastUpdated = writable<number>(0)
+
+// Who this token signs in as, and what it may do. null until the first answer,
+// or when the server could not be asked — the UI then shows everything and lets
+// the server refuse what it must, which is the same guarantee either way.
+export const session = writable<Session | null>(null)
+
+// loadSession is called on start, after the token changes, and on resume. The
+// answer is small and changes only when the administrator edits an account, so
+// it deliberately does not ride along with every device refresh.
+export async function loadSession(): Promise<void> {
+  if (!getToken()) {
+    session.set(null)
+    return
+  }
+  try {
+    session.set(await getSession())
+  } catch {
+    // An older Setu has no /api/session, and an unreachable one has no answer.
+    // Neither is a reason to lock the person out of their own app.
+    session.set(null)
+  }
+}
 
 // persisted is a writable mirrored to localStorage — the single pattern behind
 // every UI-only pref (favourites, expanded, scenes, rooms, order). Client-side
@@ -220,7 +244,7 @@ export async function addDevice(spec: DeviceSpec): Promise<Device> {
 
 export async function renameDevice(
   id: string,
-  labels: { name?: string; series?: string },
+  labels: { name?: string; model?: string },
 ): Promise<void> {
   const updated = await patchDevice(id, labels)
   noteAuthoritative(id)
@@ -603,6 +627,8 @@ export function resume(): void {
   // Foregrounding after an idle/frozen period must not wait for the backed-off
   // schedule: perform a real hardware refresh before reconciling the cache.
   void refresh(true)
+  // Permissions may have changed while this tab was away.
+  void loadSession()
   backoff = 1000 // foreground again — retry eagerly, not at the backed-off pace
   // A backgrounded socket can go *half-open*: the mobile OS / NAT drops the TCP
   // link without the socket ever leaving readyState OPEN. Since the client never

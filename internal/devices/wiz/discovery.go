@@ -99,8 +99,8 @@ func (d *Discoverer) Scan(ctx context.Context) ([]resolver.Candidate, error) {
 		seen[mac] = struct{}{}
 		found = append(found, resolver.Candidate{
 			Brand:  Brand,
-			Model:  modelFor(resp.Result.ModuleName),
-			Series: resp.Result.ModuleName,
+			Driver: driverFor(resp.Result.ModuleName),
+			Model:  resp.Result.ModuleName,
 			MAC:    resolver.FormatMAC(mac),
 			IP:     ip.String(),
 		})
@@ -112,18 +112,24 @@ func (d *Discoverer) Scan(ctx context.Context) ([]resolver.Candidate, error) {
 	return found, nil
 }
 
-// modelFor maps a WiZ module name to the model key registered with the factory.
-// WiZ encodes the light engine in that string: "RGB" for full-colour bulbs, "TW"
-// for tunable white. Anything else (plugs, dimmable-white-only bulbs, fans, …)
-// has no driver here, so it returns "" — the candidate is reported as found but
-// unsupported rather than mislabelled as something Setu would command wrongly.
-func modelFor(moduleName string) string {
+// driverFor maps a WiZ module name to the driver key registered with the
+// factory. WiZ encodes the light engine in that string: "RGB" for full-colour
+// bulbs, "TW" for tunable white. Anything else (plugs, dimmable-white-only
+// bulbs, fans, …) has no driver here, so it returns "" — the candidate is
+// reported as found but unsupported rather than driven by something that would
+// command it wrongly.
+//
+// The module name itself travels on as the candidate's Model. It is not a
+// marketing name — "ESP10_SOCKET_06" is the only hardware identifier WiZ
+// offers — so it is passed through untouched and the user can replace it with
+// whatever is printed on their bulb.
+func driverFor(moduleName string) string {
 	up := strings.ToUpper(moduleName)
 	switch {
 	case strings.Contains(up, "RGB"):
-		return ModelColorBulb
+		return DriverColorBulb
 	case strings.Contains(up, "TW"):
-		return ModelTunableWhite
+		return DriverTunableWhite
 	default:
 		return ""
 	}

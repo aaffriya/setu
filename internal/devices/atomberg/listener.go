@@ -54,7 +54,7 @@ type watcher struct {
 // sighting is what the listener remembers about one fan on the segment.
 type sighting struct {
 	ip        net.IP
-	series    string
+	model     string
 	seen      time.Time
 	messageID string
 	state     fanState
@@ -198,7 +198,7 @@ func (d *Discoverer) recordBeacon(b beacon, src net.IP) {
 		return
 	}
 	entry.ip = append(net.IP(nil), src...)
-	entry.series = b.Series
+	entry.model = b.Model
 	entry.seen = time.Now()
 }
 
@@ -220,8 +220,8 @@ func (d *Discoverer) recordState(mac string, src net.IP, messageID string, state
 		entry.state = state
 		entry.rev++
 	}
-	if state.Series != "" {
-		entry.series = state.Series
+	if state.Model != "" {
+		entry.model = state.Model
 	}
 	notify := d.watch[mac].notify
 	d.mu.Unlock()
@@ -393,8 +393,8 @@ func (d *Discoverer) Scan(ctx context.Context) ([]resolver.Candidate, error) {
 		}
 		found = append(found, resolver.Candidate{
 			Brand:  Brand,
-			Model:  modelFor(entry.series),
-			Series: entry.series,
+			Driver: driverFor(entry.model),
+			Model:  entry.model,
 			MAC:    mac,
 			IP:     entry.ip.String(),
 		})

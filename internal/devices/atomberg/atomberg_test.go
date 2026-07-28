@@ -149,15 +149,15 @@ func TestScanReportsBeaconedFans(t *testing.T) {
 		if c.Brand != Brand {
 			t.Errorf("candidate brand = %q", c.Brand)
 		}
-		byMAC[c.MAC] = c.Model
+		byMAC[c.MAC] = c.Driver
 	}
-	if got := byMAC[testMAC]; got != ModelFan {
-		t.Errorf("R1 mapped to model %q, want %q", got, ModelFan)
+	if got := byMAC[testMAC]; got != DriverFan {
+		t.Errorf("R1 mapped to driver %q, want %q", got, DriverFan)
 	}
-	// An unknown series must be reported as found-but-unsupported rather than
+	// An unknown model must be reported as found-but-unsupported rather than
 	// guessed at, or Setu would command it through the wrong driver.
 	if got, ok := byMAC["a0:76:4e:5a:ee:99"]; !ok || got != "" {
-		t.Errorf("unknown series mapped to model %q, want empty", got)
+		t.Errorf("unknown model mapped to driver %q, want empty", got)
 	}
 }
 
@@ -284,7 +284,7 @@ func TestResolveIPReplacesStaleCacheWithFreshBeacon(t *testing.T) {
 	f.setIP(stale)
 
 	fresh := net.IPv4(192, 0, 2, 25)
-	d.recordBeacon(beacon{MAC: testMAC, Series: "R1"}, fresh)
+	d.recordBeacon(beacon{MAC: testMAC, Model: "R1"}, fresh)
 
 	got, err := f.resolveIP()
 	if err != nil {
@@ -511,15 +511,15 @@ func TestPollAdoptsBroadcastWithoutAMessageID(t *testing.T) {
 	}
 }
 
-func TestModelFor(t *testing.T) {
+func TestDriverFor(t *testing.T) {
 	tests := map[string]string{
-		"R1": ModelFan, "R2": ModelFan, "K1": ModelFan, "I2": ModelFan,
-		"I1": ModelFanLight, "I5": ModelFanLight, "S1": ModelFanLight,
+		"R1": DriverFan, "R2": DriverFan, "K1": DriverFan, "I2": DriverFan,
+		"I1": DriverFanLight, "I5": DriverFanLight, "S1": DriverFanLight,
 		"": "", "ZZ": "", "R9": "",
 	}
-	for series, want := range tests {
-		if got := modelFor(series); got != want {
-			t.Errorf("modelFor(%q) = %q, want %q", series, got, want)
+	for model, want := range tests {
+		if got := driverFor(model); got != want {
+			t.Errorf("driverFor(%q) = %q, want %q", model, got, want)
 		}
 	}
 }
@@ -538,12 +538,12 @@ func TestTimerOptionsMatchTheIndexMap(t *testing.T) {
 	}
 }
 
-func TestRegisterExposesBothModels(t *testing.T) {
+func TestRegisterExposesBothDrivers(t *testing.T) {
 	factory := config.NewFactory()
 	Register(factory)
-	for _, model := range []string{ModelFan, ModelFanLight} {
-		if !factory.Supports(Brand, model) {
-			t.Errorf("factory cannot build %s/%s", Brand, model)
+	for _, driver := range []string{DriverFan, DriverFanLight} {
+		if !factory.Supports(Brand, driver) {
+			t.Errorf("factory cannot build %s/%s", Brand, driver)
 		}
 	}
 }

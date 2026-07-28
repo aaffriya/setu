@@ -14,7 +14,7 @@ Operations:
 Rules:
 
 - maximum 64 devices;
-- spec must validate and its brand/model must be registered;
+- spec must validate and its brand/driver must be registered;
 - omitted IDs derive from brand plus the last three MAC bytes;
 - a brand may use a MAC once, while another brand may intentionally share it
   (for example a TV plus a generic WoL card).

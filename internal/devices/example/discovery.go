@@ -55,9 +55,10 @@ func (d *Discoverer) Lookup(mac string) (net.IP, error) {
 // A real brand reuses the transport it already has — the WiZ discoverer
 // broadcasts getSystemConfig and keeps every reply; the Samsung one keeps every
 // SSDP responder that answers /api/v2/ — and returns one Candidate per device,
-// with Model set to the key it registered with the factory, or "" when the
-// reply names hardware this package has no driver for. Never invent a device
-// you did not hear from, and never guess a model.
+// with Driver set to the key it registered with the factory, or "" when the
+// reply names hardware this package has no driver for, and Model set to
+// whatever the hardware calls itself. Never invent a device you did not hear
+// from, and never guess a driver.
 //
 // The template has no protocol to broadcast, so it finds nothing.
 func (d *Discoverer) Scan(context.Context) ([]resolver.Candidate, error) {

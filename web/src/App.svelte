@@ -18,6 +18,8 @@
     disconnect,
     resume,
     command,
+    session,
+    loadSession,
     type ConnectionStatus,
   } from './lib/store'
   import { getToken, setToken, signalActivity } from './lib/api'
@@ -29,6 +31,7 @@
   import RoomControls from './lib/components/RoomControls.svelte'
   import DeviceDiagnostics from './lib/components/DeviceDiagnostics.svelte'
   import Devices from './lib/components/Devices.svelte'
+  import Users from './lib/components/Users.svelte'
   import BackupRestore from './lib/components/BackupRestore.svelte'
   import { trapFocus } from './lib/focus-trap'
   import { masonry } from './lib/masonry'
@@ -36,7 +39,7 @@
   let token = $state(getToken())
   let tokenDraft = $state(getToken())
   let showSettings = $state(false)
-  type SettingsTool = 'scenes' | 'automations' | 'rooms' | 'diagnostics' | 'devices'
+  type SettingsTool = 'scenes' | 'automations' | 'rooms' | 'diagnostics' | 'devices' | 'people'
   let activeSettingsTool = $state<SettingsTool | ''>('')
   let themeChoice = $state<Theme>(getTheme())
   let confirmReset = $state(false)
@@ -95,6 +98,20 @@
   // Show the connect card when we have no token, or the server rejected it.
   let needsToken = $derived(!token || $connection === 'unauthorized')
 
+  // What this account may do. Until the server has answered — an older Setu, or
+  // one we cannot reach — assume everything and let it refuse what it must:
+  // hiding a tool the person is entitled to would be the worse failure, and the
+  // server re-checks all of this anyway.
+  //
+  // People is the deliberate exception. Its `users` flag exists only on a server
+  // that has the screen at all, so an unanswered session means "not available"
+  // rather than "assume yes" — offering a screen whose endpoints are not even
+  // mounted would be the worse failure there.
+  let isAdmin = $derived($session?.admin ?? true)
+  let canModify = $derived($session === null || $session.admin || $session.role === 'modify')
+  let canManageUsers = $derived(($session?.admin ?? false) && ($session?.users ?? false))
+  let accountName = $derived($session?.name ?? '')
+
   // --- list organisation (search / rooms / manual order) ---------------------
   let query = $state('')
   let activeRoom = $state('')
@@ -127,7 +144,7 @@
     if (!q && !activeRoom) return ordered
     return ordered.filter((d) => {
       if (activeRoom && ($rooms[d.id] ?? '') !== activeRoom) return false
-      if (q && !`${d.name} ${d.brand} ${d.series ?? ''} ${d.model}`.toLowerCase().includes(q))
+      if (q && !`${d.name} ${d.brand} ${d.model ?? ''}`.toLowerCase().includes(q))
         return false
       return true
     })
@@ -305,6 +322,7 @@
 
   onMount(() => {
     void refreshDevices(runLaunchAction)
+    void loadSession()
     connect()
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('online', scheduleResume)
@@ -327,6 +345,8 @@
     setToken(token)
     showSettings = false
     void refreshDevices()
+    // A different token can be a different person with different permissions.
+    void loadSession()
     // Drop any existing socket first: it authenticated with the previous
     // token, and connect() alone deliberately refuses to replace a live one
     // (the one-socket rule in store.ts).
@@ -509,7 +529,7 @@
           </svg>
         </div>
         <h2 class="text-lg font-semibold">Connect to Setu</h2>
-        <p class="mt-1 text-sm text-ink/50">Enter the access token Setu was started with (<code class="rounded bg-ink/10 px-1">SETU_TOKEN</code>).</p>
+        <p class="mt-1 text-sm text-ink/50">Enter your access token — the one Setu was started with (<code class="rounded bg-ink/10 px-1">SETU_TOKEN</code>), or the one you were given.</p>
         <input
           class="mt-4 w-full rounded-xl border border-ink/10 bg-ink/5 px-4 py-2.5 text-center outline-none ring-indigo-400/50 focus:ring-2"
           type="password"
@@ -592,16 +612,26 @@
             <path d="M12 9v7M8 12.5V16M16 12.5V16" />
           </svg>
         </div>
-        <h2 class="mt-5 text-xl font-semibold">No devices yet</h2>
-        <p class="mt-2 max-w-xs text-sm leading-relaxed text-ink/50">
-          Scan your network for devices, or add one by hand. Nothing to edit, nothing to restart.
-        </p>
-        <button
-          onclick={openSettings}
-          class="mt-4 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
-        >
-          Add a device
-        </button>
+        {#if canModify}
+          <h2 class="mt-5 text-xl font-semibold">No devices yet</h2>
+          <p class="mt-2 max-w-xs text-sm leading-relaxed text-ink/50">
+            Scan your network for devices, or add one by hand. Nothing to edit, nothing to restart.
+          </p>
+          <button
+            onclick={openSettings}
+            class="mt-4 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
+          >
+            Add a device
+          </button>
+        {:else}
+          <!-- This account has devices it may use, or it has none shared with it
+               yet. Offering "Add a device" here would be a button the server
+               refuses. -->
+          <h2 class="mt-5 text-xl font-semibold">Nothing shared with you yet</h2>
+          <p class="mt-2 max-w-xs text-sm leading-relaxed text-ink/50">
+            Ask whoever set up Setu to share a device with your account, and it will appear here.
+          </p>
+        {/if}
       </div>
     {:else if displayDevices.length === 0}
       <div in:fade={{ duration: 150 }} class="flex flex-col items-center justify-center py-16 text-center">
@@ -704,7 +734,14 @@
       use:trapFocus={activeSettingsTool === ''}
     >
       <div class="flex items-center gap-2">
-        <h2 class="min-w-0 flex-1 text-lg font-semibold">Settings</h2>
+        <div class="min-w-0 flex-1">
+          <h2 class="text-lg font-semibold">Settings</h2>
+          {#if accountName}
+            <p class="truncate text-xs text-ink/45">
+              Signed in as {accountName}{isAdmin ? '' : canModify ? ' · manager' : ' · control only'}
+            </p>
+          {/if}
+        </div>
         <button type="button" onclick={() => (showSettings = false)} class="grid h-8 w-8 place-items-center rounded-full bg-ink/5 text-ink/60 transition hover:bg-ink/10" aria-label="Close settings">×</button>
       </div>
       <label class="mt-4 block text-sm text-ink/60" for="token-input">Access token</label>
@@ -740,6 +777,8 @@
         />
         <Automations
           disabled={$connection !== 'online'}
+          {canModify}
+          {isAdmin}
           onmodalchange={(open) => setSettingsTool('automations', open)}
         />
         <RoomControls
@@ -750,11 +789,22 @@
           disabled={!hasDevices}
           onmodalchange={(open) => setSettingsTool('diagnostics', open)}
         />
-        <!-- Not gated on hasDevices: an empty install is exactly when you scan. -->
-        <Devices
-          disabled={needsToken}
-          onmodalchange={(open) => setSettingsTool('devices', open)}
-        />
+        <!-- Managing which devices exist needs the "modify" permission; the
+             server refuses it either way, so an account that cannot do it is not
+             offered the screen. Not gated on hasDevices: an empty install is
+             exactly when you scan. -->
+        {#if canModify}
+          <Devices
+            disabled={needsToken}
+            onmodalchange={(open) => setSettingsTool('devices', open)}
+          />
+        {/if}
+        {#if canManageUsers}
+          <Users
+            disabled={needsToken}
+            onmodalchange={(open) => setSettingsTool('people', open)}
+          />
+        {/if}
         <button
           type="button"
           onclick={() => {
@@ -804,7 +854,11 @@
         {/if}
       {/if}
 
-      <BackupRestore />
+      <!-- A backup reads and rewrites the whole installation — including devices
+           a given account may not even see — so it stays with the administrator. -->
+      {#if isAdmin}
+        <BackupRestore />
+      {/if}
 
       <div class="mt-5 flex gap-2">
         <button

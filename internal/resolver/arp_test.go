@@ -39,3 +39,36 @@ func TestARPResolverLookup(t *testing.T) {
 		t.Error("expected error for invalid mac")
 	}
 }
+
+// Presence rules watch several MACs at once, so the whole table is read in one
+// pass. An entry the kernel asked about but never heard back from is a probe,
+// not a neighbour, and must not read as "this device is here".
+func TestARPResolverNeighbours(t *testing.T) {
+	const table = `IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.50     0x1         0x2         a8:bb:50:11:22:33     *        br-lan
+192.168.1.51     0x1         0x6         AA-BB-CC-DD-EE-FF     *        br-lan
+192.168.1.99     0x1         0x0         d8:a0:11:ff:5e:f0     *        br-lan
+`
+	path := filepath.Join(t.TempDir(), "arp")
+	if err := os.WriteFile(path, []byte(table), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := arpTablePath
+	arpTablePath = path
+	t.Cleanup(func() { arpTablePath = old })
+
+	neighbours, err := NewARPResolver().Neighbours()
+	if err != nil {
+		t.Fatalf("Neighbours: %v", err)
+	}
+	if len(neighbours) != 2 {
+		t.Fatalf("neighbours = %v, want the two complete entries", neighbours)
+	}
+	// Keys are normalized, so a caller compares one spelling of a MAC.
+	if ip, ok := neighbours["aabbccddeeff"]; !ok || ip.String() != "192.168.1.51" {
+		t.Fatalf("permanent entry = %v, %v", ip, ok)
+	}
+	if _, ok := neighbours["d8a011ff5ef0"]; ok {
+		t.Fatal("an incomplete entry was reported as present")
+	}
+}

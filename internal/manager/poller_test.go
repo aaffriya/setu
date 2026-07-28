@@ -25,7 +25,8 @@ type fakeDevice struct {
 func (f *fakeDevice) ID() string             { return f.id }
 func (f *fakeDevice) Name() string           { return f.id }
 func (f *fakeDevice) Brand() string          { return "fake" }
-func (f *fakeDevice) Model() string          { return "test" }
+func (f *fakeDevice) Driver() string         { return "test" }
+func (f *fakeDevice) Model() string          { return "" }
 func (f *fakeDevice) MAC() string            { return "02:00:00:00:00:01" }
 func (f *fakeDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (f *fakeDevice) State() device.State {

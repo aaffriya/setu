@@ -26,8 +26,8 @@ type storedDevice struct{ spec config.DeviceSpec }
 func (d *storedDevice) ID() string             { return d.spec.ID }
 func (d *storedDevice) Name() string           { return d.spec.Name }
 func (d *storedDevice) Brand() string          { return d.spec.Brand }
+func (d *storedDevice) Driver() string         { return d.spec.Driver }
 func (d *storedDevice) Model() string          { return d.spec.Model }
-func (d *storedDevice) Series() string         { return d.spec.Series }
 func (d *storedDevice) MAC() string            { return d.spec.MAC }
 func (d *storedDevice) Capabilities() []string { return []string{device.CapSwitch} }
 func (d *storedDevice) State() device.State    { return device.State{Online: true} }
@@ -49,7 +49,7 @@ func newTestServer(t *testing.T, specs []config.DeviceSpec, scanners []resolver.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	factory := config.NewFactory()
-	factory.Register("test", "lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
+	factory.Register("test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
 		return &storedDevice{spec: spec}, nil
 	})
 
@@ -94,7 +94,7 @@ func deviceRequest(t *testing.T, handler http.Handler, method, path, body string
 }
 
 func lamp(id, mac string) config.DeviceSpec {
-	return config.DeviceSpec{ID: id, Brand: "test", Model: "lamp", Name: "Lamp", MAC: mac}
+	return config.DeviceSpec{ID: id, Brand: "test", Driver: "lamp", Name: "Lamp", MAC: mac}
 }
 
 // Adding a device is the whole point of the scan: it has to reach the API,
@@ -104,7 +104,7 @@ func TestAddDeviceGoesLiveAndIsStored(t *testing.T) {
 	handler, inv, mgr := deviceServer(t)
 
 	w := deviceRequest(t, handler, http.MethodPost, "/api/devices",
-		`{"brand":"test","model":"lamp","name":"Desk lamp","mac":"98:77:d5:a2:34:f2"}`)
+		`{"brand":"test","driver":"lamp","model":"A60","name":"Desk lamp","mac":"98:77:d5:a2:34:f2"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
 	}
@@ -130,11 +130,11 @@ func TestAddDeviceRejectsDuplicatesAndBadInput(t *testing.T) {
 	handler, _, _ := deviceServer(t, lamp("desk", "98:77:d5:a2:34:f2"))
 
 	for name, body := range map[string]string{
-		"same mac in another notation": `{"brand":"test","model":"lamp","name":"Again","mac":"9877d5a234f2"}`,
-		"same id":                      `{"id":"desk","brand":"test","model":"lamp","name":"Again","mac":"aa:bb:cc:dd:ee:ff"}`,
-		"unknown brand":                `{"brand":"nope","model":"lamp","name":"Nope","mac":"aa:bb:cc:dd:ee:ff"}`,
-		"no mac":                       `{"brand":"test","model":"lamp","name":"No mac"}`,
-		"no name":                      `{"brand":"test","model":"lamp","mac":"aa:bb:cc:dd:ee:ff"}`,
+		"same mac in another notation": `{"brand":"test","driver":"lamp","name":"Again","mac":"9877d5a234f2"}`,
+		"same id":                      `{"id":"desk","brand":"test","driver":"lamp","name":"Again","mac":"aa:bb:cc:dd:ee:ff"}`,
+		"unknown brand":                `{"brand":"nope","driver":"lamp","name":"Nope","mac":"aa:bb:cc:dd:ee:ff"}`,
+		"no mac":                       `{"brand":"test","driver":"lamp","name":"No mac"}`,
+		"no name":                      `{"brand":"test","driver":"lamp","mac":"aa:bb:cc:dd:ee:ff"}`,
 	} {
 		if w := deviceRequest(t, handler, http.MethodPost, "/api/devices", body); w.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400: %s", name, w.Code, w.Body.String())
@@ -146,7 +146,7 @@ func TestAddDeviceRejectsDuplicatesAndBadInput(t *testing.T) {
 func TestUpdateDeviceKeepsItsPlaceAndState(t *testing.T) {
 	handler, inv, mgr := deviceServer(t, lamp("desk", "98:77:d5:a2:34:f2"), lamp("shelf", "98:77:d5:a2:34:f3"))
 
-	w := deviceRequest(t, handler, http.MethodPatch, "/api/devices/desk", `{"name":"Reading lamp","series":"A60"}`)
+	w := deviceRequest(t, handler, http.MethodPatch, "/api/devices/desk", `{"name":"Reading lamp","model":"A60"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -154,7 +154,7 @@ func TestUpdateDeviceKeepsItsPlaceAndState(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&view); err != nil {
 		t.Fatal(err)
 	}
-	if view.Name != "Reading lamp" || view.Series != "A60" {
+	if view.Name != "Reading lamp" || view.Model != "A60" {
 		t.Fatalf("renamed device = %+v", view)
 	}
 	if !view.State.Online {
@@ -168,17 +168,17 @@ func TestUpdateDeviceKeepsItsPlaceAndState(t *testing.T) {
 		t.Fatalf("rename was not stored: %+v", specs)
 	}
 
-	// The UI edits name and series in two inputs. A save carrying only one of
-	// them must not revert the other — the second input's value can be a render
-	// behind while the first save is still in flight.
-	w = deviceRequest(t, handler, http.MethodPatch, "/api/devices/desk", `{"series":"A67"}`)
+	// The UI edits the name and the model in two inputs. A save carrying only
+	// one of them must not revert the other — the second input's value can be a
+	// render behind while the first save is still in flight.
+	w = deviceRequest(t, handler, http.MethodPatch, "/api/devices/desk", `{"model":"A67"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("partial update status = %d: %s", w.Code, w.Body.String())
 	}
 	if err := json.NewDecoder(w.Body).Decode(&view); err != nil {
 		t.Fatal(err)
 	}
-	if view.Name != "Reading lamp" || view.Series != "A67" {
+	if view.Name != "Reading lamp" || view.Model != "A67" {
 		t.Fatalf("partial update = %+v; want the name untouched", view)
 	}
 
@@ -223,7 +223,7 @@ func TestExportAndReplaceDevices(t *testing.T) {
 		t.Fatalf("exported = %+v", exported)
 	}
 
-	restore := `{"version":1,"items":[{"id":"shelf","brand":"test","model":"lamp","name":"Shelf","mac":"98:77:d5:a2:34:f3"}]}`
+	restore := `{"version":2,"items":[{"id":"shelf","brand":"test","driver":"lamp","name":"Shelf","mac":"98:77:d5:a2:34:f3"}]}`
 	if w := deviceRequest(t, handler, http.MethodPut, "/api/devices", restore); w.Code != http.StatusOK {
 		t.Fatalf("replace status = %d: %s", w.Code, w.Body.String())
 	}
@@ -238,12 +238,35 @@ func TestExportAndReplaceDevices(t *testing.T) {
 	}
 
 	// A rejected restore must leave the running installation untouched.
-	bad := `{"version":1,"items":[{"id":"ok","brand":"test","model":"lamp","name":"Ok","mac":"98:77:d5:a2:34:f4"},{"id":"broken","brand":"nope","model":"lamp","name":"Broken","mac":"98:77:d5:a2:34:f5"}]}`
+	bad := `{"version":2,"items":[{"id":"ok","brand":"test","driver":"lamp","name":"Ok","mac":"98:77:d5:a2:34:f4"},{"id":"broken","brand":"nope","driver":"lamp","name":"Broken","mac":"98:77:d5:a2:34:f5"}]}`
 	if w := deviceRequest(t, handler, http.MethodPut, "/api/devices", bad); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad restore status = %d, want 400", w.Code)
 	}
 	if specs := inv.Specs(); len(specs) != 1 || specs[0].ID != "shelf" {
 		t.Fatalf("failed restore changed the device list: %+v", specs)
+	}
+}
+
+// A backup file outlives the vocabulary it was written in: the version-1 export
+// called the driver key "model" and the hardware "series", and restoring one has
+// to bring back the same devices rather than refusing the file.
+func TestReplaceDevicesAcceptsAVersionOneBackup(t *testing.T) {
+	handler, inv, mgr := deviceServer(t)
+
+	restore := `{"version":1,"items":[{"id":"desk","brand":"test","model":"lamp","series":"A60","name":"Desk","mac":"98:77:d5:a2:34:f2"}]}`
+	if w := deviceRequest(t, handler, http.MethodPut, "/api/devices", restore); w.Code != http.StatusOK {
+		t.Fatalf("legacy restore status = %d: %s", w.Code, w.Body.String())
+	}
+	specs := inv.Specs()
+	if len(specs) != 1 || specs[0].Driver != "lamp" || specs[0].Model != "A60" {
+		t.Fatalf("restored specs = %+v; want the old model read as the driver", specs)
+	}
+	if _, live := mgr.Device("desk"); !live {
+		t.Error("restored device is not live")
+	}
+
+	if w := deviceRequest(t, handler, http.MethodPut, "/api/devices", `{"version":99,"items":[]}`); w.Code != http.StatusBadRequest {
+		t.Errorf("unknown list version status = %d, want 400", w.Code)
 	}
 }
 
@@ -260,7 +283,7 @@ func TestDeviceTypesListsRegisteredBrands(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&types); err != nil {
 		t.Fatal(err)
 	}
-	if len(types) != 1 || types[0].Brand != "test" || types[0].Model != "lamp" {
+	if len(types) != 1 || types[0].Brand != "test" || types[0].Driver != "lamp" || types[0].Label != "Lamp" {
 		t.Fatalf("types = %+v", types)
 	}
 }

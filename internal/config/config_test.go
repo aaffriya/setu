@@ -123,20 +123,20 @@ func TestTLSNeedsBothFilesAndMovesTheDefaultPort(t *testing.T) {
 // backup — so validation is the only thing standing between a bad entry and a
 // state file that breaks the next start.
 func TestDeviceSpecValidation(t *testing.T) {
-	valid := DeviceSpec{ID: "wiz_a234f2", Brand: "WiZ", Model: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"}
+	valid := DeviceSpec{ID: "wiz_a234f2", Brand: "WiZ", Driver: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid spec rejected: %v", err)
 	}
 
 	for name, spec := range map[string]DeviceSpec{
-		"no id":        {Brand: "WiZ", Model: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
-		"id with dot":  {ID: "wiz.1", Brand: "WiZ", Model: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
-		"id with dash": {ID: "-lamp", Brand: "WiZ", Model: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
-		"no brand":     {ID: "lamp", Model: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
+		"no id":        {Brand: "WiZ", Driver: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
+		"id with dot":  {ID: "wiz.1", Brand: "WiZ", Driver: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
+		"id with dash": {ID: "-lamp", Brand: "WiZ", Driver: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
+		"no brand":     {ID: "lamp", Driver: "color_bulb", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
 		"no model":     {ID: "lamp", Brand: "WiZ", Name: "Lamp", MAC: "98:77:d5:a2:34:f2"},
-		"no name":      {ID: "lamp", Brand: "WiZ", Model: "color_bulb", MAC: "98:77:d5:a2:34:f2"},
-		"no mac":       {ID: "lamp", Brand: "WiZ", Model: "color_bulb", Name: "Lamp"},
-		"bad mac":      {ID: "lamp", Brand: "WiZ", Model: "color_bulb", Name: "Lamp", MAC: "98:77:d5"},
+		"no name":      {ID: "lamp", Brand: "WiZ", Driver: "color_bulb", MAC: "98:77:d5:a2:34:f2"},
+		"no mac":       {ID: "lamp", Brand: "WiZ", Driver: "color_bulb", Name: "Lamp"},
+		"bad mac":      {ID: "lamp", Brand: "WiZ", Driver: "color_bulb", Name: "Lamp", MAC: "98:77:d5"},
 	} {
 		if err := spec.Validate(); err == nil {
 			t.Errorf("%s: expected a validation error", name)
@@ -147,7 +147,7 @@ func TestDeviceSpecValidation(t *testing.T) {
 // Two spellings of one MAC must not become two devices, so specs are stored in
 // one notation.
 func TestDeviceSpecNormalized(t *testing.T) {
-	spec := DeviceSpec{ID: " WIZ_A234F2 ", Brand: " WiZ ", Model: "color_bulb", Name: "  Lamp ", MAC: "9877d5a234f2"}
+	spec := DeviceSpec{ID: " WIZ_A234F2 ", Brand: " WiZ ", Driver: "color_bulb", Name: "  Lamp ", MAC: "9877d5a234f2"}
 	got := spec.Normalized()
 	if got.ID != "wiz_a234f2" || got.Brand != "WiZ" || got.Name != "Lamp" {
 		t.Errorf("Normalized() = %+v", got)
@@ -160,24 +160,24 @@ func TestDeviceSpecNormalized(t *testing.T) {
 func TestFactory(t *testing.T) {
 	f := NewFactory()
 	var built DeviceSpec
-	f.Register("acme", "widget", func(spec DeviceSpec, deps Deps) (device.Device, error) {
+	f.Register("acme", "widget", "Widget", func(spec DeviceSpec, deps Deps) (device.Device, error) {
 		built = spec
 		return nil, nil
 	})
 
-	if _, err := f.Build(DeviceSpec{ID: "x", Brand: "acme", Model: "widget"}, Deps{}); err != nil {
+	if _, err := f.Build(DeviceSpec{ID: "x", Brand: "acme", Driver: "widget"}, Deps{}); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if built.ID != "x" {
 		t.Errorf("constructor received spec %+v", built)
 	}
-	if _, err := f.Build(DeviceSpec{Brand: "nope", Model: "nope"}, Deps{}); err == nil {
-		t.Error("expected error for unregistered (brand, model)")
+	if _, err := f.Build(DeviceSpec{Brand: "nope", Driver: "nope"}, Deps{}); err == nil {
+		t.Error("expected error for unregistered (brand, driver)")
 	}
 	if !f.Supports("ACME", "Widget") {
 		t.Error("Supports() must match the same case-insensitive key as Build()")
 	}
-	if types := f.Types(); len(types) != 1 || types[0].Brand != "acme" || types[0].Model != "widget" {
-		t.Errorf("Types() = %+v, want the registered pair as spelled", types)
+	if types := f.Types(); len(types) != 1 || types[0].Brand != "acme" || types[0].Driver != "widget" || types[0].Label != "Widget" {
+		t.Errorf("Types() = %+v, want the registered driver as spelled, with its label", types)
 	}
 }

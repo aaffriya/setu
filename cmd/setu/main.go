@@ -33,6 +33,7 @@ import (
 	"setu/internal/manager"
 	"setu/internal/resolver"
 	"setu/internal/store"
+	"setu/internal/users"
 	"setu/web"
 )
 
@@ -55,8 +56,26 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if cfg.Token == config.DefaultToken {
-		log.Warn("running with the default access token — set " + config.EnvToken + " to a secret of your own")
+
+	// --- startup self-test ---
+	// Everything Preflight looks at would otherwise fail later and somewhere
+	// else. Report it all — a run that stops should say every reason at once,
+	// not one per restart.
+	statePath, temporaryState := store.DefaultPath()
+	fatal := false
+	for _, problem := range config.Preflight(cfg, statePath) {
+		if problem.Fatal {
+			fatal = true
+			log.Error(problem.Message)
+		} else {
+			log.Warn(problem.Message)
+		}
+	}
+	if fatal {
+		return errors.New("startup checks failed; nothing was started")
+	}
+	if temporaryState {
+		log.Warn("SETU_STATE_DIR is unset; devices and automations may not survive a reboot", "path", statePath)
 	}
 
 	// --- wire dependencies (composition root) ---
@@ -80,15 +99,23 @@ func run() error {
 		atomberg.NewDiscoverer(),   // UDP :5625 beacons (fans announce themselves)
 	}
 
-	// --- state (the one file Setu persists: devices + automations) ---
-	statePath, temporaryState := store.DefaultPath()
-	if temporaryState {
-		log.Warn("SETU_STATE_DIR is unset; devices and automations may not survive a reboot", "path", statePath)
-	}
+	// --- state (the one file Setu persists: devices, automations, users) ---
 	state := store.New(statePath)
 
 	mgr := manager.New(bus, nil)
 	defer mgr.Close()
+
+	// The accounts that exist besides the administrator, who is whoever presents
+	// SETU_TOKEN and is therefore never stored. A users section that cannot be
+	// read must not take the bridge down with it: the administrator can still
+	// sign in and repair it, which is exactly the case for not stopping here.
+	accounts, err := users.New(state)
+	if err != nil {
+		log.Error("user accounts unavailable; only the administrator can sign in", "path", statePath, "err", err)
+		accounts = nil
+	} else if count := accounts.Count(); count > 0 {
+		log.Info("loaded users", "count", count)
+	}
 
 	// The devices the user added, loaded from the state file and brought online.
 	// They are managed from the UI (scan or manual entry), so this is also the
@@ -111,7 +138,11 @@ func run() error {
 	// hand-edited state file must never stop the bridge from controlling
 	// hardware, so a load failure is logged and the engine is left out; the API
 	// mounts its automation routes only when one is present.
-	automations, err := automation.New(mgr, bus, automation.NewStore(state), log)
+	//
+	// Presence rules read the host's neighbour table through the same resolver
+	// that finds device IPs. On a host that has none (a macOS dev machine), the
+	// engine refuses presence rules instead of accepting ones that never fire.
+	automations, err := automation.New(mgr, bus, automation.NewStore(state), lanPresence(res), log)
 	if err != nil {
 		log.Error("automations unavailable; serving devices only", "path", statePath, "err", err)
 		automations = nil
@@ -127,6 +158,7 @@ func run() error {
 		Bus:        bus,
 		Automation: automations,
 		Inventory:  devices,
+		Users:      accounts,
 		Scanners:   scanners,
 		Token:      cfg.Token,
 		Dist:       web.Dist(),
@@ -161,6 +193,27 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return httpServer.Shutdown(shutdownCtx)
+}
+
+// lanPresence adapts the ARP resolver to what the automation engine needs: the
+// set of MACs currently visible, rather than one MAC's address. It returns nil
+// on a host with no neighbour table, which is how presence rules come to be
+// refused there instead of silently never firing.
+func lanPresence(res *resolver.ARPResolver) automation.PresenceFunc {
+	if _, err := res.Neighbours(); err != nil {
+		return nil
+	}
+	return func() (map[string]bool, error) {
+		table, err := res.Neighbours()
+		if err != nil {
+			return nil, err
+		}
+		present := make(map[string]bool, len(table))
+		for mac := range table {
+			present[mac] = true
+		}
+		return present, nil
+	}
 }
 
 // listen opens the configured listener: a Unix-domain socket when one is

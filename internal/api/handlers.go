@@ -6,20 +6,25 @@ import (
 	"net/http"
 
 	"setu/internal/control"
+	"setu/internal/manager"
 )
 
 // handleListDevices returns all devices with capabilities and current state. A
 // refresh=true request performs a one-shot hardware poll first; successfully
 // read states are overlaid on the cached snapshot so the response cannot race
 // the manager's asynchronous event consumer.
+//
+// The list is the caller's own: an account limited to a few devices never
+// receives the others, so nothing it cannot use ever reaches the browser.
 func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
+	principal := principalOf(r)
 	if s.poller == nil {
-		writeJSON(w, http.StatusOK, s.mgr.Snapshot())
+		writeJSON(w, http.StatusOK, granted(principal, s.mgr.Snapshot()))
 		return
 	}
 	if r.URL.Query().Get("refresh") != "true" {
 		s.poller.Activity()
-		writeJSON(w, http.StatusOK, s.mgr.Snapshot())
+		writeJSON(w, http.StatusOK, granted(principal, s.mgr.Snapshot()))
 		return
 	}
 
@@ -28,13 +33,70 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGatewayTimeout, "device refresh timed out")
 		return
 	}
-	views := s.mgr.Snapshot()
+	views := granted(principal, s.mgr.Snapshot())
 	for i := range views {
 		if state, ok := states[views[i].ID]; ok {
 			views[i].State = state
 		}
 	}
 	writeJSON(w, http.StatusOK, views)
+}
+
+// granted keeps only the devices this caller may see. It always returns a
+// non-nil slice so the API emits [] rather than null.
+func granted(principal Principal, views []manager.DeviceView) []manager.DeviceView {
+	if principal.Admin {
+		return views
+	}
+	out := make([]manager.DeviceView, 0, len(views))
+	for _, view := range views {
+		if principal.CanSee(view.ID) {
+			out = append(out, view)
+		}
+	}
+	return out
+}
+
+// reachable answers the two questions every single-device route asks: does this
+// device exist, and may this caller use it? A device that exists but was not
+// granted is reported as forbidden rather than missing — the administrator has
+// to be able to tell "I never shared that" from "that is gone".
+func (s *Server) reachable(w http.ResponseWriter, r *http.Request, id string) bool {
+	if _, ok := s.mgr.Device(id); !ok {
+		writeError(w, http.StatusNotFound, "unknown device")
+		return false
+	}
+	if !principalOf(r).CanSee(id) {
+		writeError(w, http.StatusForbidden, "you do not have access to this device")
+		return false
+	}
+	return true
+}
+
+// affordable reports whether this caller may spend one more unit of hardware
+// work on a device. Commands and single-device refreshes share the budget: both
+// reach the same hardware, so a client looping on either hammers it equally
+// (see ratelimit.go).
+func (s *Server) affordable(w http.ResponseWriter, r *http.Request, id string) bool {
+	if s.commands.allow(limiterKey(principalOf(r), id)) {
+		return true
+	}
+	w.Header().Set("Retry-After", "1")
+	writeError(w, http.StatusTooManyRequests, "too many requests for this device; slow down")
+	return false
+}
+
+// handleHealth is the public liveness probe. It is deliberately the only
+// unauthenticated JSON route that is not part of the app: it answers whether
+// this process is serving HTTP and nothing else — no device count, no version,
+// no configuration — so exposing it discloses nothing about the installation.
+//
+// HEAD needs no branch here: net/http sends the headers and discards the body.
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, struct {
+		Status string `json:"status"`
+	}{Status: "ok"})
 }
 
 // handleActivity keeps the active poll cadence warm without polling hardware.
@@ -47,12 +109,25 @@ func (s *Server) handleActivity(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleDiagnostics returns the latest bounded operation summary from RAM. It
-// never contacts hardware; explicit per-device refresh owns that cost.
-func (s *Server) handleDiagnostics(w http.ResponseWriter, _ *http.Request) {
+// never contacts hardware; explicit per-device refresh owns that cost. Like the
+// device list, it covers only the devices this caller was granted.
+func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	if s.poller != nil {
 		s.poller.Activity()
 	}
-	writeJSON(w, http.StatusOK, s.mgr.Diagnostics())
+	principal := principalOf(r)
+	records := s.mgr.Diagnostics()
+	if principal.Admin {
+		writeJSON(w, http.StatusOK, records)
+		return
+	}
+	out := make([]manager.DeviceDiagnostics, 0, len(records))
+	for _, record := range records {
+		if principal.CanSee(record.ID) {
+			out = append(out, record)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleRefreshDevice performs one serialized hardware read for a single
@@ -62,8 +137,10 @@ func (s *Server) handleRefreshDevice(w http.ResponseWriter, r *http.Request) {
 		s.poller.Activity()
 	}
 	id := r.PathValue("id")
-	if _, ok := s.mgr.Device(id); !ok {
-		writeError(w, http.StatusNotFound, "unknown device")
+	if !s.reachable(w, r, id) {
+		return
+	}
+	if !s.affordable(w, r, id) {
 		return
 	}
 	_, pollable, _, err := s.mgr.Poll(id)
@@ -103,8 +180,12 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		s.poller.Activity()
 	}
 	id := r.PathValue("id")
-	if _, ok := s.mgr.Device(id); !ok {
-		writeError(w, http.StatusNotFound, "unknown device")
+	if !s.reachable(w, r, id) {
+		return
+	}
+	// Checked before the body is read: a client stuck in a retry loop should cost
+	// this server as little as possible.
+	if !s.affordable(w, r, id) {
 		return
 	}
 	var req commandRequest

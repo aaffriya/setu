@@ -46,8 +46,8 @@ import (
 )
 
 const (
-	Brand      = "Samsung"
-	ModelTizen = "tizen"
+	Brand       = "Samsung"
+	DriverTizen = "tizen"
 
 	restPort       = "8001"
 	wsPort         = "8002"
@@ -96,13 +96,13 @@ var tvApps = []tvApp{
 // base is the shared Samsung brand foundation: identity, IP resolution, the
 // shared HTTP client (REST + WS dial), and the pairing token.
 type base struct {
-	id, name, series, mac string
-	arp                   resolver.Resolver
-	discoverer            resolver.Resolver
-	bus                   *events.Bus
-	http                  *http.Client
-	timeout               time.Duration
-	tokenPath             string
+	id, name, model, mac string
+	arp                  resolver.Resolver
+	discoverer           resolver.Resolver
+	bus                  *events.Bus
+	http                 *http.Client
+	timeout              time.Duration
+	tokenPath            string
 
 	mu      sync.Mutex
 	ip      net.IP
@@ -120,11 +120,11 @@ type base struct {
 	holdTimer *time.Timer // watchdog that auto-releases heldKey after holdMax
 }
 
-func (b *base) ID() string     { return b.id }
-func (b *base) Name() string   { return b.name }
-func (b *base) Brand() string  { return Brand }
-func (b *base) MAC() string    { return b.mac }
-func (b *base) Series() string { return b.series }
+func (b *base) ID() string    { return b.id }
+func (b *base) Name() string  { return b.name }
+func (b *base) Brand() string { return Brand }
+func (b *base) MAC() string   { return b.mac }
+func (b *base) Model() string { return b.model }
 
 func (b *base) State() device.State {
 	b.mu.Lock()
@@ -752,7 +752,7 @@ func (b *base) wakeOnLAN() error {
 }
 
 // ---------------------------------------------------------------------------
-// TV: the Tizen TV model — power, volume, and arbitrary remote keys.
+// TV: the Tizen TV driver — power, volume, and arbitrary remote keys.
 // ---------------------------------------------------------------------------
 
 type TV struct {
@@ -777,7 +777,7 @@ var (
 	_ device.Closer = (*TV)(nil)
 )
 
-func (t *TV) Model() string { return ModelTizen }
+func (t *TV) Driver() string { return DriverTizen }
 
 func (t *TV) Capabilities() []string {
 	return []string{
@@ -788,7 +788,7 @@ func (t *TV) Capabilities() []string {
 }
 
 // On powers the TV on via Wake-on-LAN. NOTE: WoL is unreliable over Wi-Fi (this
-// model is wireless); if it doesn't wake, the next poll corrects the On state
+// TV is wireless); if it doesn't wake, the next poll corrects the On state
 // (Online stays true — see Poll — so the power control remains usable to retry).
 func (t *TV) On() error {
 	if err := t.wakeOnLAN(); err != nil {
@@ -1150,7 +1150,7 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	t := &TV{base: base{
 		id:         spec.ID,
 		name:       spec.Name,
-		series:     spec.Series,
+		model:      spec.Model,
 		mac:        spec.MAC,
 		arp:        deps.Resolver,
 		discoverer: NewDiscoverer(client),
@@ -1163,9 +1163,9 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	return t, nil
 }
 
-// Register wires Samsung models into the factory (called from cmd/setu/main.go).
+// Register wires the Samsung drivers into the factory (called from cmd/setu/main.go).
 func Register(f *config.Factory) {
-	f.Register(Brand, ModelTizen, New)
+	f.Register(Brand, DriverTizen, "Tizen TV", New)
 }
 
 // sanitizeID makes a config id safe to embed in a token filename.

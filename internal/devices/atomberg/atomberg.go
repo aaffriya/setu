@@ -32,10 +32,10 @@ import (
 
 const (
 	Brand = "Atomberg"
-	// ModelFan is a fan whose light, if it has one, is on/off only.
-	ModelFan = "fan"
-	// ModelFanLight is a fan with a dimmable light and warm/cool/daylight modes.
-	ModelFanLight = "fan_light"
+	// DriverFan is a fan whose light, if it has one, is on/off only.
+	DriverFan = "fan"
+	// DriverFanLight is a fan with a dimmable light and warm/cool/daylight modes.
+	DriverFanLight = "fan_light"
 
 	// Speed steps. Step 6 is the "boost" step on the physical remote.
 	minSpeed = 1
@@ -54,22 +54,22 @@ const (
 // base is the shared Atomberg foundation: identity, the shared listener that
 // provides both addressing and state, and the cached state. Models embed it.
 type base struct {
-	id, name, series, mac string
-	arp                   resolver.Resolver // injected fallback (ARP table)
-	listener              *Discoverer       // beacons, state, and addressing
-	bus                   *events.Bus
-	unwatch               func()
+	id, name, model, mac string
+	arp                  resolver.Resolver // injected fallback (ARP table)
+	listener             *Discoverer       // beacons, state, and addressing
+	bus                  *events.Bus
+	unwatch              func()
 
 	mu    sync.Mutex
 	ip    net.IP // cached resolved IP (nil until resolved)
 	state device.State
 }
 
-func (b *base) ID() string     { return b.id }
-func (b *base) Name() string   { return b.name }
-func (b *base) Brand() string  { return Brand }
-func (b *base) MAC() string    { return b.mac }
-func (b *base) Series() string { return b.series }
+func (b *base) ID() string    { return b.id }
+func (b *base) Name() string  { return b.name }
+func (b *base) Brand() string { return Brand }
+func (b *base) MAC() string   { return b.mac }
+func (b *base) Model() string { return b.model }
 
 func (b *base) State() device.State {
 	b.mu.Lock()
@@ -345,7 +345,7 @@ func sceneForMode(mode string) int {
 }
 
 // ---------------------------------------------------------------------------
-// Fan — a fan with no light control beyond on/off (series R1, R2, R3, K1, I2…).
+// Fan — a fan with no light control beyond on/off (models R1, R2, R3, K1, I2…).
 // ---------------------------------------------------------------------------
 
 type Fan struct {
@@ -361,10 +361,9 @@ var (
 	_ device.LightSwitch  = (*Fan)(nil)
 	_ device.Pollable     = (*Fan)(nil)
 	_ device.Closer       = (*Fan)(nil)
-	_ device.Described    = (*Fan)(nil)
 )
 
-func (f *Fan) Model() string { return ModelFan }
+func (f *Fan) Driver() string { return DriverFan }
 
 func (f *Fan) Capabilities() []string {
 	return []string{
@@ -384,7 +383,7 @@ func (f *Fan) SetLight(on bool) error      { return f.setLight(on) }
 func (f *Fan) Poll() (device.State, error) { return f.poll(lightOnOff) }
 
 // ---------------------------------------------------------------------------
-// FanLight — a fan whose light dims and has colour modes (series I1, I5, M1,
+// FanLight — a fan whose light dims and has colour modes (models I1, I5, M1,
 // S1, S2). Same transport, a larger capability surface.
 // ---------------------------------------------------------------------------
 
@@ -402,10 +401,9 @@ var (
 	_ device.SceneControl = (*FanLight)(nil)
 	_ device.Pollable     = (*FanLight)(nil)
 	_ device.Closer       = (*FanLight)(nil)
-	_ device.Described    = (*FanLight)(nil)
 )
 
-func (f *FanLight) Model() string { return ModelFanLight }
+func (f *FanLight) Driver() string { return DriverFanLight }
 
 func (f *FanLight) Capabilities() []string {
 	return []string{
@@ -446,17 +444,17 @@ func (f *FanLight) SetSceneSpeed(int) error { return nil }
 // Construction & registration
 // ---------------------------------------------------------------------------
 
-// modelFor maps the series a fan announces in its beacon to the model key
-// registered with the factory. Series with a dimmable, colour-capable light get
-// the richer driver; the rest get the plain fan. An unknown series returns ""
-// — reported as found but unsupported, never guessed at, because commanding a
-// fan through the wrong driver would silently do the wrong thing.
-func modelFor(series string) string {
-	switch series {
+// driverFor maps the model code a fan announces in its beacon to the driver key
+// registered with the factory. Models with a dimmable, colour-capable light get
+// the richer driver; the rest get the plain fan. An unknown model returns "" —
+// reported as found but unsupported, never guessed at, because commanding a fan
+// through the wrong driver would silently do the wrong thing.
+func driverFor(model string) string {
+	switch model {
 	case "I1", "I5", "M1", "S1", "S2":
-		return ModelFanLight
+		return DriverFanLight
 	case "R1", "R2", "R3", "K1", "I2", "I3", "I4", "M2":
-		return ModelFan
+		return DriverFan
 	default:
 		return ""
 	}
@@ -473,7 +471,7 @@ func newBase(spec config.DeviceSpec, deps config.Deps) base {
 	return base{
 		id:       spec.ID,
 		name:     spec.Name,
-		series:   spec.Series,
+		model:    spec.Model,
 		mac:      spec.MAC,
 		arp:      deps.Resolver,
 		listener: listener,
@@ -508,8 +506,8 @@ func (b *base) pushState(light lightSupport) func(Snapshot) {
 	}
 }
 
-// Register wires Atomberg's models into the factory (called from cmd/setu).
+// Register wires Atomberg's drivers into the factory (called from cmd/setu).
 func Register(f *config.Factory) {
-	f.Register(Brand, ModelFan, New)
-	f.Register(Brand, ModelFanLight, NewFanLight)
+	f.Register(Brand, DriverFan, "Fan", New)
+	f.Register(Brand, DriverFanLight, "Fan with light", NewFanLight)
 }

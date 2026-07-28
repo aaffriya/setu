@@ -33,6 +33,10 @@ type wsMessage struct {
 // read-only from the server's side: commands go over the JSON API; events come
 // back here.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	// Resolved before the upgrade: the socket streams every device's state, so
+	// the caller's grants decide what may be written to it for its whole life.
+	principal := principalOf(r)
+
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// The app is same-origin and token-protected; accept any Origin so
 		// access via LAN IP, hostname, or tunnel all work.
@@ -56,7 +60,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Send an initial snapshot so a freshly-connected client is immediately
 	// consistent without waiting for the next change.
-	for _, view := range s.mgr.Snapshot() {
+	for _, view := range granted(principal, s.mgr.Snapshot()) {
 		msg := wsMessage{Type: "snapshot", DeviceID: view.ID, State: view.State}
 		if err := writeMsg(ctx, c, msg); err != nil {
 			return
@@ -70,6 +74,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		case ev, ok := <-sub:
 			if !ok {
 				return
+			}
+			// The bus carries every device. Dropping the ones this account was
+			// not granted here is what keeps their state out of the browser —
+			// the snapshot above is filtered for the same reason.
+			if !principal.CanSee(ev.DeviceID) {
+				continue
 			}
 			msg := wsMessage{Type: string(ev.Type), DeviceID: ev.DeviceID, State: ev.State}
 			if err := writeMsg(ctx, c, msg); err != nil {

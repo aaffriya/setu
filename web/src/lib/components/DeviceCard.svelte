@@ -35,12 +35,10 @@
   // Collapsed by default: a card shows only its name, power, and the expand
   // chevron until opened. The open/closed state is persisted per device.
   let isOpen = $derived($expanded[device.id] ?? false)
-  // Prefer a configured friendly series (e.g. "AU7700"); otherwise prettify the
-  // driver model key ("color_bulb" → "Color Bulb") so the subtitle reads well.
-  let modelLabel = $derived(
-    device.series?.trim() ||
-      device.model.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-  )
+  // The subtitle is the vendor plus the hardware, when anything knows what the
+  // hardware is — scanned off the device or typed in. Nothing is invented from
+  // the driver key: "Color Bulb" under a bulb named "Desk lamp" is noise.
+  let modelLabel = $derived(device.model?.trim() ?? '')
 
   // The colour glowing behind the card reflects the bulb's *current* look. A
   // tunable-white bulb keeps its last RGB value while in white mode, so the glow
@@ -163,7 +161,7 @@
         <p class="mt-0.5 truncate font-mono text-xs text-ink/45">{device.mac}</p>
       {:else if isOpen}
         <p class="mt-0.5 truncate text-xs text-ink/45">
-          {device.brand} · {modelLabel}
+          {device.brand}{modelLabel ? ` · ${modelLabel}` : ''}
           {#if offline}<span class="text-rose-500 dark:text-rose-300/80"> · offline</span>{/if}
         </p>
       {/if}

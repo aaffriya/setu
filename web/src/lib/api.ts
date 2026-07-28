@@ -35,9 +35,11 @@ export type DeviceState = {
 export type Device = {
   id: string
   name: string
+  // brand is the vendor; model is the hardware, when anything has said what it
+  // is; driver is which driver runs it — identity, never rendered.
   brand: string
-  model: string
-  series?: string // optional friendly product/series name (falls back to model)
+  driver: string
+  model?: string
   mac: string
   capabilities: string[]
   color_temp_min?: number
@@ -60,13 +62,16 @@ export type DeviceDiagnostics = {
   last_command_error: string
 }
 
-// One device found by a network scan. `model` is empty when the brand answered
-// but Setu has no driver for that hardware; `configured` means this brand
-// already has a device with that MAC (then `device_id` names it).
+// One device found by a network scan. `driver` (and with it `label`) is empty
+// when the brand answered but Setu has no driver for that hardware; `model` is
+// what the device called itself, which may be a marketing name, a bare code, or
+// nothing at all. `configured` means this brand already has a device with that
+// MAC (then `device_id` names it).
 export type DiscoveredDevice = {
   brand: string
-  model: string
-  series?: string
+  driver: string
+  model?: string
+  label?: string
   name?: string
   mac: string
   ip?: string
@@ -74,23 +79,28 @@ export type DiscoveredDevice = {
   device_id?: string
 }
 
-// A (brand, model) pair this build can drive. The catalog comes from the
-// server, so the manual add form can never offer something Setu cannot build.
-export type DeviceType = { brand: string; model: string }
+// One driver this build can run, under the name to show for it. The catalog
+// comes from the server, so the manual add form can never offer something Setu
+// cannot build — and the UI never has to turn a driver key into English.
+export type DeviceType = { brand: string; driver: string; label: string }
 
 // What Setu stores for one device — the form used to add one and to back the
-// list up. Identity (brand, model, mac) is fixed once added; only the labels
-// can be edited.
+// list up. Identity (brand, driver, mac) is fixed once added; only the name and
+// the model can be edited.
 export type DeviceSpec = {
   id?: string
   brand: string
-  model: string
-  series?: string
+  driver: string
+  model?: string
   name: string
   mac: string
 }
 
 export type DeviceList = { version: number; items: DeviceSpec[] }
+
+// DEVICE_LIST_VERSION is the schema of the device list this build exports and
+// sends. It tracks the server's own (internal/api deviceFormatVersion).
+export const DEVICE_LIST_VERSION = 2
 
 export type DiscoveryResult = {
   candidates: DiscoveredDevice[]
@@ -148,15 +158,39 @@ export type AutomationAction = {
 }
 
 export type AutomationCondition = { device_id: string; on: boolean }
+
+// A device trigger watches either the on/off edge (the default, and what an
+// absent metric means) or one reported number crossing a threshold.
+export type AutomationMetric =
+  | 'power'
+  | 'brightness'
+  | 'speed'
+  | 'volume'
+  | 'color_temp'
+  | 'timer_hours'
+export type AutomationComparison = 'above' | 'below' | 'equals'
+
+export type AutomationDeviceTrigger = {
+  device_id: string
+  on: boolean
+  stable_seconds?: number
+  metric?: AutomationMetric
+  operator?: AutomationComparison
+  value?: number
+}
+
 export type AutomationTrigger =
   | {
       type: 'schedule'
       schedule: { time: string; weekdays: number[]; utc_offset_minutes: number }
     }
-  | {
-      type: 'device_state'
-      device: { device_id: string; on: boolean; stable_seconds?: number }
-    }
+  | { type: 'device_state'; device: AutomationDeviceTrigger }
+  // Fires once when a device has been unreachable for this long, and arms again
+  // only after it has been seen back on the network.
+  | { type: 'device_offline'; offline: { device_id: string; minutes: number } }
+  // Watches a MAC on the LAN — a phone arriving or leaving — with no device
+  // added for it.
+  | { type: 'presence'; presence: { mac: string; present: boolean; stable_seconds?: number } }
   | { type: 'webhook'; webhook: { has_secret?: boolean; secret_hash?: string } }
 
 export type AutomationRule = {
@@ -193,11 +227,49 @@ export type AutomationRun = {
   }>
 }
 
-export type AutomationSnapshot = AutomationState & { runs: AutomationRun[] }
+// presence reports whether this host can read its neighbour table. Without it
+// presence rules cannot be armed, so the editor does not offer them.
+export type AutomationSnapshot = AutomationState & {
+  runs: AutomationRun[]
+  presence?: boolean
+}
 export type AutomationUpdate = {
   state: AutomationState
   generated_tokens?: Record<string, string>
 }
+
+// Accounts and permissions.
+//
+// The administrator is whoever presents SETU_TOKEN. Everyone else is created in
+// the app and signs in with a token Setu generated — there is no password, and
+// the token carries the name and permissions with it.
+export type Role = 'read' | 'modify'
+
+// Session is what the signed-in account may do. It is advisory: the server
+// enforces all of it again on every request, so this only decides what the app
+// bothers to show.
+export type Session = {
+  name: string
+  admin: boolean
+  role: Role
+  // all_devices means this account is not limited to a device list.
+  all_devices: boolean
+  devices: string[]
+  // users reports whether this build can manage accounts at all.
+  users: boolean
+}
+
+export type User = {
+  id: string
+  name: string
+  role: Role
+  devices: string[]
+  created_at?: number
+}
+
+// UserResponse carries a freshly issued token beside its account. The plaintext
+// exists only in this one response, so the screen must show it before moving on.
+export type UserResponse = { user: User; token?: string }
 
 const TOKEN_KEY = 'setu.token'
 const DEVICE_LIST_TIMEOUT_MS = 8000
@@ -329,8 +401,8 @@ export function normalizeDevices(value: unknown): Device[] {
       id,
       name: asString(item.name),
       brand: asString(item.brand),
-      model: asString(item.model),
-      series: typeof item.series === 'string' ? item.series : undefined,
+      driver: asString(item.driver),
+      model: asString(item.model) || undefined,
       mac: asString(item.mac),
       capabilities: asStringArray(item.capabilities),
       color_temp_min: colorTempRange.min,
@@ -473,8 +545,9 @@ function normalizeDiscovery(value: unknown): DiscoveryResult {
       if (!mac) continue // without the identity there is nothing to configure
       candidates.push({
         brand: asString(item.brand),
-        model: asString(item.model),
-        series: asString(item.series) || undefined,
+        driver: asString(item.driver),
+        model: asString(item.model) || undefined,
+        label: asString(item.label) || undefined,
         name: asString(item.name) || undefined,
         ip: asString(item.ip) || undefined,
         mac,
@@ -511,15 +584,15 @@ export async function addDevice(spec: DeviceSpec): Promise<Device> {
   return device
 }
 
-// updateDevice edits the labels only. Brand, model and MAC are the device's
+// updateDevice edits the labels only. Brand, driver and MAC are the device's
 // identity: changing those is a remove and an add.
 //
-// It sends just the fields being changed. Name and series are two separate
-// inputs, and a save from one must not carry the other's value — which may be
-// a render behind after the previous save.
+// It sends just the fields being changed. The name and the model are two
+// separate inputs, and a save from one must not carry the other's value — which
+// may be a render behind after the previous save.
 export async function updateDevice(
   id: string,
-  labels: { name?: string; series?: string },
+  labels: { name?: string; model?: string },
 ): Promise<Device> {
   const device = normalizeDevices([
     await request<unknown>(`/api/devices/${encodeURIComponent(id)}`, {
@@ -547,13 +620,104 @@ export function exportDevices(): Promise<DeviceList> {
 }
 
 // replaceDevices swaps the whole list (restore). The server validates and
-// builds everything first, so a rejected list changes nothing.
+// builds everything first, so a rejected list changes nothing. The items are
+// always in the current shape — a backup from an older Setu is upgraded before
+// it gets here (see backup.ts).
 export function replaceDevices(items: DeviceSpec[]): Promise<DeviceList> {
   return request<DeviceList>('/api/devices', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ version: 1, items }),
+    body: JSON.stringify({ version: DEVICE_LIST_VERSION, items }),
   })
+}
+
+// --- accounts ---------------------------------------------------------------
+
+function asRole(value: unknown): Role {
+  return value === 'modify' ? 'modify' : 'read'
+}
+
+function asUser(value: unknown): User | undefined {
+  if (!isRecord(value)) return undefined
+  const id = asString(value.id)
+  if (!id) return undefined
+  return {
+    id,
+    name: asString(value.name),
+    role: asRole(value.role),
+    devices: asStringArray(value.devices),
+    created_at: asNumber(value.created_at) || undefined,
+  }
+}
+
+// getSession answers "who am I, and what may I do?". A failure is not fatal: the
+// app falls back to showing everything and lets the server refuse what it must.
+export async function getSession(): Promise<Session> {
+  const value = await request<unknown>('/api/session')
+  if (!isRecord(value)) throw new Error('Setu returned an invalid session.')
+  return {
+    name: asString(value.name),
+    admin: value.admin === true,
+    role: asRole(value.role),
+    all_devices: value.all_devices === true,
+    devices: asStringArray(value.devices),
+    users: value.users === true,
+  }
+}
+
+export async function listUsers(): Promise<User[]> {
+  const value = await request<unknown>('/api/users')
+  if (!Array.isArray(value)) return []
+  const out: User[] = []
+  for (const item of value) {
+    const user = asUser(item)
+    if (user) out.push(user)
+  }
+  return out
+}
+
+async function userRequest(path: string, init: RequestInit): Promise<UserResponse> {
+  const value = await request<unknown>(path, init)
+  const user = isRecord(value) ? asUser(value.user) : undefined
+  if (!user) throw new Error('Setu returned an invalid account.')
+  return { user, token: isRecord(value) ? asString(value.token) || undefined : undefined }
+}
+
+// createUser takes only a name: signing in is the generated token and nothing
+// else. The token comes back once, in this response.
+export function createUser(name: string, role: Role, devices: string[]): Promise<UserResponse> {
+  return userRequest('/api/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, role, devices }),
+  })
+}
+
+// updateUser sends only the fields being changed, so editing a name cannot
+// silently resend — and revert — a stale copy of the device grants.
+export function updateUser(
+  id: string,
+  patch: { name?: string; role?: Role; devices?: string[] },
+): Promise<UserResponse> {
+  return userRequest(`/api/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+}
+
+// rotateUserToken issues a replacement and invalidates the previous token — the
+// recovery path when one is lost or was shared with the wrong person.
+export function rotateUserToken(id: string): Promise<UserResponse> {
+  return userRequest(`/api/users/${encodeURIComponent(id)}/token`, { method: 'POST' })
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  if (!res.ok) throw await failure(res)
 }
 
 export function getAutomations(): Promise<AutomationSnapshot> {
