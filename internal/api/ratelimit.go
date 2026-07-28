@@ -7,14 +7,11 @@ import (
 
 // Command rate limiting.
 //
-// Automation webhooks have always been rate limited; ordinary device commands
-// were not, so one looping client — a stuck slider, a retry loop, a script — could
-// drive a bulb or a TV as fast as the LAN allowed. On router-class hardware that
-// is the whole CPU budget, and some devices simply stop answering when hammered.
-//
-// The budget is a token bucket per caller *and* device: a burst of slider
-// commits still lands intact, sustained abuse is throttled, and one busy device
-// never starves the others.
+// One looping client — a stuck slider, a retry loop, a script — would otherwise
+// drive a bulb or a TV as fast as the LAN allows, which on router-class hardware
+// is the whole CPU budget, and some devices stop answering when hammered. The
+// budget is a token bucket per caller *and* device, so a burst of slider commits
+// still lands intact and one busy device never starves the others.
 const (
 	// commandBurst is how many commands may arrive back to back. A slider drag
 	// commits far fewer than this (see web/src/lib/slider-commit.svelte.ts).

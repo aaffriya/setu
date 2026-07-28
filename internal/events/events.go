@@ -78,6 +78,12 @@ func (b *Bus) SubscribeRecoverable() (<-chan Event, <-chan struct{}, func()) {
 // buffer and reads authoritative device state. Device methods update state
 // before publishing, so a concurrent change is either in that snapshot or is
 // delivered as a normal event immediately afterwards.
+//
+// Lock ordering: this takes the bus lock and then whatever snapshot takes, so
+// the bus is the outer lock. Nothing may publish while holding a lock that a
+// snapshot also acquires, and snapshot itself must never publish — either
+// inverts the order and deadlocks the bridge. Publishers in internal/manager
+// therefore release the read-model lock before publishing.
 func (b *Bus) Resync(snapshot func()) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

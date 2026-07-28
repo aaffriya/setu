@@ -70,15 +70,10 @@ func (s *Server) reachable(w http.ResponseWriter, r *http.Request, id string) bo
 }
 
 // manageable is reachable's counterpart for the routes that edit the stored
-// device list instead of talking to hardware. It asks the inventory, not the
-// manager.
-//
-// A spec this build cannot construct — an unknown brand after a downgrade, a
-// hand-edited entry — is deliberately kept rather than deleted (see
-// inventory.New). Keeping it is only defensible while its owner can still edit
-// it back into a working one or remove it, and asking the manager here made
-// both answer 404: the entry was unfixable and undeletable through the API,
-// leaving hand-editing the state file as the only way out.
+// device list instead of talking to hardware, so it asks the inventory rather
+// than the manager. A spec this build cannot construct is kept, not deleted
+// (see inventory.New), and asking the manager here would make it both
+// unfixable and undeletable through the API.
 func (s *Server) manageable(w http.ResponseWriter, r *http.Request, id string) bool {
 	if !s.inventory.Has(id) {
 		writeError(w, http.StatusNotFound, "unknown device")

@@ -11,15 +11,12 @@
 //   - "modify": additionally add devices and write automations — still only for
 //     the devices they can see.
 //
-// A grant is permission to use and rename a device, not to take it away. Adding
-// hardware is additive and affects only the person doing it, but deleting it
-// removes it for everyone who was granted it — the administrator included — and
-// cannot be undone from the app. Deletion therefore stays with the
-// administrator, alongside the whole-installation export and restore, even
-// though "modify" may add. See internal/api/server.go for where each route sits.
+// A grant is permission to use and rename a device, not to take it away:
+// deleting hardware removes it for everyone granted it, so deletion stays with
+// the administrator even though "modify" may add. See internal/api/server.go.
 //
 // Only the SHA-256 of a token is stored. The plaintext exists once, in the
-// response that created or rotated it, exactly like an automation webhook token.
+// response that created or rotated it.
 package users
 
 import (
@@ -33,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"setu/internal/store"
 )
@@ -540,7 +538,8 @@ func validate(u User) error {
 	if u.Name == "" {
 		return fmt.Errorf("a name is required")
 	}
-	if len(u.Name) > MaxNameLength {
+	// Characters, not bytes, so a name written in any script gets the same limit.
+	if utf8.RuneCountInString(u.Name) > MaxNameLength {
 		return fmt.Errorf("the name is longer than %d characters", MaxNameLength)
 	}
 	if u.Role != RoleRead && u.Role != RoleModify {

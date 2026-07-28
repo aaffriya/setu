@@ -30,15 +30,10 @@ func (s *Server) handleDeviceTypes(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleUnusableDevices lists the stored devices that are not running, so the
-// device screen can show what would otherwise be invisible.
-//
-// A spec this build cannot construct is kept rather than deleted, and it is
-// absent from the manager — so it appears in no device list, on no card, and in
-// no picker. It is still editable and removable by id (see manageable), which
-// only helps someone who knows the id, and until now the only way to learn one
-// was to read the server log or export a backup. This is that list, with the
-// reason attached so the fix is obvious: rename a refused label, or remove the
-// entry whose driver this build no longer has.
+// device screen can show what would otherwise be invisible: such an entry is
+// absent from the manager, so it appears in no device list, on no card, and in
+// no picker. The reason rides along so the fix is obvious — rename a refused
+// label, or remove the entry whose driver this build no longer has.
 func (s *Server) handleUnusableDevices(w http.ResponseWriter, r *http.Request) {
 	principal := principalOf(r)
 	entries := s.inventory.Unusable()

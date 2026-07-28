@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,5 +206,22 @@ func TestFactoryRejectsMissingCatalogLabels(t *testing.T) {
 			}()
 			register()
 		})
+	}
+}
+
+// The limits are shown to the person typing the value, so they have to mean
+// characters. Counting bytes cut a Devanagari or emoji name off at a third of
+// the stated length.
+func TestNameLimitCountsCharactersNotBytes(t *testing.T) {
+	spec := DeviceSpec{ID: "lamp", Brand: "test", Driver: "lamp", MAC: "98:77:d5:a2:34:f2"}
+
+	spec.Name = strings.Repeat("क", MaxNameLength)
+	if err := spec.Validate(); err != nil {
+		t.Errorf("a %d-character name was refused: %v", MaxNameLength, err)
+	}
+
+	spec.Name = strings.Repeat("क", MaxNameLength+1)
+	if err := spec.Validate(); err == nil {
+		t.Errorf("a %d-character name was accepted", MaxNameLength+1)
 	}
 }

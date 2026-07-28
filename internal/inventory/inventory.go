@@ -1,13 +1,11 @@
 // Package inventory owns the set of devices the user has added: the one place
 // that turns a stored spec into a live device and keeps the two in step.
 //
-// Devices used to be hand-written into a config file and built once at startup.
-// They are now added from the UI — found by a network scan, or typed in for the
-// hardware that answers no scan (a Wake-on-LAN target) — so something has to
-// hold specs, the factory, the manager and the state file together. That
-// coordination is all this package does; the rules it enforces (a free id, an
-// unused MAC, a valid spec) exist so a bad entry is refused at the door instead
-// of breaking the next start.
+// Devices are added from the UI — found by a network scan, or typed in for the
+// hardware that answers no scan (a Wake-on-LAN target) — so this package holds
+// specs, the factory, the manager and the state file together. The rules it
+// enforces (a free id, an unused MAC, a valid spec) refuse a bad entry at the
+// door instead of breaking the next start.
 package inventory
 
 import (
@@ -96,6 +94,7 @@ func New(file *store.Store, factory *config.Factory, deps config.Deps, mgr *mana
 			continue
 		}
 		if err := mgr.Add(dev); err != nil {
+			release(dev)
 			log.Error("skipping duplicate device", "device", spec.ID, "err", err)
 			inv.unusable[spec.ID] = err.Error()
 		}
@@ -123,15 +122,11 @@ func (i *Inventory) Unusable() []Unusable {
 }
 
 // repairable reports whether an edit the app can actually make would fix this
-// entry. Update changes the name and the model and nothing else, so everything
-// it cannot touch — the id, the MAC, the brand and driver pair — has to already
-// be sound. Otherwise a rename comes back with the same refusal it started
-// with, and offering the field at all is a promise the server will break.
-//
-// Substituting known-good labels is what asks that question directly, rather
-// than reading the recorded message and guessing which field it blamed. The
-// driver is checked through the factory instead of by building one, because
-// building is what opens sockets, and this only wants to know if it could.
+// entry. Update changes only the name and the model, so everything it cannot
+// touch — the id, the MAC, the brand and driver pair — has to already be sound,
+// or offering the field is a promise the server will break. The driver is
+// checked through the factory rather than by building one: building opens
+// sockets, and this only asks whether it could.
 func (i *Inventory) repairable(spec config.DeviceSpec) bool {
 	probe := spec
 	probe.Name = "device"
@@ -192,9 +187,11 @@ func (i *Inventory) Add(spec config.DeviceSpec, grantTo string) (config.DeviceSp
 	}
 	next := append(append([]config.DeviceSpec(nil), i.specs...), spec)
 	if err := i.persistWithGrant(next, spec.ID, grantTo); err != nil {
+		release(dev)
 		return config.DeviceSpec{}, err
 	}
 	if err := i.mgr.Add(dev); err != nil {
+		release(dev)
 		// Nothing went live, so nothing may stay stored: an "add failed" that
 		// still appears after the next restart is the worst of both answers. The
 		// rollback prunes grants as well, so the access just written for a device
@@ -247,6 +244,7 @@ func (i *Inventory) Update(id string, labels Labels) (config.DeviceSpec, error) 
 	next := append([]config.DeviceSpec(nil), i.specs...)
 	next[index] = spec
 	if err := i.persist(next); err != nil {
+		release(dev)
 		return config.DeviceSpec{}, err
 	}
 	if !i.mgr.Replace(dev) {
@@ -254,6 +252,7 @@ func (i *Inventory) Update(id string, labels Labels) (config.DeviceSpec, error) 
 		// when Setu started. The edit just repaired it, so bring it online now
 		// rather than making the user restart to see their own fix.
 		if err := i.mgr.Add(dev); err != nil {
+			release(dev)
 			return config.DeviceSpec{}, err
 		}
 	}
@@ -294,39 +293,13 @@ func (i *Inventory) Replace(specs []config.DeviceSpec) ([]config.DeviceSpec, err
 	if len(specs) > MaxDevices {
 		return nil, fmt.Errorf("at most %d devices", MaxDevices)
 	}
-	next := make([]config.DeviceSpec, 0, len(specs))
-	devices := make([]device.Device, 0, len(specs))
-	ids := make(map[string]struct{}, len(specs))
-	seen := make(map[string]struct{}, len(specs))
-	for _, spec := range specs {
-		spec = spec.Normalized()
-		if spec.ID == "" {
-			spec.ID = suggestID(spec.Brand, spec.MAC, ids)
-		}
-		if err := spec.Validate(); err != nil {
-			return nil, err
-		}
-		if _, clash := ids[spec.ID]; clash {
-			return nil, fmt.Errorf("duplicate device id %q", spec.ID)
-		}
-		key, err := identity(spec.Brand, spec.MAC)
-		if err != nil {
-			return nil, err
-		}
-		if _, clash := seen[key]; clash {
-			return nil, fmt.Errorf("%s %s appears twice", spec.Brand, spec.MAC)
-		}
-		dev, err := i.build(spec)
-		if err != nil {
-			return nil, err
-		}
-		ids[spec.ID] = struct{}{}
-		seen[key] = struct{}{}
-		next = append(next, spec)
-		devices = append(devices, dev)
+	next, devices, err := i.prepare(specs)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := i.persistWithPrunedGrants(next); err != nil {
+		releaseAll(devices)
 		return nil, err
 	}
 	for _, spec := range i.specs {
@@ -337,12 +310,71 @@ func (i *Inventory) Replace(specs []config.DeviceSpec) ([]config.DeviceSpec, err
 	clear(i.unusable)
 	for _, dev := range devices {
 		if err := i.mgr.Add(dev); err != nil {
+			release(dev)
 			i.log.Error("could not register restored device", "device", dev.ID(), "err", err)
 			i.unusable[dev.ID()] = err.Error()
 		}
 	}
 	i.specs = next
 	return next, nil
+}
+
+// prepare normalizes, validates and builds a whole replacement list. It is
+// all-or-nothing: a failure releases whatever it had already built, so a
+// rejected restore leaves nothing behind.
+func (i *Inventory) prepare(specs []config.DeviceSpec) ([]config.DeviceSpec, []device.Device, error) {
+	next := make([]config.DeviceSpec, 0, len(specs))
+	devices := make([]device.Device, 0, len(specs))
+	ids := make(map[string]struct{}, len(specs))
+	seen := make(map[string]struct{}, len(specs))
+	fail := func(err error) ([]config.DeviceSpec, []device.Device, error) {
+		releaseAll(devices)
+		return nil, nil, err
+	}
+	for _, spec := range specs {
+		spec = spec.Normalized()
+		if spec.ID == "" {
+			spec.ID = suggestID(spec.Brand, spec.MAC, ids)
+		}
+		if err := spec.Validate(); err != nil {
+			return fail(err)
+		}
+		if _, clash := ids[spec.ID]; clash {
+			return fail(fmt.Errorf("duplicate device id %q", spec.ID))
+		}
+		key, err := identity(spec.Brand, spec.MAC)
+		if err != nil {
+			return fail(err)
+		}
+		if _, clash := seen[key]; clash {
+			return fail(fmt.Errorf("%s %s appears twice", spec.Brand, spec.MAC))
+		}
+		dev, err := i.build(spec)
+		if err != nil {
+			return fail(err)
+		}
+		ids[spec.ID] = struct{}{}
+		seen[key] = struct{}{}
+		next = append(next, spec)
+		devices = append(devices, dev)
+	}
+	return next, devices, nil
+}
+
+// release closes a device that was built but never handed to the manager.
+// Building is what opens sockets and registers callbacks, so an abandoned
+// instance keeps them for the life of the process — and on a brand that keys
+// those callbacks by MAC it displaces the live device's own registration.
+func release(d device.Device) {
+	if c, ok := d.(device.Closer); ok {
+		_ = c.Close()
+	}
+}
+
+func releaseAll(devices []device.Device) {
+	for _, d := range devices {
+		release(d)
+	}
 }
 
 // Configured returns the id of this brand's device with that MAC, if any. The

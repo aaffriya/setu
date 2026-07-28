@@ -149,10 +149,13 @@ func (s *Server) resolve(r *http.Request, allowQuery bool) (Principal, bool) {
 	return Principal{Name: user.Name, Role: user.Role, UserID: user.ID, devices: granted}, true
 }
 
-// bearerToken extracts the presented token from the request.
+// bearerToken extracts the presented token from the request. The scheme is
+// matched case-insensitively, as RFC 7235 requires; the token itself is not.
 func bearerToken(r *http.Request, allowQuery bool) string {
-	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
-		return strings.TrimPrefix(header, "Bearer ")
+	const scheme = "Bearer "
+	header := r.Header.Get("Authorization")
+	if len(header) > len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
+		return header[len(scheme):]
 	}
 	if allowQuery {
 		return r.URL.Query().Get("token")

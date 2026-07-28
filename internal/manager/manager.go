@@ -183,6 +183,17 @@ func (m *Manager) Close() {
 		closeDevice(dev)
 		op.unlock()
 	}
+
+	// Every device is released now, so the read model must stop handing them out:
+	// Device, View and Snapshot have no closed check of their own, and a closed
+	// device answering a lookup is worse than an empty registry.
+	m.mu.Lock()
+	m.order = nil
+	clear(m.devices)
+	clear(m.latest)
+	clear(m.ops)
+	clear(m.health)
+	m.mu.Unlock()
 }
 
 // Add registers a device the user just added. It is rejected if the id is

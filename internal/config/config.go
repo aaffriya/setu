@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"setu/internal/resolver"
 )
@@ -195,10 +196,12 @@ func (s DeviceSpec) Validate() error {
 	if s.Name == "" {
 		return fmt.Errorf("a name is required")
 	}
-	if len(s.Name) > MaxNameLength {
+	// Counted in characters, not bytes: these limits are shown to the person
+	// typing, and "बैठक की लाइट" is 12 characters however many bytes it takes.
+	if utf8.RuneCountInString(s.Name) > MaxNameLength {
 		return fmt.Errorf("the name is longer than %d characters", MaxNameLength)
 	}
-	if len(s.Model) > MaxModelLength {
+	if utf8.RuneCountInString(s.Model) > MaxModelLength {
 		return fmt.Errorf("the model is longer than %d characters", MaxModelLength)
 	}
 	if _, err := resolver.NormalizeMAC(s.MAC); err != nil {

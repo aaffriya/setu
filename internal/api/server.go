@@ -128,15 +128,12 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("GET /api/devices/unusable", s.authModify(http.HandlerFunc(s.handleUnusableDevices)))
 		mux.Handle("POST /api/devices", s.authModify(http.HandlerFunc(s.handleAddDevice)))
 		mux.Handle("PATCH /api/devices/{id}", s.authModify(http.HandlerFunc(s.handleUpdateDevice)))
-		// Deleting is not the counterpart of adding. Adding is additive and
-		// affects only the person doing it; removing hardware takes it away from
-		// everyone who was granted it — including the administrator — and cannot
-		// be undone from the app. That is a whole-installation change, so it sits
-		// with export and restore rather than with the other modify routes.
+		// Deleting is not the counterpart of adding: it takes the device away
+		// from everyone granted it and cannot be undone from the app. That is a
+		// whole-installation change, so it sits with export and restore.
 		mux.Handle("DELETE /api/devices/{id}", s.authAdmin(http.HandlerFunc(s.handleDeleteDevice)))
-		// Export and restore are whole-installation operations: they read and
-		// rewrite devices no single user may be able to see, so they stay with
-		// the administrator even when other accounts may add hardware.
+		// Export and restore read and rewrite devices no single user may be able
+		// to see, so they stay with the administrator too.
 		mux.Handle("GET /api/devices/export", s.authAdmin(http.HandlerFunc(s.handleExportDevices)))
 		mux.Handle("PUT /api/devices", s.authAdmin(http.HandlerFunc(s.handleReplaceDevices)))
 		// A scan actively broadcasts on the LAN, so it is a POST: never

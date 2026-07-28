@@ -113,3 +113,30 @@ func TestNonAPIPathStillServesTheApp(t *testing.T) {
 		t.Fatalf("content type = %q, want HTML", ct)
 	}
 }
+
+// RFC 7235 makes the auth scheme case-insensitive, and clients do vary ("bearer"
+// from some HTTP libraries). The token after it stays exact.
+func TestBearerSchemeIsCaseInsensitive(t *testing.T) {
+	srv := routingServer(t)
+	handler := srv.Handler()
+
+	for _, header := range []string{"Bearer secret", "bearer secret", "BEARER secret"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+		req.Header.Set("Authorization", header)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Authorization %q = %d, want 200", header, rec.Code)
+		}
+	}
+
+	for _, header := range []string{"Bearer SECRET", "Bearer", "Bearer ", "Basic secret"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+		req.Header.Set("Authorization", header)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("Authorization %q = %d, want 401", header, rec.Code)
+		}
+	}
+}

@@ -400,7 +400,7 @@ export async function command(
   // (stale UI until the next event/poll corrects it, seconds later).
   const prev = get(devices).find((d) => d.id === id)
   devices.update((list) =>
-    list.map((d) => (d.id === id ? { ...d, state: applyOptimistic(d.state, action, value) } : d)),
+    list.map((d) => (d.id === id ? { ...d, state: applyOptimistic(d, action, value) } : d)),
   )
   try {
     const updated = await sendCommandInOrder(id, action, value)
@@ -427,11 +427,11 @@ export async function command(
 }
 
 function applyOptimistic(
-  state: DeviceState,
+  device: Device,
   action: CommandAction,
   value?: number | Color | string | boolean,
 ): DeviceState {
-  const next = { ...state }
+  const next = { ...device.state }
   switch (action) {
     case 'on':
       next.on = true
@@ -441,7 +441,10 @@ function applyOptimistic(
       break
     case 'set_brightness':
       next.brightness = value as number
-      if ((value as number) > 0) next.on = true
+      // On a bulb the brightness IS the device, so lighting it powers it on. On
+      // a fan it is the lamp, which the hardware keeps separate from the fan —
+      // predicting power there shows a fan running that never started.
+      if ((value as number) > 0 && !device.capabilities.includes('speed')) next.on = true
       break
     case 'set_color':
       next.color = value as Color

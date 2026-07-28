@@ -455,19 +455,35 @@ func TestManagerResyncsAfterEventOverflow(t *testing.T) {
 
 	// Block normal cache writes long enough to overflow the manager's small event
 	// buffer, then make the device's live state newer than every queued event.
-	mgr.mu.Lock()
-	for i := 0; i < 40; i++ {
-		bus.Publish(events.Event{
-			Type:     events.StateChanged,
-			DeviceID: dev.ID(),
-			State:    device.State{Online: true, On: i%2 == 0},
-		})
-	}
+	//
+	// The burst runs in its own goroutine, and this one gives up the manager lock
+	// on a deadline rather than waiting for it to finish. Publishing is what the
+	// consumer's resync pauses, so a burst that outlives the overflow blocks in
+	// Publish; holding the manager lock until it returned would be the other half
+	// of a lock-order inversion (see the ordering note on events.Bus.Resync).
 	dev.mu.Lock()
 	dev.state.On = true
 	dev.state.Brightness = 99
 	dev.mu.Unlock()
+
+	published := make(chan struct{})
+	mgr.mu.Lock()
+	go func() {
+		defer close(published)
+		for i := 0; i < 40; i++ {
+			bus.Publish(events.Event{
+				Type:     events.StateChanged,
+				DeviceID: dev.ID(),
+				State:    device.State{Online: true, On: i%2 == 0},
+			})
+		}
+	}()
+	select {
+	case <-published:
+	case <-time.After(200 * time.Millisecond):
+	}
 	mgr.mu.Unlock()
+	<-published
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -569,5 +585,29 @@ func TestPollAdoptsFallbackStateOnlyWhenSentinelIsWrapped(t *testing.T) {
 				t.Error("diagnostics recorded no poll error")
 			}
 		})
+	}
+}
+
+// Close releases every device, so the read model must stop answering for them.
+// Device, View and Snapshot have no closed check of their own.
+func TestClosedManagerHandsOutNoDevices(t *testing.T) {
+	bus := events.NewBus()
+	mgr := New(bus, []device.Device{&lifecycleDevice{id: "lamp"}})
+	mgr.Close()
+
+	if _, ok := mgr.Device("lamp"); ok {
+		t.Error("Device returned a closed device")
+	}
+	if _, ok := mgr.View("lamp"); ok {
+		t.Error("View returned a closed device")
+	}
+	if views := mgr.Snapshot(); len(views) != 0 {
+		t.Errorf("Snapshot returned %d views after Close", len(views))
+	}
+	if devices := mgr.Devices(); len(devices) != 0 {
+		t.Errorf("Devices returned %d devices after Close", len(devices))
+	}
+	if records := mgr.Diagnostics(); len(records) != 0 {
+		t.Errorf("Diagnostics returned %d records after Close", len(records))
 	}
 }

@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -252,5 +253,52 @@ func TestSameMACIsAllowedForAnotherBrand(t *testing.T) {
 		ID: "tv_wake", Brand: "wol", Driver: "device", Name: "Wake TV", MAC: "a0:d7:f3:9e:74:b2",
 	}, ""); err != nil {
 		t.Fatalf("a Wake-on-LAN card for the same hardware was refused: %v", err)
+	}
+}
+
+// closableDevice records whether it was released.
+type closableDevice struct {
+	fakeDevice
+	closed *bool
+}
+
+func (d *closableDevice) Close() error { *d.closed = true; return nil }
+
+// A restore that fails part-way must not leave devices constructed and
+// abandoned: building is what opens sockets and registers per-MAC callbacks, so
+// an unreleased instance keeps them — and displaces the live device's own.
+func TestFailedReplaceReleasesEveryDeviceItBuilt(t *testing.T) {
+	file := store.New(filepath.Join(t.TempDir(), "setu.json"))
+	bus := events.NewBus()
+	mgr := manager.New(bus, nil)
+	t.Cleanup(mgr.Close)
+
+	var closed []*bool
+	factory := config.NewFactory()
+	factory.Register("Light", "test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
+		released := false
+		closed = append(closed, &released)
+		return &closableDevice{fakeDevice: fakeDevice{spec: spec}, closed: &released}, nil
+	})
+	factory.Register("Light", "test", "broken", "Broken", func(config.DeviceSpec, config.Deps) (device.Device, error) {
+		return nil, errors.New("this build cannot drive that")
+	})
+	inv, err := New(file, factory, config.Deps{}, mgr, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inv.Replace([]config.DeviceSpec{
+		spec("lamp", "98:77:d5:a2:34:f2"),
+		{ID: "bad", Brand: "test", Driver: "broken", Name: "Bad", MAC: "98:77:d5:a2:34:f3"},
+	}); err == nil {
+		t.Fatal("a list holding an unbuildable entry was accepted")
+	}
+
+	if len(closed) != 1 {
+		t.Fatalf("built %d devices before the failure, want 1", len(closed))
+	}
+	if !*closed[0] {
+		t.Error("the device built before the failure was never released")
 	}
 }

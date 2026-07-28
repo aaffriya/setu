@@ -291,3 +291,10 @@ test('late command responses cannot replace a newer command state', () => {
   assert.match(store, /authoritativeVersions\.get\(id\).*=== authoritativeVersion/)
   assert.match(store, /err instanceof ApiError && err\.device\?\.id === id/)
 })
+
+test('a fan light dimming does not optimistically start the fan', () => {
+  assert.match(store, /function applyOptimistic\(\s*device: Device,/)
+  assert.match(store, /!device\.capabilities\.includes\('speed'\)\) next\.on = true/)
+  // Speed still implies power: the hardware really does start to serve a step.
+  assert.match(store, /case 'set_speed':[\s\S]*?next\.on = true/)
+})
