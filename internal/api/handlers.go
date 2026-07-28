@@ -57,15 +57,37 @@ func granted(principal Principal, views []manager.DeviceView) []manager.DeviceVi
 	return out
 }
 
-// reachable answers the two questions every single-device route asks: does this
-// device exist, and may this caller use it? A device that exists but was not
-// granted is reported as forbidden rather than missing — the administrator has
-// to be able to tell "I never shared that" from "that is gone".
+// reachable answers the two questions every route that talks to hardware asks:
+// is this device live, and may this caller use it? A device that exists but was
+// not granted is reported as forbidden rather than missing — the administrator
+// has to be able to tell "I never shared that" from "that is gone".
 func (s *Server) reachable(w http.ResponseWriter, r *http.Request, id string) bool {
 	if _, ok := s.mgr.Device(id); !ok {
 		writeError(w, http.StatusNotFound, "unknown device")
 		return false
 	}
+	return s.permitted(w, r, id)
+}
+
+// manageable is reachable's counterpart for the routes that edit the stored
+// device list instead of talking to hardware. It asks the inventory, not the
+// manager.
+//
+// A spec this build cannot construct — an unknown brand after a downgrade, a
+// hand-edited entry — is deliberately kept rather than deleted (see
+// inventory.New). Keeping it is only defensible while its owner can still edit
+// it back into a working one or remove it, and asking the manager here made
+// both answer 404: the entry was unfixable and undeletable through the API,
+// leaving hand-editing the state file as the only way out.
+func (s *Server) manageable(w http.ResponseWriter, r *http.Request, id string) bool {
+	if !s.inventory.Has(id) {
+		writeError(w, http.StatusNotFound, "unknown device")
+		return false
+	}
+	return s.permitted(w, r, id)
+}
+
+func (s *Server) permitted(w http.ResponseWriter, r *http.Request, id string) bool {
 	if !principalOf(r).CanSee(id) {
 		writeError(w, http.StatusForbidden, "you do not have access to this device")
 		return false
@@ -78,11 +100,22 @@ func (s *Server) reachable(w http.ResponseWriter, r *http.Request, id string) bo
 // reach the same hardware, so a client looping on either hammers it equally
 // (see ratelimit.go).
 func (s *Server) affordable(w http.ResponseWriter, r *http.Request, id string) bool {
-	if s.commands.allow(limiterKey(principalOf(r), id)) {
+	return s.withinBudget(w, limiterKey(principalOf(r), id), "too many requests for this device; slow down")
+}
+
+// affordableRun is the same budget for running an automation by hand. It is
+// keyed by the rule rather than a device because the rule is what a loop here
+// repeats, and one run may touch several devices at once.
+func (s *Server) affordableRun(w http.ResponseWriter, r *http.Request, ruleID string) bool {
+	return s.withinBudget(w, automationKey(principalOf(r), ruleID), "too many runs for this automation; slow down")
+}
+
+func (s *Server) withinBudget(w http.ResponseWriter, key, message string) bool {
+	if s.commands.allow(key) {
 		return true
 	}
 	w.Header().Set("Retry-After", "1")
-	writeError(w, http.StatusTooManyRequests, "too many requests for this device; slow down")
+	writeError(w, http.StatusTooManyRequests, message)
 	return false
 }
 

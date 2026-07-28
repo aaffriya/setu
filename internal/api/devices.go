@@ -29,6 +29,30 @@ func (s *Server) handleDeviceTypes(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.inventory.Types())
 }
 
+// handleUnusableDevices lists the stored devices that are not running, so the
+// device screen can show what would otherwise be invisible.
+//
+// A spec this build cannot construct is kept rather than deleted, and it is
+// absent from the manager — so it appears in no device list, on no card, and in
+// no picker. It is still editable and removable by id (see manageable), which
+// only helps someone who knows the id, and until now the only way to learn one
+// was to read the server log or export a backup. This is that list, with the
+// reason attached so the fix is obvious: rename a refused label, or remove the
+// entry whose driver this build no longer has.
+func (s *Server) handleUnusableDevices(w http.ResponseWriter, r *http.Request) {
+	principal := principalOf(r)
+	entries := s.inventory.Unusable()
+	out := make([]inventory.Unusable, 0, len(entries))
+	for _, entry := range entries {
+		// Filtered like every other read: a broken device is still a device this
+		// account was or was not given.
+		if principal.CanSee(entry.ID) {
+			out = append(out, entry)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleAddDevice adds one device and brings it online. The id may be omitted;
 // the inventory derives a stable one from the brand and MAC.
 func (s *Server) handleAddDevice(w http.ResponseWriter, r *http.Request) {
@@ -37,22 +61,17 @@ func (s *Server) handleAddDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	added, err := s.inventory.Add(spec)
+	// A new device is granted to nobody — access is always explicit — but the
+	// person who just added one clearly meant to use it, and would otherwise
+	// have to ask the administrator to share back what they contributed. The
+	// grant is part of the same write as the device, so an add that reports
+	// success is never one its own author cannot see.
+	added, err := s.inventory.Add(spec, principalOf(r).UserID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.log.Info("device added", "device", added.ID, "brand", added.Brand, "driver", added.Driver)
-
-	// A new device is granted to nobody — access is always explicit — but the
-	// person who just added one clearly meant to use it, and would otherwise
-	// have to ask the administrator to share back what they contributed.
-	if principal := principalOf(r); principal.UserID != "" && s.users != nil {
-		if err := s.users.Grant(principal.UserID, added.ID); err != nil {
-			s.log.Warn("could not grant the new device to the account that added it",
-				"user", principal.UserID, "device", added.ID, "err", err)
-		}
-	}
 
 	// Read the new device once so its card opens with real state instead of
 	// waiting for the next poll cycle. A device that does not answer is still
@@ -86,7 +105,7 @@ func (s *Server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if !s.reachable(w, r, id) {
+	if !s.manageable(w, r, id) {
 		return
 	}
 	if _, err := s.inventory.Update(id, inventory.Labels{Name: body.Name, Model: body.Model}); err != nil {
@@ -105,7 +124,7 @@ func (s *Server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 // handleDeleteDevice removes a device from the installation.
 func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !s.reachable(w, r, id) {
+	if !s.manageable(w, r, id) {
 		return
 	}
 	if err := s.inventory.Remove(id); err != nil {

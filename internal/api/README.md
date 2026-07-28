@@ -15,9 +15,10 @@ authenticated JSON routes, and live state events.
 | `POST /api/devices/{id}/refresh` | serialized one-device poll |
 | `POST /api/devices/{id}/command` | execute a uniform `control.Request` |
 | `GET /api/device-types` | registered category/brand/driver catalog, with labels |
+| `GET /api/devices/unusable` | stored entries that are not running, with the reason |
 | `POST /api/devices` | validate, store, start, and poll a device |
 | `PATCH /api/devices/{id}` | edit `name` or `model` only |
-| `DELETE /api/devices/{id}` | remove and close a device |
+| `DELETE /api/devices/{id}` | remove and close a device (administrator only) |
 | `GET /api/devices/export`, `PUT /api/devices` | export/replace inventory |
 | `POST /api/discovery/scan` | parallel read-only LAN scan; one scan at a time |
 | `GET`, `PUT /api/automations` | snapshot/replace revisioned rules |
@@ -43,11 +44,27 @@ request — the app's own hiding is advisory:
 - `auth`: any account. Routes naming a device additionally check that this
   account was granted it (`403`, not `404`: the administrator has to be able to
   tell "never shared" from "gone").
-- `authModify`: accounts whose role is `modify`. Adding devices, scanning, and
-  writing automations.
-- `authAdmin`: the `SETU_TOKEN` holder only. Managing users, and the
-  whole-installation export/restore that necessarily reaches past any one
-  person's grants.
+- `authModify`: accounts whose role is `modify`. Adding devices, renaming them,
+  scanning, and writing automations.
+- `authAdmin`: the `SETU_TOKEN` holder only. Managing users, deleting a device,
+  and the whole-installation export/restore that necessarily reaches past any
+  one person's grants.
+
+Deleting sits with the administrator rather than beside adding on purpose: a
+grant is permission to use a device, not to take it away. Adding hardware is
+additive and affects only the account that adds it, while removing it takes the
+device from everyone who was granted it — the administrator included — and
+cannot be undone from the app.
+
+Routes that manage the stored list (`PATCH`, `DELETE`) resolve the device
+through the inventory rather than the manager, so an entry this build could not
+construct — an unknown brand after a downgrade, a hand-edited spec — is still
+repairable and removable instead of being stranded in the state file. Such an
+entry is in no device list, on no card, and in no picker, so
+`GET /api/devices/unusable` names them with the reason each was refused; the
+device screen shows them beside the working ones. Editing a label that
+validation rejected brings the device online on that same request, which is why
+the screen refetches the device list afterwards.
 
 The administrator has no stored record — their token is the environment — so no
 API call, restore, or damaged state file can lock them out.

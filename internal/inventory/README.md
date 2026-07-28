@@ -20,9 +20,13 @@ Rules:
   (for example a TV plus a generic WoL card).
 
 A bad stored entry is logged and skipped at startup but remains exportable.
-Relabeling rebuilds and swaps the device while preserving position and cached
-state. Restore validates and builds the complete list before mutating runtime or
-disk.
+`Unusable` reports those entries with the reason each was refused, recorded
+where the failure happened rather than re-derived, so the app can show a device
+that reached no other list — it is absent from the manager, so it appears on no
+card and in no picker. Relabeling rebuilds and swaps the device while preserving
+position and cached state, and clears the entry once it is running; removal
+clears it too. Restore validates and builds the complete list before mutating
+runtime or disk.
 
 Removing a device does not rewrite automations. Missing references fail at run
 time and are disabled on the next automation-engine startup.

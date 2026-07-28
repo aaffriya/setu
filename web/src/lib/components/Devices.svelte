@@ -1,24 +1,32 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { fade, fly } from 'svelte/transition'
-  import { devices, addDevice, renameDevice, removeDevice } from '../store'
+  import { devices, addDevice, renameDevice, removeDevice, refresh } from '../store'
   import {
     listDeviceTypes,
+    listUnusableDevices,
     scanNetwork,
     type Device,
     type DeviceType,
     type DiscoveredDevice,
     type DiscoveryResult,
+    type UnusableDevice,
   } from '../api'
   import { trapFocus } from '../focus-trap'
 
   let {
     disabled = false,
     startOpen = false,
+    canRemove = true,
     onmodalchange = () => {},
   }: {
     disabled?: boolean
     startOpen?: boolean
+    // canRemove hides the Remove control for an account the server would refuse.
+    // Deleting a device takes it away from everyone who was granted it, so it is
+    // the administrator's to do; adding and renaming stay with any modify
+    // account. Advisory only — the API enforces it again on every request.
+    canRemove?: boolean
     onmodalchange?: (open: boolean) => void
   } = $props()
 
@@ -45,6 +53,10 @@
 
   // Remove needs a second tap: a device carries automations and preferences.
   let confirmRemove = $state('')
+
+  // Stored entries the server could not start. They are not in the device store
+  // — there is no live device behind them — so this screen fetches them itself.
+  let unusable = $state<UnusableDevice[]>([])
 
   $effect(() => {
     if (startOpen) openDialog()
@@ -78,6 +90,60 @@
       }
     } catch (reason) {
       report(reason, 'Could not load the device catalog.')
+    }
+  }
+
+  async function loadUnusable() {
+    try {
+      unusable = await listUnusableDevices()
+    } catch {
+      // An older Setu has no such route, and a broken one has no answer. Neither
+      // is worth an error banner over the working devices below it.
+      unusable = []
+    }
+  }
+
+  // Repairing means editing the label the server refused. The entry comes online
+  // on that same request, so it leaves this list and joins the one above it —
+  // which needs a real refresh, since a device that was never in the list cannot
+  // be updated into it.
+  async function repair(entry: UnusableDevice, field: 'name' | 'model', input: HTMLInputElement) {
+    const value = input.value.trim()
+    if (value === (entry[field] ?? '')) return
+    try {
+      await renameDevice(entry.id, { [field]: value })
+      // A repaired entry moves to the list above under the same id, and both
+      // lists read one confirmRemove. Leaving it armed would render that row's
+      // Remove already confirmed, so the next click would delete the device the
+      // user just fixed — with the second tap silently spent over here.
+      if (confirmRemove === entry.id) confirmRemove = ''
+      await Promise.all([refresh(), loadUnusable()])
+      note(`${value || entry.id} is running now.`)
+    } catch (reason) {
+      input.value = entry[field] ?? ''
+      report(reason, 'Could not repair that device.')
+    }
+  }
+
+  // Removal goes through the store like any other, so preferences keyed to this
+  // id — a room, a scene step — go with it. A device that broke after a
+  // downgrade may well have collected some while it still worked.
+  async function discard(entry: UnusableDevice) {
+    if (confirmRemove !== entry.id) {
+      confirmRemove = entry.id
+      return
+    }
+    confirmRemove = ''
+    busy = true
+    try {
+      await removeDevice(entry.id)
+      markCandidateAddable(entry.id)
+      await loadUnusable()
+      note(`Removed ${entry.name || entry.id}.`)
+    } catch (reason) {
+      report(reason, 'Could not remove that device.')
+    } finally {
+      busy = false
     }
   }
 
@@ -233,6 +299,19 @@
     }
   }
 
+  // A removed device may still be listed as a scan result. The server marks a
+  // candidate "configured" from the stored list, which counts the entries it
+  // could not start too, so this applies to those just the same: once the entry
+  // is gone the hardware is new again, and should be addable.
+  function markCandidateAddable(id: string) {
+    result = {
+      ...result,
+      candidates: result.candidates.map((item) =>
+        item.device_id === id ? { ...item, configured: false, device_id: undefined } : item,
+      ),
+    }
+  }
+
   async function remove(device: Device) {
     if (confirmRemove !== device.id) {
       confirmRemove = device.id
@@ -242,14 +321,7 @@
     busy = true
     try {
       await removeDevice(device.id)
-      // A removed device may still be listed as a scan result; it is now new
-      // again, and should be addable.
-      result = {
-        ...result,
-        candidates: result.candidates.map((item) =>
-          item.device_id === device.id ? { ...item, configured: false, device_id: undefined } : item,
-        ),
-      }
+      markCandidateAddable(device.id)
       note(`Removed ${device.name}.`)
     } catch (reason) {
       report(reason, 'Could not remove that device.')
@@ -264,6 +336,7 @@
     message = ''
     error = ''
     void loadTypes()
+    void loadUnusable()
   }
 
   function closeDialog() {
@@ -377,23 +450,92 @@
                     <span class="min-w-0 flex-1 truncate text-[11px] text-ink/40">
                       {device.brand} · <span class="font-mono">{device.mac}</span>
                     </span>
-                    <button
-                      type="button"
-                      onclick={() => remove(device)}
-                      disabled={busy}
-                      class="shrink-0 rounded-lg px-2 py-1 text-[11px] font-medium transition disabled:opacity-40
-                             {confirmRemove === device.id
-                        ? 'bg-rose-500 text-white'
-                        : 'bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 dark:text-rose-300'}"
-                    >
-                      {confirmRemove === device.id ? 'Tap to confirm' : 'Remove'}
-                    </button>
+                    {#if canRemove}
+                      <button
+                        type="button"
+                        onclick={() => remove(device)}
+                        disabled={busy}
+                        class="shrink-0 rounded-lg px-2 py-1 text-[11px] font-medium transition disabled:opacity-40
+                               {confirmRemove === device.id
+                          ? 'bg-rose-500 text-white'
+                          : 'bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 dark:text-rose-300'}"
+                      >
+                        {confirmRemove === device.id ? 'Tap to confirm' : 'Remove'}
+                      </button>
+                    {/if}
                   </div>
                 </div>
               {/each}
             </div>
           {/if}
         </section>
+
+        <!-- Stored but not running. Kept rather than deleted, so this is where
+             they surface: rename to repair a refused label, or remove the entry
+             whose driver this build no longer has. -->
+        {#if unusable.length > 0}
+          <section>
+            <h4 class="text-xs font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+              Not running
+            </h4>
+            <p class="mt-1 text-[11px] leading-relaxed text-ink/45">
+              Setu kept these but could not start them. Some can be fixed here; the rest
+              can only be removed.
+            </p>
+            <div class="mt-1.5 space-y-2">
+              {#each unusable as entry (entry.id)}
+                <div class="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-2.5">
+                  <!-- Only the labels are editable, so the fields are offered only
+                       when editing them is what would actually fix the entry.
+                       Showing them otherwise invites a rename the server refuses
+                       every time. -->
+                  {#if entry.repairable}
+                    <div class="flex gap-1.5">
+                      <input
+                        class="{field} flex-1"
+                        value={entry.name}
+                        maxlength="48"
+                        aria-label={`Name for ${entry.id}`}
+                        onchange={(event) => repair(entry, 'name', event.currentTarget)}
+                      />
+                      <input
+                        class="{field} w-20 shrink-0"
+                        value={entry.model ?? ''}
+                        maxlength="32"
+                        placeholder="model"
+                        aria-label={`Model for ${entry.id}`}
+                        onchange={(event) => repair(entry, 'model', event.currentTarget)}
+                      />
+                    </div>
+                  {:else}
+                    <p class="truncate text-sm font-medium text-ink/75">{entry.name}</p>
+                  {/if}
+                  <p class="mt-1.5 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                    {entry.reason}
+                  </p>
+                  <div class="mt-1.5 flex items-center gap-2">
+                    <span class="min-w-0 flex-1 truncate text-[11px] text-ink/40">
+                      {entry.brand} · <span class="font-mono">{entry.mac}</span>
+                    </span>
+                    {#if canRemove}
+                      <button
+                        type="button"
+                        onclick={() => discard(entry)}
+                        disabled={busy}
+                        class="shrink-0 rounded-lg px-2 py-1 text-[11px] font-medium transition disabled:opacity-40
+                               {confirmRemove === entry.id
+                          ? 'bg-rose-500 text-white'
+                          : 'bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 dark:text-rose-300'}"
+                      >
+                        {confirmRemove === entry.id ? 'Tap to confirm' : 'Remove'}
+                      </button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </section>
+        {/if}
 
         <!-- Scan -->
         <section>

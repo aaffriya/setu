@@ -29,7 +29,6 @@ const (
 	EnvToken        = "SETU_TOKEN"         // bearer token for /api and /ws
 	EnvInterface    = "SETU_INTERFACE"     // bind address; blank = all interfaces
 	EnvPort         = "SETU_PORT"          // TCP port; default 80, or 443 with TLS
-	EnvSocket       = "SETU_SOCKET"        // Unix socket path (overrides interface/port)
 	EnvTLSCert      = "SETU_TLS_CERT"      // PEM certificate → serves HTTPS
 	EnvTLSKey       = "SETU_TLS_KEY"       // PEM private key
 	EnvPollInterval = "SETU_POLL_INTERVAL" // active poll cadence, e.g. "45s"
@@ -67,9 +66,6 @@ type ListenConfig struct {
 	Interface string
 	// Port is the TCP port to listen on.
 	Port int
-	// Socket, when set, serves on this Unix-domain socket instead of TCP
-	// (tunnel-only, zero open ports). Takes precedence over Interface/Port.
-	Socket string
 	// TLS optionally serves HTTPS with your own certificate.
 	TLS TLSConfig
 }
@@ -89,23 +85,15 @@ func (t TLSConfig) Enabled() bool {
 	return t.Cert != "" && t.Key != ""
 }
 
-// Network returns the network and address for net.Listen: a Unix-domain socket
-// when Socket is set, otherwise a TCP "host:port" (blank host = all interfaces).
-func (l ListenConfig) Network() (network, address string) {
-	if l.Socket != "" {
-		return "unix", l.Socket
-	}
-	return "tcp", net.JoinHostPort(l.Interface, strconv.Itoa(l.Port))
+// Address returns the TCP "host:port" for net.Listen (blank host = all
+// interfaces).
+func (l ListenConfig) Address() string {
+	return net.JoinHostPort(l.Interface, strconv.Itoa(l.Port))
 }
 
-// String renders the listener for logs, e.g. ":80", "192.168.1.10:80", or
-// "unix:/run/setu.sock".
+// String renders the listener for logs, e.g. ":80" or "192.168.1.10:80".
 func (l ListenConfig) String() string {
-	network, address := l.Network()
-	if network == "unix" {
-		return "unix:" + address
-	}
-	return address
+	return l.Address()
 }
 
 // Load reads the configuration from the environment, applying defaults for
@@ -118,7 +106,6 @@ func Load() (*Config, error) {
 		Listen: ListenConfig{
 			Interface: os.Getenv(EnvInterface),
 			Port:      defaultPort,
-			Socket:    os.Getenv(EnvSocket),
 			TLS: TLSConfig{
 				Cert: os.Getenv(EnvTLSCert),
 				Key:  os.Getenv(EnvTLSKey),
@@ -158,7 +145,7 @@ func Load() (*Config, error) {
 // validate catches mistakes at startup rather than as confusing runtime
 // failures.
 func (c *Config) validate() error {
-	if c.Listen.Socket == "" && (c.Listen.Port < 1 || c.Listen.Port > 65535) {
+	if c.Listen.Port < 1 || c.Listen.Port > 65535 {
 		return fmt.Errorf("config: %s %d out of range (1-65535)", EnvPort, c.Listen.Port)
 	}
 	if (c.Listen.TLS.Cert == "") != (c.Listen.TLS.Key == "") {

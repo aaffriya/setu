@@ -112,3 +112,37 @@ func TestWebSocketReResolvesGrantsBeforeLaterState(t *testing.T) {
 		t.Fatalf("post-grant state = %+v, want live TV state", message)
 	}
 }
+
+// The grant direction that matters for access is the one that takes it away. A
+// socket resolves its account once, at connect; without the re-resolve on every
+// inventory change, a session that was open when its access was withdrawn would
+// keep receiving that device's live state for as long as it stayed connected.
+func TestWebSocketStopsSendingStateAfterAGrantIsRevoked(t *testing.T) {
+	handler, registry, _, bus := accessServerWithBus(
+		t,
+		lamp("lamp", "98:77:d5:a2:34:f2"),
+		lamp("tv", "98:77:d5:a2:34:f3"),
+	)
+	user, token, err := registry.Create("Priya", users.RoleRead, []string{"lamp", "tv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, ctx := openTestSocket(t, handler, token)
+	readUntilType(t, ctx, conn, "snapshot")
+
+	if response := as(t, handler, "admin-token", http.MethodPatch, "/api/users/"+user.ID, `{"devices":["lamp"]}`); response.Code != http.StatusOK {
+		t.Fatalf("revoke status = %d: %s", response.Code, response.Body.String())
+	}
+	readUntilType(t, ctx, conn, string(events.InventoryChanged))
+
+	// The withdrawn device changes state, then the still-granted one does. Only
+	// the second may arrive: reading until "lamp" proves "tv" was dropped rather
+	// than merely delayed.
+	bus.Publish(events.Event{Type: events.StateChanged, DeviceID: "tv", State: device.State{Online: true, On: true}})
+	bus.Publish(events.Event{Type: events.StateChanged, DeviceID: "lamp", State: device.State{Online: true, On: true}})
+
+	message := readUntilType(t, ctx, conn, string(events.StateChanged))
+	if message.DeviceID != "lamp" {
+		t.Fatalf("received state for %q after its grant was revoked", message.DeviceID)
+	}
+}

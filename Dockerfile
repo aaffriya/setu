@@ -59,6 +59,3 @@ ENTRYPOINT ["/usr/local/bin/setu"]
 #     docker run --rm --network host \
 #       -e SETU_TOKEN=your-secret \
 #       -v setu-state:/var/lib/setu setu
-#
-# For a Unix-socket listener, mount a writable dir for the socket, e.g.
-#   -v /run/setu:/run   and set listen: "unix:/run/setu.sock" in the config.

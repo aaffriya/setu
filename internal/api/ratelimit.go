@@ -113,3 +113,11 @@ func limiterKey(p Principal, deviceID string) string {
 	}
 	return kind + "\x00" + p.UserID + "\x00" + deviceID
 }
+
+// automationKey identifies one caller's budget for manually running one rule.
+// Running a rule fires its actions at real hardware, so it belongs in the same
+// bucket space as commands; the tag keeps a rule id from ever sharing a bucket
+// with a device that happens to have the same id.
+func automationKey(p Principal, ruleID string) string {
+	return limiterKey(p, "automation\x00"+ruleID)
+}

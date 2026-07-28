@@ -51,18 +51,12 @@ func Preflight(c *Config, statePath string) []Problem {
 			filepath.Dir(statePath), err, EnvStateDir)
 	}
 
-	if c.Listen.Socket != "" {
-		if err := checkWritableDir(filepath.Dir(c.Listen.Socket)); err != nil {
-			add(true, "cannot create the socket %s: %v", c.Listen.Socket, err)
-		}
-	} else {
-		if err := checkInterface(c.Listen.Interface); err != nil {
-			add(true, "%s: %v", EnvInterface, err)
-		}
-		if c.Listen.Port < 1024 && os.Geteuid() != 0 {
-			add(false, "port %d needs privilege: run as root, grant CAP_NET_BIND_SERVICE, or set %s above 1023",
-				c.Listen.Port, EnvPort)
-		}
+	if err := checkInterface(c.Listen.Interface); err != nil {
+		add(true, "%s: %v", EnvInterface, err)
+	}
+	if c.Listen.Port < 1024 && os.Geteuid() != 0 {
+		add(false, "port %d needs privilege: run as root, grant CAP_NET_BIND_SERVICE, or set %s above 1023",
+			c.Listen.Port, EnvPort)
 	}
 
 	if c.Listen.TLS.Enabled() {

@@ -44,7 +44,6 @@ go.work.sum
 
 # Runtime artifacts
 /run/
-*.sock
 
 # Local agent/editor tooling (machine-specific)
 /.claude/

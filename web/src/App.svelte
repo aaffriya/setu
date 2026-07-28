@@ -20,6 +20,7 @@
     command,
     session,
     loadSession,
+    forgetAccountState,
     type ConnectionStatus,
   } from './lib/store'
   import { getToken, setToken, signalActivity } from './lib/api'
@@ -344,6 +345,9 @@
 
   function saveToken() {
     token = tokenDraft.trim()
+    // Drop the previous account's cached devices before anything paints from
+    // them (see forgetAccountState).
+    forgetAccountState()
     setToken(token)
     showSettings = false
     void refreshDevices()
@@ -804,6 +808,7 @@
           <Devices
             disabled={needsToken}
             startOpen={openDevicesOnSettingsMount}
+            canRemove={isAdmin}
             onmodalchange={(open) => setSettingsTool('devices', open)}
           />
         {/if}

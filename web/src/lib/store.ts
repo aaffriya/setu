@@ -176,6 +176,39 @@ function loadCache(): Device[] {
   }
 }
 
+// forgetAccountState drops everything the previous token's account left behind.
+//
+// The cache above exists so a resumed tab repaints before the network answers,
+// which is exactly the wrong behaviour across a sign-in change: one account is
+// painted from the previous one's device list — names, rooms, live-looking
+// state — until its own first refresh lands, and keeps seeing it for as long as
+// that refresh cannot reach the server. Since the list is also mirrored to
+// localStorage, a reload while offline brings it back again.
+//
+// The server never sends a device the caller was not granted, so this is the
+// browser's copy alone; clearing it is what makes the app agree with what the
+// API would answer. UI preferences (rooms, favourites, order) stay: they are
+// keyed by device id, cost nothing to keep, and the same person switching
+// between their own two tokens should not lose their layout.
+export function forgetAccountState(): void {
+  devices.set([])
+  session.set(null)
+  lastUpdated.set(0)
+  authoritativeVersions.clear()
+  commandGenerations.clear()
+  commandQueues.clear()
+  // devices.set above queued a write of the now-empty list; drop it so the
+  // removal below is not immediately undone by the pending flush.
+  clearTimeout(cacheTimer)
+  cacheTimer = undefined
+  pendingCache = null
+  try {
+    localStorage.removeItem(CACHE_KEY)
+  } catch {
+    // storage disabled — there was nothing cached to begin with
+  }
+}
+
 let errorTimer: ReturnType<typeof setTimeout> | undefined
 function setError(msg: string): void {
   lastError.set(msg)

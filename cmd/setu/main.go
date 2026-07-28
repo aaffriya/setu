@@ -218,12 +218,11 @@ func lanPresence(res *resolver.ARPResolver) automation.PresenceFunc {
 	}
 }
 
-// listen opens the configured listener: a Unix-domain socket when one is
-// configured, otherwise TCP on the configured interface and port. When TLS is
-// configured it wraps the listener so the server speaks HTTPS — stdlib only, no
-// extra dependency and no behaviour change when TLS is unset.
+// listen opens the TCP listener on the configured interface and port. When TLS
+// is configured it wraps the listener so the server speaks HTTPS — stdlib only,
+// no extra dependency and no behaviour change when TLS is unset.
 func listen(cfg config.ListenConfig) (net.Listener, error) {
-	ln, err := openListener(cfg)
+	ln, err := net.Listen("tcp", cfg.Address())
 	if err != nil {
 		return nil, err
 	}
@@ -236,23 +235,4 @@ func listen(cfg config.ListenConfig) (net.Listener, error) {
 		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}})
 	}
 	return ln, nil
-}
-
-// openListener opens the raw (plain) listener for the configured address.
-func openListener(cfg config.ListenConfig) (net.Listener, error) {
-	network, addr := cfg.Network()
-	if network == "unix" {
-		// Remove a stale socket file left by an unclean shutdown.
-		if err := os.Remove(addr); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		ln, err := net.Listen("unix", addr)
-		if err != nil {
-			return nil, err
-		}
-		// Allow non-root clients (e.g. an SSH tunnel user) to connect.
-		_ = os.Chmod(addr, 0o660)
-		return ln, nil
-	}
-	return net.Listen(network, addr)
 }

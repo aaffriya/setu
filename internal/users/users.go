@@ -11,6 +11,13 @@
 //   - "modify": additionally add devices and write automations — still only for
 //     the devices they can see.
 //
+// A grant is permission to use and rename a device, not to take it away. Adding
+// hardware is additive and affects only the person doing it, but deleting it
+// removes it for everyone who was granted it — the administrator included — and
+// cannot be undone from the app. Deletion therefore stays with the
+// administrator, alongside the whole-installation export and restore, even
+// though "modify" may add. See internal/api/server.go for where each route sits.
+//
 // Only the SHA-256 of a token is stored. The plaintext exists once, in the
 // response that created or rotated it, exactly like an automation webhook token.
 package users
@@ -308,6 +315,14 @@ func (r *Registry) RotateToken(id string) (User, string, error) {
 // device keeps being able to use it: everything else has to be granted by the
 // administrator on purpose.
 func (r *Registry) Grant(id, deviceID string) error {
+	return r.GrantWithState(id, deviceID, nil)
+}
+
+// GrantWithState grants one device and applies another state-file mutation in
+// the same write, the way RetainDevicesAndUpdateState does for removal. Adding
+// a device uses it so the device list and the grant that makes it usable commit
+// together or not at all.
+func (r *Registry) GrantWithState(id, deviceID string, update func(*store.State) error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	index := r.indexOf(id)
@@ -316,7 +331,12 @@ func (r *Registry) Grant(id, deviceID string) error {
 	}
 	user := r.items[index]
 	if user.CanSee(deviceID) {
-		return nil
+		// Already granted, so there is nothing to write here — but the caller's
+		// own mutation still has to land.
+		if update == nil {
+			return nil
+		}
+		return r.file.Update(update)
 	}
 	if len(user.Devices) >= maxDeviceGrants {
 		return fmt.Errorf("a user may be given at most %d devices", maxDeviceGrants)
@@ -324,7 +344,17 @@ func (r *Registry) Grant(id, deviceID string) error {
 	user.Devices = append(append([]string(nil), user.Devices...), deviceID)
 	next := append([]User(nil), r.items...)
 	next[index] = user
-	if err := r.persist(next); err != nil {
+	encoded, err := encodeState(next)
+	if err != nil {
+		return err
+	}
+	if err := r.file.Update(func(state *store.State) error {
+		state.Users = encoded
+		if update == nil {
+			return nil
+		}
+		return update(state)
+	}); err != nil {
 		return err
 	}
 	r.items = next

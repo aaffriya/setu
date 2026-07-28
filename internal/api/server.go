@@ -122,9 +122,18 @@ func (s *Server) Handler() http.Handler {
 		// Managing which devices exist: added from a scan or by hand, renamed,
 		// removed, and exported/replaced as one list for backup and restore.
 		mux.Handle("GET /api/device-types", s.auth(http.HandlerFunc(s.handleDeviceTypes)))
+		// The stored entries that are not running. They are in no other list —
+		// the manager never saw them — so without this route the device screen
+		// cannot show what it is unable to start (see handleUnusableDevices).
+		mux.Handle("GET /api/devices/unusable", s.authModify(http.HandlerFunc(s.handleUnusableDevices)))
 		mux.Handle("POST /api/devices", s.authModify(http.HandlerFunc(s.handleAddDevice)))
 		mux.Handle("PATCH /api/devices/{id}", s.authModify(http.HandlerFunc(s.handleUpdateDevice)))
-		mux.Handle("DELETE /api/devices/{id}", s.authModify(http.HandlerFunc(s.handleDeleteDevice)))
+		// Deleting is not the counterpart of adding. Adding is additive and
+		// affects only the person doing it; removing hardware takes it away from
+		// everyone who was granted it — including the administrator — and cannot
+		// be undone from the app. That is a whole-installation change, so it sits
+		// with export and restore rather than with the other modify routes.
+		mux.Handle("DELETE /api/devices/{id}", s.authAdmin(http.HandlerFunc(s.handleDeleteDevice)))
 		// Export and restore are whole-installation operations: they read and
 		// rewrite devices no single user may be able to see, so they stay with
 		// the administrator even when other accounts may add hardware.

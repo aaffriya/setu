@@ -94,6 +94,49 @@ func ownedRules(principal Principal, items []automation.Rule) map[string]bool {
 	return owned
 }
 
+// visibleState narrows a whole-installation answer to the rules this account
+// owns.
+//
+// The engine necessarily works on the complete set — a restricted save has to
+// carry everyone else's rules through untouched — but the reply goes to one
+// account. Returning what the engine stored would disclose through PUT and
+// token rotation exactly what the GET above spends its filtering avoiding:
+// another person's routine names, the device ids those rules reach, and the
+// webhook path each one answers on.
+func visibleState(principal Principal, state automation.State) automation.State {
+	if principal.Admin {
+		return state
+	}
+	owned := ownedRules(principal, state.Items)
+	mine := make([]automation.Rule, 0, len(state.Items))
+	for _, rule := range state.Items {
+		if owned[rule.ID] {
+			mine = append(mine, rule)
+		}
+	}
+	state.Items = mine
+	return state
+}
+
+// visibleTokens keeps only the freshly minted webhook tokens that belong to
+// rules in the already-narrowed state. Called with the filtered state, so
+// membership there is exactly "this account owns it".
+func visibleTokens(principal Principal, visible automation.State, tokens map[string]string) map[string]string {
+	if principal.Admin || len(tokens) == 0 {
+		return tokens
+	}
+	mine := make(map[string]string, len(tokens))
+	for _, rule := range visible.Items {
+		if token, ok := tokens[rule.ID]; ok {
+			mine[rule.ID] = token
+		}
+	}
+	if len(mine) == 0 {
+		return nil
+	}
+	return mine
+}
+
 // handleAutomations returns the rules this account owns. A restricted account
 // never learns that the others exist, and its run history is filtered to match.
 func (s *Server) handleAutomations(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +200,14 @@ func (s *Server) handleReplaceAutomations(w http.ResponseWriter, r *http.Request
 	}
 	update, err := s.automation.Replace(state)
 	if err == nil {
+		principal := principalOf(r)
+		update.State = visibleState(principal, update.State)
+		// A webhook token is the whole authentication for its rule — that route
+		// takes no account token at all — so a token for a rule this account does
+		// not own would hand it a trigger it could never have called otherwise.
+		// The engine only mints one for a hook that has no secret yet, which its
+		// own new rules are; this makes that true rather than merely likely.
+		update.GeneratedTokens = visibleTokens(principal, update.State, update.GeneratedTokens)
 		writeJSON(w, http.StatusOK, update)
 		return
 	}
@@ -248,6 +299,14 @@ func (s *Server) handleRunAutomation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "this automation uses a device you do not have access to")
 		return
 	}
+	// A run reaches the same hardware a command does — often several devices at
+	// once — so it spends from the same budget. Without this the route is simply
+	// the way around the per-device limit: the engine's own rate window covers
+	// webhooks only, and its dedupe just makes a caller wait for the previous
+	// run to finish before starting the next.
+	if !s.affordableRun(w, r, id) {
+		return
+	}
 	result, err := s.automation.RunNow(id)
 	writeTriggerResult(w, result, err)
 }
@@ -270,7 +329,7 @@ func (s *Server) handleRotateWebhook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Token string           `json:"token"`
 		State automation.State `json:"state"`
-	}{Token: token, State: state})
+	}{Token: token, State: visibleState(principalOf(r), state)})
 }
 
 // handleAutomationWebhook is intentionally outside the admin auth middleware.

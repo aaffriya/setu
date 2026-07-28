@@ -9,7 +9,6 @@ Runtime settings, persisted device specs, and the brand/driver factory.
 | `SETU_TOKEN` | `CHANGE_ME` | API/WebSocket bearer token |
 | `SETU_INTERFACE` | all interfaces | TCP bind address |
 | `SETU_PORT` | `80`, or `443` with TLS | TCP port |
-| `SETU_SOCKET` | unset | Unix socket, overriding TCP |
 | `SETU_TLS_CERT`, `SETU_TLS_KEY` | unset | native HTTPS PEM pair |
 | `SETU_POLL_INTERVAL` | `45s` | active cadence |
 | `SETU_STATE_DIR` | OS temp | read by store and Samsung token code |
@@ -24,10 +23,10 @@ reasons rather than one per restart. It touches nothing: the state directory is
 probed with a temporary file that is removed again, and the certificate is
 parsed but never served.
 
-Fatal: a state directory (or socket directory) this process cannot write, a bind
-address no interface on this host has, an unusable TLS pair, a negative poll
-interval. Warnings: the default or a short token, a privileged port without the
-privilege, a poll interval under a second.
+Fatal: a state directory this process cannot write, a bind address no interface
+on this host has, an unusable TLS pair, a negative poll interval. Warnings: the
+default or a short token, a privileged port without the privilege, a poll
+interval under a second.
 
 Each check exists because its failure otherwise surfaces later and somewhere
 else — an unwritable directory looks like devices that will not save, a stale

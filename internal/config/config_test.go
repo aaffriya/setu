@@ -43,24 +43,11 @@ func TestLoadFromEnvironment(t *testing.T) {
 	if cfg.Token != "secret" {
 		t.Errorf("token = %q, want secret", cfg.Token)
 	}
-	if network, address := cfg.Listen.Network(); network != "tcp" || address != "127.0.0.1:8080" {
-		t.Errorf("Network() = %q %q, want tcp 127.0.0.1:8080", network, address)
+	if address := cfg.Listen.Address(); address != "127.0.0.1:8080" {
+		t.Errorf("Address() = %q, want 127.0.0.1:8080", address)
 	}
 	if cfg.PollInterval != 250*time.Millisecond {
 		t.Errorf("poll interval = %v, want 250ms", cfg.PollInterval)
-	}
-}
-
-func TestSocketOverridesTCP(t *testing.T) {
-	t.Setenv(EnvPort, "8080")
-	t.Setenv(EnvSocket, "/run/setu.sock")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if network, address := cfg.Listen.Network(); network != "unix" || address != "/run/setu.sock" {
-		t.Errorf("Network() = %q %q, want unix /run/setu.sock", network, address)
 	}
 }
 

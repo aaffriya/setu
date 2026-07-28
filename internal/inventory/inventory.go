@@ -40,6 +40,26 @@ type Inventory struct {
 
 	mu    sync.Mutex
 	specs []config.DeviceSpec
+	// unusable maps the id of a stored device that is not running to why. Only
+	// New and Replace can put one here — everywhere else a spec is stored only
+	// after it has been built and registered — and Update and Remove take it
+	// back out. Recording the reason where the failure happens is what lets the
+	// app say "no wiz driver in this build" instead of "unknown device".
+	unusable map[string]string
+}
+
+// Unusable is one stored device that is not running: the entry exactly as it
+// was kept, and why this build could not bring it online. The spec is embedded
+// so the JSON is one flat object — the same fields a backup carries, plus the
+// reason.
+type Unusable struct {
+	config.DeviceSpec
+	Reason string `json:"reason"`
+	// Repairable reports that editing the labels could bring this entry online,
+	// so the app knows whether to offer that edit at all. A name the stored
+	// limit refused is fixable in place; a driver this build does not have is
+	// not, and the only honest thing to offer there is removal.
+	Repairable bool `json:"repairable"`
 }
 
 // New loads the stored devices, builds them, and registers them with the
@@ -54,7 +74,11 @@ func New(file *store.Store, factory *config.Factory, deps config.Deps, mgr *mana
 	if err != nil {
 		return nil, err
 	}
-	inv := &Inventory{factory: factory, deps: deps, mgr: mgr, file: file, users: accounts, log: log, specs: state.Devices}
+	inv := &Inventory{
+		factory: factory, deps: deps, mgr: mgr, file: file, users: accounts, log: log,
+		specs:    state.Devices,
+		unusable: make(map[string]string),
+	}
 	for _, spec := range inv.specs {
 		// Validate on the way in as well as on the way out. Everything Setu
 		// writes has passed this already, but the file is editable, and an id
@@ -62,18 +86,57 @@ func New(file *store.Store, factory *config.Factory, deps config.Deps, mgr *mana
 		// and a token file name.
 		if err := spec.Validate(); err != nil {
 			log.Error("skipping invalid stored device", "device", spec.ID, "err", err)
+			inv.unusable[spec.ID] = err.Error()
 			continue
 		}
 		dev, err := inv.build(spec)
 		if err != nil {
 			log.Error("skipping unusable device", "device", spec.ID, "err", err)
+			inv.unusable[spec.ID] = err.Error()
 			continue
 		}
 		if err := mgr.Add(dev); err != nil {
 			log.Error("skipping duplicate device", "device", spec.ID, "err", err)
+			inv.unusable[spec.ID] = err.Error()
 		}
 	}
 	return inv, nil
+}
+
+// Unusable lists the stored devices that are not running, in stored order, so
+// the app can show what it is otherwise silently hiding.
+//
+// A spec that cannot be built is deliberately kept (see New), which is only
+// useful if its owner can find it: it does not appear in the manager, so it is
+// in no device list, on no card, and in no picker. Without this the only way to
+// discover one is to read the logs or export a backup.
+func (i *Inventory) Unusable() []Unusable {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	out := make([]Unusable, 0, len(i.unusable))
+	for _, spec := range i.specs {
+		if reason, broken := i.unusable[spec.ID]; broken {
+			out = append(out, Unusable{DeviceSpec: spec, Reason: reason, Repairable: i.repairable(spec)})
+		}
+	}
+	return out
+}
+
+// repairable reports whether an edit the app can actually make would fix this
+// entry. Update changes the name and the model and nothing else, so everything
+// it cannot touch — the id, the MAC, the brand and driver pair — has to already
+// be sound. Otherwise a rename comes back with the same refusal it started
+// with, and offering the field at all is a promise the server will break.
+//
+// Substituting known-good labels is what asks that question directly, rather
+// than reading the recorded message and guessing which field it blamed. The
+// driver is checked through the factory instead of by building one, because
+// building is what opens sockets, and this only wants to know if it could.
+func (i *Inventory) repairable(spec config.DeviceSpec) bool {
+	probe := spec
+	probe.Name = "device"
+	probe.Model = ""
+	return probe.Normalized().Validate() == nil && i.factory.Supports(spec.Brand, spec.Driver)
 }
 
 // Types returns the categorized, labelled drivers Setu can build, for the UI's
@@ -87,9 +150,25 @@ func (i *Inventory) Specs() []config.DeviceSpec {
 	return append([]config.DeviceSpec(nil), i.specs...)
 }
 
+// Has reports whether an id is stored, whether or not it is live. The routes
+// that manage the device list ask this rather than the manager, so an entry
+// that was skipped at startup — the one that most needs repairing or removing —
+// is still addressable.
+func (i *Inventory) Has(id string) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.indexOf(id) >= 0
+}
+
 // Add stores a new device and brings it online. An empty id is filled in from
 // the brand and MAC, so neither the scan nor the manual form has to invent one.
-func (i *Inventory) Add(spec config.DeviceSpec) (config.DeviceSpec, error) {
+//
+// grantTo, when set, is the account that added it. Membership and that
+// account's access to it are written together: a device stored without the
+// grant that makes it usable is one its own adder cannot see, and a grant
+// written without the device is access to an id that may come back later as
+// different hardware.
+func (i *Inventory) Add(spec config.DeviceSpec, grantTo string) (config.DeviceSpec, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -112,13 +191,15 @@ func (i *Inventory) Add(spec config.DeviceSpec) (config.DeviceSpec, error) {
 		return config.DeviceSpec{}, err
 	}
 	next := append(append([]config.DeviceSpec(nil), i.specs...), spec)
-	if err := i.persist(next); err != nil {
+	if err := i.persistWithGrant(next, spec.ID, grantTo); err != nil {
 		return config.DeviceSpec{}, err
 	}
 	if err := i.mgr.Add(dev); err != nil {
 		// Nothing went live, so nothing may stay stored: an "add failed" that
-		// still appears after the next restart is the worst of both answers.
-		if rollback := i.persist(i.specs); rollback != nil {
+		// still appears after the next restart is the worst of both answers. The
+		// rollback prunes grants as well, so the access just written for a device
+		// that no longer exists goes with it.
+		if rollback := i.persistWithPrunedGrants(i.specs); rollback != nil {
 			i.log.Error("could not roll back a failed device add", "device", spec.ID, "err", rollback)
 		}
 		return config.DeviceSpec{}, err
@@ -176,6 +257,8 @@ func (i *Inventory) Update(id string, labels Labels) (config.DeviceSpec, error) 
 			return config.DeviceSpec{}, err
 		}
 	}
+	// It is running either way now, so it is no longer one of the broken ones.
+	delete(i.unusable, id)
 	i.specs = next
 	return spec, nil
 }
@@ -196,6 +279,7 @@ func (i *Inventory) Remove(id string) error {
 		return err
 	}
 	i.mgr.Remove(id)
+	delete(i.unusable, id)
 	i.specs = next
 	return nil
 }
@@ -248,9 +332,13 @@ func (i *Inventory) Replace(specs []config.DeviceSpec) ([]config.DeviceSpec, err
 	for _, spec := range i.specs {
 		i.mgr.Remove(spec.ID)
 	}
+	// Everything in next validated and built above, so the restore starts from a
+	// clean slate; only a device the manager itself refuses stays broken.
+	clear(i.unusable)
 	for _, dev := range devices {
 		if err := i.mgr.Add(dev); err != nil {
 			i.log.Error("could not register restored device", "device", dev.ID(), "err", err)
+			i.unusable[dev.ID()] = err.Error()
 		}
 	}
 	i.specs = next
@@ -301,6 +389,18 @@ func (i *Inventory) build(spec config.DeviceSpec) (device.Device, error) {
 
 func (i *Inventory) persist(specs []config.DeviceSpec) error {
 	return i.file.Update(func(state *store.State) error {
+		state.Devices = specs
+		return nil
+	})
+}
+
+// persistWithGrant writes membership and — when an account added the device —
+// that account's access to it in one update, so the two can never half-commit.
+func (i *Inventory) persistWithGrant(specs []config.DeviceSpec, deviceID, grantTo string) error {
+	if grantTo == "" || i.users == nil {
+		return i.persist(specs)
+	}
+	return i.users.GrantWithState(grantTo, deviceID, func(state *store.State) error {
 		state.Devices = specs
 		return nil
 	})

@@ -106,6 +106,20 @@ export type DeviceSpec = {
 
 export type DeviceList = { version: number; items: DeviceSpec[] }
 
+// A stored device the server could not start: the spec exactly as it was kept,
+// plus why. It is in no device list and on no card — the manager never built
+// it — so this is the only way the app can show that it exists at all.
+//
+// `repairable` says whether editing the name or model could bring it online.
+// Only the labels are editable, so an entry whose driver or MAC is the problem
+// cannot be fixed here at all, and the screen offers removal instead of a
+// rename the server would refuse every time.
+export type UnusableDevice = DeviceSpec & {
+  id: string
+  reason: string
+  repairable: boolean
+}
+
 // DEVICE_LIST_VERSION is the schema of the device list this build exports and
 // sends. It tracks the server's own (internal/api deviceFormatVersion).
 export const DEVICE_LIST_VERSION = 2
@@ -588,6 +602,14 @@ export async function scanNetwork(): Promise<DiscoveryResult> {
 
 export function listDeviceTypes(): Promise<DeviceType[]> {
   return request<DeviceType[]>('/api/device-types')
+}
+
+// listUnusableDevices reports the stored entries that are not running. Kept out
+// of the device store on purpose: these have no state to show and nothing to
+// control, so only the device screen — where they are repaired or removed — asks
+// for them.
+export function listUnusableDevices(): Promise<UnusableDevice[]> {
+  return request<UnusableDevice[]>('/api/devices/unusable')
 }
 
 // addDevice stores a device and brings it online; the server derives the id and

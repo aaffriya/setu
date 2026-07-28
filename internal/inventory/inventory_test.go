@@ -54,7 +54,7 @@ func TestAddedDeviceSurvivesRestart(t *testing.T) {
 	file := store.New(filepath.Join(t.TempDir(), "setu.json"))
 	inv, _ := newInventory(t, file)
 
-	added, err := inv.Add(config.DeviceSpec{Brand: "test", Driver: "lamp", Name: "Desk", MAC: "98:77:d5:a2:34:f2"})
+	added, err := inv.Add(config.DeviceSpec{Brand: "test", Driver: "lamp", Name: "Desk", MAC: "98:77:d5:a2:34:f2"}, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -77,17 +77,17 @@ func TestAddedDeviceSurvivesRestart(t *testing.T) {
 // Wake-on-LAN card for a TV shares the TV's MAC on purpose.
 func TestAddRejectsDuplicateIdentity(t *testing.T) {
 	inv, _ := newInventory(t, store.New(filepath.Join(t.TempDir(), "setu.json")))
-	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2")); err != nil {
+	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2"), ""); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := inv.Add(spec("shelf", "9877d5a234f2")); err == nil {
+	if _, err := inv.Add(spec("shelf", "9877d5a234f2"), ""); err == nil {
 		t.Error("the same MAC in another notation was added twice")
 	}
-	if _, err := inv.Add(spec("desk", "aa:bb:cc:dd:ee:ff")); err == nil {
+	if _, err := inv.Add(spec("desk", "aa:bb:cc:dd:ee:ff"), ""); err == nil {
 		t.Error("a duplicate id was accepted")
 	}
-	if _, err := inv.Add(config.DeviceSpec{Brand: "nope", Driver: "lamp", Name: "X", MAC: "aa:bb:cc:dd:ee:ff"}); err == nil {
+	if _, err := inv.Add(config.DeviceSpec{Brand: "nope", Driver: "lamp", Name: "X", MAC: "aa:bb:cc:dd:ee:ff"}, ""); err == nil {
 		t.Error("a device with no registered driver was accepted")
 	}
 }
@@ -96,11 +96,11 @@ func TestAddRejectsDuplicateIdentity(t *testing.T) {
 // is the handle every command and automation uses.
 func TestDerivedIDsDoNotCollide(t *testing.T) {
 	inv, _ := newInventory(t, store.New(filepath.Join(t.TempDir(), "setu.json")))
-	first, err := inv.Add(config.DeviceSpec{Brand: "test", Driver: "lamp", Name: "A", MAC: "aa:bb:cc:dd:ee:ff"})
+	first, err := inv.Add(config.DeviceSpec{Brand: "test", Driver: "lamp", Name: "A", MAC: "aa:bb:cc:dd:ee:ff"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := inv.Add(config.DeviceSpec{Brand: "test", Driver: "lamp", Name: "B", MAC: "00:11:22:dd:ee:ff"})
+	second, err := inv.Add(config.DeviceSpec{Brand: "test", Driver: "lamp", Name: "B", MAC: "00:11:22:dd:ee:ff"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestUnbuildableDeviceIsSkippedNotFatal(t *testing.T) {
 func TestUpdateAndRemove(t *testing.T) {
 	file := store.New(filepath.Join(t.TempDir(), "setu.json"))
 	inv, mgr := newInventory(t, file)
-	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2")); err != nil {
+	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2"), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -183,7 +183,7 @@ func TestUpdateAndRemove(t *testing.T) {
 func TestReplaceIsAllOrNothing(t *testing.T) {
 	file := store.New(filepath.Join(t.TempDir(), "setu.json"))
 	inv, mgr := newInventory(t, file)
-	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2")); err != nil {
+	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2"), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,7 +211,7 @@ func TestReplaceIsAllOrNothing(t *testing.T) {
 
 func TestConfiguredMatchesBrandAndMAC(t *testing.T) {
 	inv, _ := newInventory(t, store.New(filepath.Join(t.TempDir(), "setu.json")))
-	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2")); err != nil {
+	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2"), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,12 +245,12 @@ func TestSameMACIsAllowedForAnotherBrand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := inv.Add(spec("tv", "a0:d7:f3:9e:74:b2")); err != nil {
+	if _, err := inv.Add(spec("tv", "a0:d7:f3:9e:74:b2"), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := inv.Add(config.DeviceSpec{
 		ID: "tv_wake", Brand: "wol", Driver: "device", Name: "Wake TV", MAC: "a0:d7:f3:9e:74:b2",
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("a Wake-on-LAN card for the same hardware was refused: %v", err)
 	}
 }

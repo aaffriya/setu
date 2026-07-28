@@ -118,11 +118,23 @@ func (s *Server) knownDevices(ids []string) error {
 		if id == "" {
 			continue
 		}
-		if _, ok := s.mgr.Device(id); !ok {
+		if !s.deviceExists(id) {
 			return errors.New("unknown device " + id)
 		}
 	}
 	return nil
+}
+
+// deviceExists asks what the installation holds rather than what is currently
+// live, so a stored device this build could not construct can still be granted.
+// A grant is a stored id either way; refusing one because the hardware is not
+// running would also refuse it because the driver is temporarily broken.
+func (s *Server) deviceExists(id string) bool {
+	if s.inventory != nil {
+		return s.inventory.Has(id)
+	}
+	_, ok := s.mgr.Device(id)
+	return ok
 }
 
 func decodeUserBody(w http.ResponseWriter, r *http.Request, v any) error {
