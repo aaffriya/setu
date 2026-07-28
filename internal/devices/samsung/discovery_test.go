@@ -61,6 +61,12 @@ func TestResolveIPCachesAndReresolvesAfterInvalidation(t *testing.T) {
 	}
 }
 
+func TestTVDoesNotAdvertiseStateOnlineAsReachability(t *testing.T) {
+	if device.ReportsReachability(&TV{}) {
+		t.Fatal("Samsung Online is control availability, not live reachability")
+	}
+}
+
 func TestPollReportsMissingLiveResponseWithoutDisablingWake(t *testing.T) {
 	tv := &TV{base: base{
 		id:    "tv",

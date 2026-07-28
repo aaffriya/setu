@@ -17,7 +17,9 @@ reconnects.
 Resolution is cached IP → ARP → MAC-verified SSDP. `On` bypasses resolution and
 sends WoL. `Off` checks live power before using toggle key `KEY_POWER`.
 `Poll` keeps `Online=true` for MAC-based wake control but returns
-`ErrPollNoResponse` when live REST contact fails.
+`ErrPollNoResponse` when live REST contact fails. Consequently this driver does
+not opt into reachability automations: its `Online` means control availability,
+not a successful live response.
 
 Pairing tokens are mode-`0600`
 `$SETU_STATE_DIR/setu-samsung-<id>.token` files. Set a persistent state

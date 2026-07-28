@@ -21,10 +21,10 @@ type deviceList struct {
 	Items   []config.DeviceSpec `json:"items"`
 }
 
-// handleDeviceTypes lists the labelled drivers this build can drive. The UI
-// needs it for the manual add form — hardware that answers no scan, like a
-// Wake-on-LAN target — so the catalog comes from the registered brands rather
-// than a list duplicated in the frontend.
+// handleDeviceTypes lists the categorized, labelled drivers this build can
+// drive. The UI needs it for the manual add form — hardware that answers no
+// scan, like a Wake-on-LAN target — so the catalog comes from the registered
+// brands rather than a list duplicated in the frontend.
 func (s *Server) handleDeviceTypes(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.inventory.Types())
 }
@@ -65,6 +65,7 @@ func (s *Server) handleAddDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "device was stored but could not be started")
 		return
 	}
+	s.publishDeviceInventoryChanged(false)
 	writeJSON(w, http.StatusCreated, view)
 }
 
@@ -97,6 +98,7 @@ func (s *Server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown device")
 		return
 	}
+	s.publishDeviceInventoryChanged(false)
 	writeJSON(w, http.StatusOK, view)
 }
 
@@ -111,14 +113,7 @@ func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("device removed", "device", id)
-	// Drop the grants too. Ids are derived from the brand and MAC, so re-adding
-	// the same hardware reuses the id — leaving the old grants would silently
-	// restore access the administrator may since have meant to withdraw.
-	if s.users != nil {
-		if err := s.users.ForgetDevice(id); err != nil {
-			s.log.Warn("could not clear access grants for the removed device", "device", id, "err", err)
-		}
-	}
+	s.publishDeviceInventoryChanged(false)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -177,18 +172,7 @@ func (s *Server) handleReplaceDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("device list replaced", "count", len(stored))
-	// A restore removes devices without deleting them one at a time, so the
-	// per-device cleanup in handleDeleteDevice never runs. Prune here for the
-	// same reason: an id that comes back later must not arrive pre-shared.
-	if s.users != nil {
-		ids := make([]string, 0, len(stored))
-		for _, spec := range stored {
-			ids = append(ids, spec.ID)
-		}
-		if err := s.users.RetainDevices(ids); err != nil {
-			s.log.Warn("could not clear access grants for removed devices", "err", err)
-		}
-	}
+	s.publishDeviceInventoryChanged(true)
 	writeJSON(w, http.StatusOK, deviceList{Version: deviceFormatVersion, Items: stored})
 }
 

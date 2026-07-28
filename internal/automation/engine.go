@@ -20,13 +20,14 @@ import (
 )
 
 var (
-	ErrRevision     = errors.New("automation revision changed")
-	ErrNotFound     = errors.New("automation not found")
-	ErrUnauthorized = errors.New("invalid webhook token")
-	ErrRateLimited  = errors.New("webhook rate limit reached")
-	ErrQueueFull    = errors.New("automation queue is full")
-	ErrPaused       = errors.New("automations are paused")
-	ErrDisabled     = errors.New("automation is disabled")
+	ErrRevision         = errors.New("automation revision changed")
+	ErrNotFound         = errors.New("automation not found")
+	ErrUnauthorized     = errors.New("invalid webhook token")
+	ErrRateLimited      = errors.New("webhook rate limit reached")
+	ErrQueueFull        = errors.New("automation queue is full")
+	ErrPaused           = errors.New("automations are paused")
+	ErrDisabled         = errors.New("automation is disabled")
+	errConditionsNotMet = errors.New("automation conditions are not met")
 )
 
 // ValidationError is safe to return as a 400 response when a proposed rule set
@@ -68,9 +69,10 @@ type TriggerResult struct {
 }
 
 type runRequest struct {
-	id     string
-	rule   Rule
-	source string
+	id            string
+	rule          Rule
+	source        string
+	offsetMinutes int
 }
 
 type rateWindow struct {
@@ -101,8 +103,9 @@ type Engine struct {
 	lastSchedule  map[string]string
 	latestStates  map[string]device.State
 	// offlineSince records when a device was first seen unreachable; an absent
-	// entry means it is reachable. offlineFired keeps an offline rule to one run
-	// per episode, and is cleared when its device returns.
+	// entry means it is reachable. It drives both elapsed-offline rules and the
+	// duration compared when a device returns. offlineFired keeps an offline
+	// rule to one run per episode, and is cleared when its device returns.
 	offlineSince map[string]time.Time
 	offlineFired map[string]bool
 	// latestPresence is the last neighbour-table answer per watched MAC.
@@ -217,6 +220,8 @@ func (e *Engine) Run(ctx context.Context, ready <-chan struct{}) {
 			}
 			if event.Type == events.StateChanged {
 				e.handleState(event.DeviceID, event.State)
+			} else if event.Type == events.InventoryChanged && event.DeviceIDs != nil {
+				e.reconcileInventory(event.DeviceIDs, event.ResetDevices)
 			}
 		case _, ok := <-resync:
 			if !ok {
@@ -432,6 +437,8 @@ func newRunID() (string, error) {
 }
 
 // RunNow uses the normal safety, condition, cooldown, and bounded-queue path.
+// A timed schedule runs only its zero-offset actions; later wall-clock steps
+// remain owned by the minute scheduler.
 func (e *Engine) RunNow(id string) (TriggerResult, error) {
 	return e.enqueue(id, "manual")
 }
@@ -533,9 +540,25 @@ func (e *Engine) enqueueAtRevision(id, source string, revision uint64) (TriggerR
 	return e.enqueueLocked(id, source)
 }
 
+func (e *Engine) enqueueScheduleAtRevision(id string, offset int, revision uint64) (TriggerResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.state.Revision != revision {
+		return TriggerResult{}, ErrRevision
+	}
+	return e.enqueueRuleLocked(id, "schedule", &offset, false)
+}
+
 // enqueueLocked performs the atomic rule/dedupe/cooldown/queue decision. The
 // caller must hold e.mu.
 func (e *Engine) enqueueLocked(id, source string) (TriggerResult, error) {
+	return e.enqueueRuleLocked(id, source, nil, true)
+}
+
+// enqueueRuleLocked queues either a complete ordinary rule or one due step of
+// a timed schedule. Scheduled steps are already deduplicated by wall-clock
+// minute, so rule cooldown must not suppress a later planned offset.
+func (e *Engine) enqueueRuleLocked(id, source string, scheduledOffset *int, checkCooldown bool) (TriggerResult, error) {
 	if e.state.Paused {
 		return TriggerResult{}, ErrPaused
 	}
@@ -553,11 +576,22 @@ func (e *Engine) enqueueLocked(id, source string) (TriggerResult, error) {
 	if !rule.Enabled {
 		return TriggerResult{}, ErrDisabled
 	}
+	requestRule := cloneState(State{Items: []Rule{*rule}}).Items[0]
+	requestOffset := 0
+	if scheduledOffset != nil {
+		requestOffset = *scheduledOffset
+		requestRule.Actions = actionsAtOffset(requestRule.Actions, requestOffset)
+	} else if source == "manual" && requestRule.Trigger.Type == TriggerSchedule {
+		requestRule.Actions = actionsAtOffset(requestRule.Actions, 0)
+	}
+	if len(requestRule.Actions) == 0 {
+		return TriggerResult{Status: "no_immediate_actions"}, nil
+	}
 	if e.pending[id] || e.running[id] {
 		return TriggerResult{Status: "already_running"}, nil
 	}
 	now := time.Now()
-	if cooldown := time.Duration(rule.CooldownSeconds) * time.Second; cooldown > 0 && now.Sub(e.lastTriggered[id]) < cooldown {
+	if cooldown := time.Duration(rule.CooldownSeconds) * time.Second; checkCooldown && cooldown > 0 && now.Sub(e.lastTriggered[id]) < cooldown {
 		return TriggerResult{Status: "cooldown"}, nil
 	}
 	if !e.conditionsMet(rule.Conditions) {
@@ -568,17 +602,29 @@ func (e *Engine) enqueueLocked(id, source string) (TriggerResult, error) {
 		return TriggerResult{}, err
 	}
 	e.pending[id] = true
-	request := runRequest{id: runID, rule: cloneState(State{Items: []Rule{*rule}}).Items[0], source: source}
+	request := runRequest{id: runID, rule: requestRule, source: source, offsetMinutes: requestOffset}
 	select {
 	case e.queue <- request:
 		// Cooldown starts only once the run is accepted. A full queue did not
 		// trigger anything and must not suppress the caller's next attempt.
+		// Timed schedule steps update the clock for manual/nested callers, but
+		// their own exact future offsets deliberately bypass the check.
 		e.lastTriggered[id] = now
 		return TriggerResult{RunID: runID, Status: "queued"}, nil
 	default:
 		delete(e.pending, id)
 		return TriggerResult{}, ErrQueueFull
 	}
+}
+
+func actionsAtOffset(actions []Action, offset int) []Action {
+	out := make([]Action, 0, len(actions))
+	for _, action := range actions {
+		if action.OffsetMinutes == offset {
+			out = append(out, action)
+		}
+	}
+	return out
 }
 
 func (e *Engine) conditionsMet(conditions []Condition) bool {
@@ -648,6 +694,11 @@ func (e *Engine) executeRequest(ctx context.Context, request runRequest, depth i
 			}
 		}
 		result := ActionResult{DeviceID: action.DeviceID, AutomationID: action.AutomationID, Action: action.Action}
+		if !e.conditionsMet(action.When) {
+			result.Skipped = true
+			results = append(results, result)
+			continue
+		}
 		var err error
 		if action.Action == ActionAutomation {
 			err = e.runNested(ctx, action.AutomationID, request.rule.ID, depth+1, remaining, remainingDelay)
@@ -659,7 +710,9 @@ func (e *Engine) executeRequest(ctx context.Context, request runRequest, depth i
 				err = commandErr
 			}
 		}
-		if err != nil {
+		if errors.Is(err, errConditionsNotMet) {
+			result.Skipped = true
+		} else if err != nil {
 			result.Error = err.Error()
 			allOK = false
 			e.log.Warn("automation action failed", "automation", request.rule.ID, "target", actionTarget(action), "action", action.Action, "err", err)
@@ -671,14 +724,15 @@ func (e *Engine) executeRequest(ctx context.Context, request runRequest, depth i
 
 done:
 	run := Run{
-		ID:         request.id,
-		RuleID:     request.rule.ID,
-		RuleName:   request.rule.Name,
-		Source:     request.source,
-		StartedAt:  started,
-		DurationMS: time.Since(started).Milliseconds(),
-		OK:         allOK,
-		Results:    results,
+		ID:            request.id,
+		RuleID:        request.rule.ID,
+		RuleName:      request.rule.Name,
+		Source:        request.source,
+		OffsetMinutes: request.offsetMinutes,
+		StartedAt:     started,
+		DurationMS:    time.Since(started).Milliseconds(),
+		OK:            allOK,
+		Results:       results,
 	}
 	e.mu.Lock()
 	delete(e.running, request.rule.ID)
@@ -744,7 +798,15 @@ func (e *Engine) runNested(ctx context.Context, id, parentID string, depth int, 
 	}
 	if !e.conditionsMet(rule.Conditions) {
 		e.mu.Unlock()
-		return fmt.Errorf("automation conditions are not met")
+		return errConditionsNotMet
+	}
+	requestRule := cloneState(State{Items: []Rule{*rule}}).Items[0]
+	if requestRule.Trigger.Type == TriggerSchedule {
+		requestRule.Actions = actionsAtOffset(requestRule.Actions, 0)
+		if len(requestRule.Actions) == 0 {
+			e.mu.Unlock()
+			return fmt.Errorf("automation has no immediate actions")
+		}
 	}
 	runID, err := newRunID()
 	if err != nil {
@@ -754,7 +816,7 @@ func (e *Engine) runNested(ctx context.Context, id, parentID string, depth int, 
 	e.running[id] = true
 	e.lastTriggered[id] = now
 	request := runRequest{
-		id: runID, rule: cloneState(State{Items: []Rule{*rule}}).Items[0],
+		id: runID, rule: requestRule,
 		source: "automation:" + parentID,
 	}
 	e.mu.Unlock()
@@ -774,8 +836,92 @@ func (e *Engine) readStates() map[string]device.State {
 	return states
 }
 
+// reconcileInventory installs new devices as a baseline and forgets every
+// transient clock belonging to a removed device. deviceIDs is captured by the
+// inventory mutation itself: consulting only the manager here would race a
+// quick remove-and-re-add of the same MAC-derived id.
+func (e *Engine) reconcileInventory(deviceIDs []string, reset bool) {
+	current := e.readStates()
+	live := make(map[string]device.State, len(deviceIDs))
+	for _, id := range deviceIDs {
+		if state, ok := current[id]; ok {
+			live[id] = state
+		}
+	}
+
+	now := time.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if reset {
+		for id := range e.latestStates {
+			e.forgetDeviceLocked(id)
+		}
+	}
+	for id := range e.latestStates {
+		if _, ok := live[id]; !ok {
+			e.forgetDeviceLocked(id)
+		}
+	}
+	for id := range e.offlineSince {
+		if _, ok := live[id]; !ok {
+			e.forgetDeviceLocked(id)
+		}
+	}
+	for id, state := range live {
+		if _, known := e.latestStates[id]; known {
+			continue
+		}
+		e.latestStates[id] = state
+		if !state.Online {
+			e.offlineSince[id] = now
+		}
+	}
+}
+
+// forgetDeviceLocked cancels state derived from membership that no longer
+// exists. Rules themselves stay stored, matching inventory's documented
+// behavior, but they cannot fire until the device is added and observed again.
+func (e *Engine) forgetDeviceLocked(deviceID string) {
+	delete(e.latestStates, deviceID)
+	delete(e.offlineSince, deviceID)
+	for _, rule := range e.state.Items {
+		if trigger := rule.Trigger.Device; trigger != nil && trigger.DeviceID == deviceID {
+			if timer := e.stableTimers[rule.ID]; timer != nil {
+				timer.Stop()
+				delete(e.stableTimers, rule.ID)
+			}
+		}
+		if trigger := rule.Trigger.Offline; trigger != nil && trigger.DeviceID == deviceID {
+			delete(e.offlineFired, rule.ID)
+		}
+	}
+}
+
 func (e *Engine) resyncStates() {
-	for id, state := range e.readStates() {
+	states := e.readStates()
+	now := time.Now()
+	e.mu.Lock()
+	for id := range e.latestStates {
+		if _, live := states[id]; !live {
+			e.forgetDeviceLocked(id)
+		}
+	}
+	for id := range e.offlineSince {
+		if _, live := states[id]; !live {
+			e.forgetDeviceLocked(id)
+		}
+	}
+	// An overflow lost the transition history, so the current reachability is a
+	// fresh baseline. Preserve state-trigger edge handling below, but never
+	// manufacture a recovery from a partial event stream.
+	for id, state := range states {
+		delete(e.offlineSince, id)
+		if !state.Online {
+			e.offlineSince[id] = now
+		}
+	}
+	e.mu.Unlock()
+	for id, state := range states {
 		e.handleState(id, state)
 	}
 }
@@ -790,9 +936,10 @@ func (e *Engine) handleState(deviceID string, state device.State) {
 	revision := e.state.Revision
 	previous, known := e.latestStates[deviceID]
 	e.latestStates[deviceID] = state
-	e.trackReachabilityLocked(deviceID, state)
+	offlineFor, recovered := e.trackReachabilityLocked(deviceID, state, time.Now())
 
 	rules := make([]Rule, 0)
+	onlineRules := make([]Rule, 0)
 	for _, rule := range e.state.Items {
 		trigger := rule.Trigger.Device
 		if !rule.Enabled || trigger == nil || trigger.DeviceID != deviceID {
@@ -830,16 +977,29 @@ func (e *Engine) handleState(deviceID string, state device.State) {
 			}
 		})
 	}
+	if recovered {
+		for _, rule := range e.state.Items {
+			trigger := rule.Trigger.Online
+			if rule.Enabled && trigger != nil && trigger.DeviceID == deviceID && trigger.matches(offlineFor) {
+				onlineRules = append(onlineRules, rule)
+			}
+		}
+	}
 	e.mu.Unlock()
 	for _, rule := range rules {
 		_, _ = e.enqueueAtRevision(rule.ID, "device", revision)
 	}
+	for _, rule := range onlineRules {
+		_, _ = e.enqueueAtRevision(rule.ID, "online", revision)
+	}
 }
 
-// trackReachabilityLocked maintains the clock behind offline triggers. The
-// caller must hold e.mu.
-func (e *Engine) trackReachabilityLocked(deviceID string, state device.State) {
+// trackReachabilityLocked maintains the clock behind offline and online
+// recovery triggers. It returns the just-finished observed outage exactly once.
+// The caller must hold e.mu.
+func (e *Engine) trackReachabilityLocked(deviceID string, state device.State, now time.Time) (time.Duration, bool) {
 	if state.Online {
+		since, recovered := e.offlineSince[deviceID]
 		delete(e.offlineSince, deviceID)
 		// Coming back is what rearms the rules watching this device; without it
 		// a device that flaps would only ever fire once per process.
@@ -848,11 +1008,15 @@ func (e *Engine) trackReachabilityLocked(deviceID string, state device.State) {
 				delete(e.offlineFired, rule.ID)
 			}
 		}
-		return
+		if recovered {
+			return now.Sub(since), true
+		}
+		return 0, false
 	}
 	if _, counting := e.offlineSince[deviceID]; !counting {
-		e.offlineSince[deviceID] = time.Now()
+		e.offlineSince[deviceID] = now
 	}
+	return 0, false
 }
 
 // evaluateOffline runs on the minute tick and fires the rules whose device has
@@ -974,24 +1138,45 @@ func (e *Engine) syncPresence() {
 func (e *Engine) evaluateSchedules(now time.Time) {
 	e.mu.Lock()
 	revision := e.state.Revision
-	rules := make([]Rule, 0)
+	type dueStep struct {
+		ruleID string
+		offset int
+	}
+	due := make([]dueStep, 0)
 	for _, rule := range e.state.Items {
 		schedule := rule.Trigger.Schedule
 		if !rule.Enabled || schedule == nil {
 			continue
 		}
 		local := now.UTC().Add(time.Duration(schedule.UTCOffsetMinutes) * time.Minute)
-		minuteKey := local.Format("2006-01-02 15:04")
-		if local.Format("15:04") != schedule.Time || !containsDay(schedule.Weekdays, int(local.Weekday())) || e.lastSchedule[rule.ID] == minuteKey {
-			continue
+		for _, offset := range actionOffsets(rule.Actions) {
+			origin := local.Add(-time.Duration(offset) * time.Minute)
+			minuteKey := origin.Format("2006-01-02 15:04")
+			key := fmt.Sprintf("%s:%d", rule.ID, offset)
+			if origin.Format("15:04") != schedule.Time || !containsDay(schedule.Weekdays, int(origin.Weekday())) || e.lastSchedule[key] == minuteKey {
+				continue
+			}
+			e.lastSchedule[key] = minuteKey
+			due = append(due, dueStep{ruleID: rule.ID, offset: offset})
 		}
-		e.lastSchedule[rule.ID] = minuteKey
-		rules = append(rules, rule)
 	}
 	e.mu.Unlock()
-	for _, rule := range rules {
-		_, _ = e.enqueueAtRevision(rule.ID, "schedule", revision)
+	for _, step := range due {
+		_, _ = e.enqueueScheduleAtRevision(step.ruleID, step.offset, revision)
 	}
+}
+
+func actionOffsets(actions []Action) []int {
+	seen := make(map[int]bool)
+	offsets := make([]int, 0, len(actions))
+	for _, action := range actions {
+		if seen[action.OffsetMinutes] {
+			continue
+		}
+		seen[action.OffsetMinutes] = true
+		offsets = append(offsets, action.OffsetMinutes)
+	}
+	return offsets
 }
 
 func containsDay(days []int, want int) bool {

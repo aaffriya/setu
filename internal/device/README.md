@@ -7,7 +7,9 @@ capabilities.
 
 - `Device`: ID, name, brand, driver, model, MAC, capability IDs, and a cheap
   cached `State()`; it must not perform I/O.
-- Optional lifecycle: `Closer`, and internal `Pollable`.
+- Optional lifecycle: `Closer`, internal `Pollable`, and the explicit
+  `ReachabilityReporter` opt-in for drivers whose `State.Online` means live
+  contact.
 - Power/light: `Switchable`, `Dimmable`, `ColorControl`,
   `ColorTempControl`, `SceneControl`, `LightSwitch`.
 - Fan: `SpeedControl`, `SleepMode`, `TimerControl`.
@@ -15,8 +17,10 @@ capabilities.
   `AppControl`.
 - Wake-only: `WakeOnLAN`.
 
-`Pollable` is not a UI capability. A driver that returns useful fallback state
-without a live response wraps `ErrPollNoResponse`.
+`Pollable` is not a UI capability and does not by itself mean the driver reports
+reachability. A driver that returns useful fallback state without a live
+response wraps `ErrPollNoResponse`; only drivers whose `Online` field really is
+live contact implement `ReachabilityReporter`.
 
 `State` must remain comparable because manager change detection uses `!=`.
 Keep its fields scalar. Ranges and lists belong on capability methods and are

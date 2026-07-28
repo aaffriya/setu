@@ -76,6 +76,10 @@ test('a new account shows its token exactly once', () => {
   assert.match(users, /it will not be shown again/)
   assert.match(users, /if \(result\.token\) issued =/)
   assert.match(users, /rotateUserToken/)
+  assert.match(users, /function closePeople\(\)[\s\S]*?if \(issued\) return/)
+  assert.match(users, /if \(event\.key !== 'Escape'\) return[\s\S]*?if \(issued\) return/)
+  assert.match(users, /disabled=\{Boolean\(issued\)\}/)
+  assert.match(users, />I’ve saved it</)
   // Only a name is collected: there is no password to choose.
   assert.doesNotMatch(users, /type="password"/)
 })
@@ -88,14 +92,21 @@ test('device access is explicit and says so', () => {
   assert.match(api, /export async function deleteUser/)
 })
 
-// The three new triggers, each with the field that cannot be defaulted.
-test('the editor offers the metric, offline and presence triggers', () => {
-  for (const kind of ['device_state', 'device_offline', 'presence']) {
+// The reachability and relation triggers each expose the field that cannot be
+// defaulted, while the six tabs remain usable in the narrow settings drawer.
+test('the editor offers metric, offline, online and presence triggers', () => {
+  for (const kind of ['device_state', 'device_offline', 'device_online', 'presence']) {
     assert.match(automations, new RegExp(`value: '${kind}'`))
   }
   assert.match(automations, /function setMetric/)
   assert.match(automations, /Runs on the crossing, not while the value stays there/)
   assert.match(automations, /arms again only after it is seen back on the network/)
+  assert.match(automations, /Duration uses completed minutes/)
+  assert.match(automations, /grid-cols-3[\s\S]{0,100}sm:grid-cols-6/)
+  assert.match(api, /type: 'device_online'/)
+  assert.match(api, /operator: AutomationComparison/)
+  assert.match(api, /reports_reachability: item\.reports_reachability === true/)
+  assert.match(automations, /device\.reports_reachability/)
   assert.match(automations, /function isMAC/)
 })
 
@@ -112,10 +123,23 @@ test('presence is disabled where the host cannot answer it', () => {
 test('restore disables rules the target installation cannot run', () => {
   assert.match(backup, /METRIC_CAPABILITY/)
   assert.match(backup, /rule\.trigger\.type === 'device_offline'/)
+  assert.match(backup, /rule\.trigger\.type === 'device_online'/)
+  assert.match(backup, /source\?\.reports_reachability/)
   assert.match(backup, /rule\.trigger\.type === 'presence' && !presence/)
 })
 
 test('a draft is only savable once its trigger is complete', () => {
   assert.match(automations, /function draftIsComplete/)
   assert.match(automations, /disabled=\{saving \|\| !draftIsComplete\(draft\)\}/)
+})
+
+test('the editor exposes bounded action guards and non-blocking timed steps', () => {
+  assert.match(api, /when\?: AutomationCondition\[\]/)
+  assert.match(api, /offset_minutes\?: number/)
+  assert.match(api, /skipped\?: boolean/)
+  assert.match(automations, /Only if \(checked before action\)/)
+  assert.match(automations, /Run after start/)
+  assert.match(automations, /max="1439"/)
+  assert.match(automations, /Run first step/)
+  assert.match(automations, /result\.skipped/)
 })

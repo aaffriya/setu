@@ -75,6 +75,8 @@ func (b *base) Brand() string { return Brand }
 func (b *base) MAC() string   { return b.mac }
 func (b *base) Model() string { return b.model }
 
+func (*base) ReportsReachability() bool { return true }
+
 func (b *base) State() device.State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -458,6 +460,6 @@ func NewTunableWhite(spec config.DeviceSpec, deps config.Deps) (device.Device, e
 
 // Register wires the WiZ drivers into the factory (called from cmd/setu/main.go).
 func Register(f *config.Factory) {
-	f.Register(Brand, DriverColorBulb, "Colour bulb", New)
-	f.Register(Brand, DriverTunableWhite, "Tunable-white bulb", NewTunableWhite)
+	f.Register("Light", Brand, DriverColorBulb, "Colour Bulb", New)
+	f.Register("Light", Brand, DriverTunableWhite, "Tunable White Bulb", NewTunableWhite)
 }

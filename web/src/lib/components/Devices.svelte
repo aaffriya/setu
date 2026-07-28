@@ -14,8 +14,13 @@
 
   let {
     disabled = false,
+    startOpen = false,
     onmodalchange = () => {},
-  }: { disabled?: boolean; onmodalchange?: (open: boolean) => void } = $props()
+  }: {
+    disabled?: boolean
+    startOpen?: boolean
+    onmodalchange?: (open: boolean) => void
+  } = $props()
 
   let open = $state(false)
   let busy = $state(false)
@@ -32,12 +37,18 @@
   // Manual add
   let manual = $state(false)
   let types = $state<DeviceType[]>([])
+  let manualCategory = $state('')
+  let manualBrand = $state('')
   let manualType = $state('')
   let manualName = $state('')
   let manualMAC = $state('')
 
   // Remove needs a second tap: a device carries automations and preferences.
   let confirmRemove = $state('')
+
+  $effect(() => {
+    if (startOpen) openDialog()
+  })
 
   function report(reason: unknown, fallback: string) {
     error = reason instanceof Error ? reason.message : fallback
@@ -51,15 +62,52 @@
 
   async function loadTypes() {
     try {
-      types = await listDeviceTypes()
-      if (!manualType && types.length) manualType = typeKey(types[0])
+      const next = await listDeviceTypes()
+      types = next
+      if (!next.some((type) => type.category === manualCategory)) {
+        manualCategory = ''
+        manualBrand = ''
+        manualType = ''
+      } else if (
+        !next.some((type) => type.category === manualCategory && type.brand === manualBrand)
+      ) {
+        manualBrand = ''
+        manualType = ''
+      } else if (!next.some((type) => typeKey(type) === manualType)) {
+        manualType = ''
+      }
     } catch (reason) {
       report(reason, 'Could not load the device catalog.')
     }
   }
 
   const typeKey = (type: DeviceType) => `${type.brand}/${type.driver}`
-  const typeLabel = (type: DeviceType) => `${type.brand} · ${type.label}`
+  const unique = (values: string[]) => [...new Set(values)]
+
+  let manualCategories = $derived(unique(types.map((type) => type.category)))
+  let manualBrands = $derived(
+    unique(
+      types
+        .filter((type) => type.category === manualCategory)
+        .map((type) => type.brand),
+    ),
+  )
+  let manualModels = $derived(
+    types.filter(
+      (type) => type.category === manualCategory && type.brand === manualBrand,
+    ),
+  )
+
+  function selectManualCategory(category: string) {
+    manualCategory = category
+    manualBrand = ''
+    manualType = ''
+  }
+
+  function selectManualBrand(brand: string) {
+    manualBrand = brand
+    manualType = ''
+  }
 
   // What to call a device that has not been named yet. The server labels each
   // driver ("Tizen TV"), so nothing here has to turn a driver key into English.
@@ -125,9 +173,22 @@
 
   async function addManual() {
     if (busy) return
-    const type = types.find((candidate) => typeKey(candidate) === manualType)
-    if (!type) {
+    if (!manualCategory) {
       report(new Error('Pick a device type.'), 'Pick a device type.')
+      return
+    }
+    if (!manualBrand) {
+      report(new Error('Pick a brand.'), 'Pick a brand.')
+      return
+    }
+    const type = types.find(
+      (candidate) =>
+        candidate.category === manualCategory &&
+        candidate.brand === manualBrand &&
+        typeKey(candidate) === manualType,
+    )
+    if (!type) {
+      report(new Error('Pick a model.'), 'Pick a model.')
       return
     }
     busy = true
@@ -138,6 +199,9 @@
         name: manualName.trim() || `${type.brand} ${type.label}`,
         mac: manualMAC.trim(),
       })
+      manualCategory = ''
+      manualBrand = ''
+      manualType = ''
       manualName = ''
       manualMAC = ''
       manual = false
@@ -228,7 +292,7 @@
   })
 
   const field =
-    'min-w-0 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-sm text-ink/80 outline-none ring-indigo-400/50 placeholder:text-ink/35 focus:ring-2'
+    'min-w-0 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-sm text-ink/80 outline-none ring-indigo-400/50 placeholder:text-ink/35 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50'
 </script>
 
 <button
@@ -237,7 +301,7 @@
   {disabled}
   class="flex w-full items-center gap-3 rounded-xl bg-ink/5 px-3 py-2.5 text-left transition hover:bg-ink/10 disabled:opacity-40"
 >
-  <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-300">
+  <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-indigo-500/10 text-indigo-500 dark:text-indigo-300">
     <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M12 20h.01" /><path d="M8.5 16.4a5 5 0 0 1 7 0" /><path d="M5 12.9a10 10 0 0 1 14 0" /><path d="M1.5 9.4a15 15 0 0 1 21 0" />
     </svg>
@@ -408,9 +472,38 @@
               that was asleep. The MAC is its identity; Setu finds the IP itself.
             </p>
             <div class="mt-2 space-y-1.5">
-              <select class="{field} w-full" bind:value={manualType} aria-label="Device type">
-                {#each types as type (typeKey(type))}
-                  <option value={typeKey(type)}>{typeLabel(type)}</option>
+              <select
+                class="{field} w-full"
+                value={manualCategory}
+                onchange={(event) => selectManualCategory(event.currentTarget.value)}
+                aria-label="Device type"
+              >
+                <option value="">Select Type</option>
+                {#each manualCategories as category (category)}
+                  <option value={category}>{category}</option>
+                {/each}
+              </select>
+              <select
+                class="{field} w-full"
+                value={manualBrand}
+                onchange={(event) => selectManualBrand(event.currentTarget.value)}
+                disabled={!manualCategory}
+                aria-label="Device brand"
+              >
+                <option value="">Select Brand</option>
+                {#each manualBrands as brand (brand)}
+                  <option value={brand}>{brand}</option>
+                {/each}
+              </select>
+              <select
+                class="{field} w-full"
+                bind:value={manualType}
+                disabled={!manualBrand}
+                aria-label="Device model"
+              >
+                <option value="">Select Model</option>
+                {#each manualModels as type (typeKey(type))}
+                  <option value={typeKey(type)}>{type.label}</option>
                 {/each}
               </select>
               <input class="{field} w-full" bind:value={manualName} maxlength="48" placeholder="Name (e.g. Home NAS)" aria-label="Device name" />
@@ -428,7 +521,7 @@
               <button
                 type="button"
                 onclick={addManual}
-                disabled={busy || !manualMAC.trim()}
+                disabled={busy || !manualType || !manualMAC.trim()}
                 class="w-full rounded-lg bg-indigo-500 py-2 text-xs font-semibold text-white transition hover:bg-indigo-600 disabled:opacity-40"
               >
                 Add device

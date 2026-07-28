@@ -103,6 +103,45 @@ func TestRestrictedAccountCannotWriteRulesForOtherDevices(t *testing.T) {
 	}
 }
 
+func TestRestrictedAccountCannotUseOtherDevicesInActionConditions(t *testing.T) {
+	handler, registry, engine := scopedServer(t)
+	_, token, err := registry.Create("Priya", users.RoleModify, []string{"lamp"})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	body := `{"version":1,"revision":` + revisionOf(t, engine) + `,"paused":false,"items":[
+		{"id":"guarded","name":"guarded","enabled":true,"trigger":{"type":"webhook","webhook":{}},
+		 "actions":[{"device_id":"lamp","action":"on","when":[{"device_id":"tv","on":true}]}]}]}`
+	w := as(t, handler, token, http.MethodPut, "/api/automations", body)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body.String())
+	}
+	if len(engine.Snapshot().Items) != 0 {
+		t.Fatal("rule with an unauthorized action condition was stored")
+	}
+}
+
+func TestRestrictedAccountCannotUseOtherDevicesInOnlineTriggers(t *testing.T) {
+	handler, registry, engine := scopedServer(t)
+	_, token, err := registry.Create("Priya", users.RoleModify, []string{"lamp"})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	body := `{"version":1,"revision":` + revisionOf(t, engine) + `,"paused":false,"items":[
+		{"id":"recovered","name":"recovered","enabled":true,
+		 "trigger":{"type":"device_online","online":{"device_id":"tv","operator":"above","minutes":10}},
+		 "actions":[{"device_id":"lamp","action":"on"}]}]}`
+	w := as(t, handler, token, http.MethodPut, "/api/automations", body)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body.String())
+	}
+	if len(engine.Snapshot().Items) != 0 {
+		t.Fatal("rule with an unauthorized online trigger was stored")
+	}
+}
+
 // The account was only ever shown its own rules, so a straight replace would
 // delete everyone else's. The server carries the rest through untouched.
 func TestRestrictedSaveKeepsRulesItCannotSee(t *testing.T) {

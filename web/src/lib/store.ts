@@ -220,6 +220,9 @@ export async function refresh(hardwareRefresh = false): Promise<void> {
     if (generation !== refreshGeneration) return
     if (err instanceof ApiError && err.status === 401) {
       connection.set('unauthorized')
+      // A rejected token cannot recover by reconnecting the same WebSocket.
+      // Stop its backoff loop; saving another token calls connect() again.
+      disconnect()
     } else if (!ws || ws.readyState !== WebSocket.OPEN) {
       // A REST snapshot can time out while the current WebSocket is already
       // delivering live state. Keep that proven-live connection online.
@@ -525,12 +528,38 @@ export function toggleExpanded(id: string): void {
 
 // --- WebSocket: live updates with auto-reconnect -----------------------------
 
-type WsMessage = { type: string; device_id: string; state: DeviceState }
+type WsMessage = {
+  type: string
+  device_id?: string
+  state?: DeviceState
+}
 
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let backoff = 1000
 let stopped = false
+let reconcileOnOpen = false
+let inventoryRefreshRunning = false
+let inventoryRefreshPending = false
+
+// Inventory events can arrive in a short burst (for example, a restore plus
+// grant pruning). Coalesce them, but keep one trailing refresh when an event
+// lands during the current request so the final mutation cannot be missed.
+async function reconcileVisibleInventory(): Promise<void> {
+  if (inventoryRefreshRunning) {
+    inventoryRefreshPending = true
+    return
+  }
+  inventoryRefreshRunning = true
+  try {
+    do {
+      inventoryRefreshPending = false
+      await Promise.all([refresh(false), loadSession()])
+    } while (inventoryRefreshPending)
+  } finally {
+    inventoryRefreshRunning = false
+  }
+}
 
 export function connect(): void {
   stopped = false
@@ -570,14 +599,33 @@ function openSocket(): void {
     if (ws !== sock) return
     backoff = 1000
     connection.set('online')
+    // An unexpected disconnect can span inventory/grant changes whose event
+    // this tab never saw. Reconcile once after the transport is live again.
+    if (reconcileOnOpen) {
+      reconcileOnOpen = false
+      void reconcileVisibleInventory()
+    }
   }
   sock.onmessage = (ev) => {
     if (ws !== sock) return
     try {
       const msg = JSON.parse(ev.data as string) as WsMessage
-      noteAuthoritative(msg.device_id)
+      if (msg.type === 'inventory_changed') {
+        void reconcileVisibleInventory()
+        return
+      }
+      if (
+        (msg.type !== 'snapshot' && msg.type !== 'state_changed') ||
+        !msg.device_id ||
+        !msg.state
+      ) {
+        return
+      }
+      const deviceID = msg.device_id
+      const state = msg.state
+      noteAuthoritative(deviceID)
       devices.update((list) =>
-        list.map((d) => (d.id === msg.device_id ? { ...d, state: msg.state } : d)),
+        list.map((d) => (d.id === deviceID ? { ...d, state } : d)),
       )
       lastUpdated.set(Date.now())
     } catch {
@@ -588,6 +636,7 @@ function openSocket(): void {
     if (ws !== sock) return
     ws = null
     if (!stopped) {
+      reconcileOnOpen = true
       connection.set('offline')
       scheduleReconnect()
     }
@@ -614,6 +663,7 @@ function clearReconnect(): void {
 
 export function disconnect(): void {
   stopped = true
+  reconcileOnOpen = false
   clearReconnect()
   const sock = ws
   ws = null // neutralizes sock's handlers first (they identity-check `ws`)

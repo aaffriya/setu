@@ -17,6 +17,12 @@ type emptyARP struct{}
 
 func (emptyARP) Lookup(string) (net.IP, error) { return nil, errors.New("no arp entry") }
 
+func TestBulbAdvertisesLiveReachability(t *testing.T) {
+	if !device.ReportsReachability(&Bulb{}) {
+		t.Fatal("example bulb did not advertise live reachability")
+	}
+}
+
 func newTestBulb(t *testing.T) *Bulb {
 	t.Helper()
 	dev, err := New(config.DeviceSpec{

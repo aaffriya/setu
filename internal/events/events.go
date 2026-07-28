@@ -1,9 +1,10 @@
 // Package events provides a tiny, dependency-free publish/subscribe bus built
 // on Go channels. It is the backbone of Setu's event-driven core: devices and
-// the state poller publish StateChanged events; the WebSocket hub subscribes to
-// push them to browsers, and the manager subscribes to keep a fast state
-// snapshot. The automation engine uses the recoverable subscription at this
-// same seam, without changing publishers.
+// the state poller publish StateChanged events; inventory/account handlers
+// publish InventoryChanged when a browser's visible list may have changed; the
+// WebSocket hub subscribes to push them to browsers, and the manager subscribes
+// to keep a fast state snapshot. The automation engine uses the recoverable
+// subscription at this same seam, without changing publishers.
 package events
 
 import (
@@ -20,15 +21,24 @@ type Type string
 const (
 	// StateChanged is emitted whenever a device's State changes.
 	StateChanged Type = "state_changed"
+	// InventoryChanged tells frontends to re-read their permission-filtered
+	// inventory and session after devices or grants change. Device mutations may
+	// attach membership for in-process consumers; WebSockets expose no metadata.
+	InventoryChanged Type = "inventory_changed"
 )
 
 // Event is a single message on the bus. A zero Time is filled in by Publish, so
 // publishers don't have to remember to stamp it.
 type Event struct {
-	Type     Type         `json:"type"`
-	DeviceID string       `json:"device_id"`
-	State    device.State `json:"state"`
-	Time     time.Time    `json:"time"`
+	Type     Type   `json:"type"`
+	DeviceID string `json:"device_id"`
+	// DeviceIDs is non-nil only for device-membership changes. ResetDevices says
+	// a whole-list restore replaced even ids that happen to occur in both lists.
+	// Both are in-process only; API WebSockets build their own metadata-free hint.
+	DeviceIDs    []string     `json:"-"`
+	ResetDevices bool         `json:"-"`
+	State        device.State `json:"state"`
+	Time         time.Time    `json:"time"`
 }
 
 // Bus is a fan-out pub/sub hub, safe for concurrent use. Subscribers receive

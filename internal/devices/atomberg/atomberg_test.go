@@ -18,6 +18,17 @@ import (
 
 const testMAC = "a0:76:4e:5a:ee:98"
 
+func TestFansAdvertiseLiveReachability(t *testing.T) {
+	for name, fan := range map[string]device.Device{
+		"fan":       &Fan{},
+		"fan light": &FanLight{},
+	} {
+		if !device.ReportsReachability(fan) {
+			t.Errorf("%s did not advertise live reachability", name)
+		}
+	}
+}
+
 // emptyARP stands in for a host that has never seen the fan, so the tests
 // exercise the beacon path rather than accidentally passing through ARP.
 type emptyARP struct{}

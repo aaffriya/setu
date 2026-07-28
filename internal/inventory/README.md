@@ -26,3 +26,8 @@ disk.
 
 Removing a device does not rewrite automations. Missing references fail at run
 time and are disabled on the next automation-engine startup.
+
+Removal and restore prune stored account grants in the same `internal/store`
+update that writes the new device list. The two sections either both commit or
+neither does, so a MAC-derived id cannot return with access from an incomplete
+earlier delete.

@@ -31,17 +31,18 @@ type Factory struct {
 	types        []DeviceType
 }
 
-// DeviceType is one registered (brand, driver) pair plus the human label that
-// names it on screen. The UI lists these when a device has to be added by hand
-// (a Wake-on-LAN target answers no scan), so the catalog stays in code — the
-// only place that knows what Setu can actually drive.
+// DeviceType is one registered (brand, driver) pair plus the category and human
+// label that name it on screen. The UI lists these when a device has to be added
+// by hand (a Wake-on-LAN target answers no scan), so the catalog stays in code —
+// the only place that knows what Setu can actually drive.
 //
 // Label exists so a driver key never has to be shown: "tizen" is a lookup key,
 // "Tizen TV" is what a person is choosing between.
 type DeviceType struct {
-	Brand  string `json:"brand"`
-	Driver string `json:"driver"`
-	Label  string `json:"label"`
+	Category string `json:"category"`
+	Brand    string `json:"brand"`
+	Driver   string `json:"driver"`
+	Label    string `json:"label"`
 }
 
 // NewFactory returns an empty Factory.
@@ -50,10 +51,13 @@ func NewFactory() *Factory {
 }
 
 // Types returns every registered driver, sorted the way the picker reads them:
-// by brand, then by label.
+// by category, brand, then label.
 func (f *Factory) Types() []DeviceType {
 	out := append([]DeviceType(nil), f.types...)
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Category != out[j].Category {
+			return out[i].Category < out[j].Category
+		}
 		if out[i].Brand != out[j].Brand {
 			return out[i].Brand < out[j].Brand
 		}
@@ -71,19 +75,27 @@ func key(brand, driver string) string {
 }
 
 // Register associates a (brand, driver) pair with its Constructor, under the
-// label the UI shows for it. It panics on a duplicate, since that is always a
-// programming error in the composition root (cmd/setu/main.go), not a runtime
-// condition.
-func (f *Factory) Register(brand, driver, label string, c Constructor) {
+// category and label the UI shows for it. It panics on invalid display metadata
+// or a duplicate, since those are programming errors in the composition root
+// (cmd/setu/main.go), not runtime conditions.
+func (f *Factory) Register(category, brand, driver, label string, c Constructor) {
 	k := key(brand, driver)
 	if _, exists := f.constructors[k]; exists {
 		panic(fmt.Sprintf("config: device driver %q already registered", k))
+	}
+	if category == "" {
+		panic(fmt.Sprintf("config: device driver %q needs a category", k))
 	}
 	if label == "" {
 		panic(fmt.Sprintf("config: device driver %q needs a label", k))
 	}
 	f.constructors[k] = c
-	f.types = append(f.types, DeviceType{Brand: brand, Driver: driver, Label: label})
+	f.types = append(f.types, DeviceType{
+		Category: category,
+		Brand:    brand,
+		Driver:   driver,
+		Label:    label,
+	})
 }
 
 // Supports reports whether a (brand, driver) pair can be built.

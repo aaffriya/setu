@@ -28,8 +28,11 @@
   // WoL devices are just a Wake trigger — no power, brightness, colour or volume,
   // so a scene has nothing to capture from them. Keep them out of the picker.
   let sceneDevices = $derived($devices.filter((d) => !d.capabilities.includes('wol')))
+  let canCreate = $derived(!disabled && sceneDevices.length > 0)
+  let unavailable = $derived(disabled || (sceneDevices.length === 0 && $scenes.length === 0))
 
   function openCreate() {
+    if (!canCreate) return
     haptics.tap()
     draft = ''
     picks = Object.fromEntries(sceneDevices.map((d) => [d.id, { include: true, launch: '' }]))
@@ -51,16 +54,29 @@
 
   function run(id: string) {
     const s = $scenes.find((x) => x.id === id)
-    if (!s) return
+    if (!s || !canRun(id)) return
     haptics.tap()
     runScene(s)
     open = false
+  }
+
+  function canRun(id: string): boolean {
+    if (disabled) return false
+    const scene = $scenes.find((item) => item.id === id)
+    if (!scene) return false
+    const live = new Set($devices.map((device) => device.id))
+    return scene.commands.some((command) => live.has(command.deviceId))
   }
   function focusOnMount(node: HTMLInputElement) {
     node.focus()
   }
 
   $effect(() => onmodalchange(open || creating))
+  $effect(() => {
+    if (!unavailable) return
+    open = false
+    creating = false
+  })
   onDestroy(() => onmodalchange(false))
 
   // Consume Escape here so the parent Settings dialog remains open.
@@ -84,12 +100,14 @@
   <button
     type="button"
     onclick={() => {
+      if (unavailable) return
       haptics.tap()
       open = !open
     }}
+    disabled={unavailable}
     aria-expanded={open}
     class="relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition
-           {open ? 'bg-indigo-500/15' : 'bg-ink/5 hover:bg-ink/10'}"
+           {open ? 'bg-indigo-500/15' : 'bg-ink/5 hover:bg-ink/10'} disabled:opacity-40"
   >
     <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-indigo-500/10 text-indigo-500 dark:text-indigo-300">
       <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -99,7 +117,13 @@
     </span>
     <span class="min-w-0 flex-1">
       <span class="block text-sm font-medium text-ink/75">Scenes</span>
-      <span class="block text-xs text-ink/40">Save and run device presets</span>
+      <span class="block text-xs text-ink/40">
+        {sceneDevices.length === 0
+          ? $scenes.length
+            ? 'Review or remove saved scenes'
+            : 'Add a scene-capable device first'
+          : 'Save and run device presets'}
+      </span>
     </span>
     {#if $scenes.length}<span class="rounded-full bg-indigo-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">{$scenes.length}</span>{/if}
     <span class="text-lg text-ink/30" aria-hidden="true">›</span>
@@ -136,7 +160,7 @@
             <div class="flex items-center gap-1">
               <button
                 type="button"
-                {disabled}
+                disabled={!canRun(scene.id)}
                 onclick={() => run(scene.id)}
                 class="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left text-sm transition hover:bg-ink/5 disabled:opacity-40"
               >
@@ -169,6 +193,7 @@
         <button
           type="button"
           onclick={openCreate}
+          disabled={!canCreate}
           class="flex w-full items-center justify-center gap-2 rounded-xl bg-ink/5 py-2 text-sm font-medium text-ink/70 transition hover:bg-ink/10"
         >
           <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>

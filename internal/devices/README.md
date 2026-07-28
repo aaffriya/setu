@@ -17,9 +17,9 @@ capabilities. `base` carries the reported `model`; the driver type carries
 Each package exports constructors and `Register(*config.Factory)`.
 
 Addressable drivers cache the resolved IP and invalidate it after transport
-failure. Scan-capable brands also implement `resolver.Scanner`, registering a
-human label per driver. Hardware with no driver here is reported with an empty
-driver rather than being guessed at.
+failure. Scan-capable brands also implement `resolver.Scanner`; every driver
+registers a human category and label. Hardware with no driver here is reported
+with an empty driver rather than being guessed at.
 
 Use [`example`](example/README.md) and the root
 [`Adding a driver`](../../README.md#adding-a-driver) checklist.

@@ -59,6 +59,10 @@ func (d *testSwitch) onCount() int {
 	return d.ons
 }
 
+type failingSwitch struct{ testSwitch }
+
+func (*failingSwitch) On() error { return errors.New("transport failed") }
+
 func newTestEngine(t *testing.T, devices ...device.Device) *Engine {
 	t.Helper()
 	bus := events.NewBus()
@@ -201,6 +205,184 @@ func TestScheduleRunsOncePerMatchingMinute(t *testing.T) {
 	}
 }
 
+func TestTimedScheduleRunsOnlyTheDueOffsetAndIgnoresCooldown(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	rule := Rule{
+		ID:      "evening",
+		Name:    "Evening",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+			Time: "21:00", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+		}},
+		Actions: []Action{
+			{DeviceID: target.id, Action: "on"},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 15},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 30},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 45},
+		},
+		CooldownSeconds: 3600,
+	}
+	replaceRules(t, engine, rule)
+	start := time.Date(2026, time.July, 20, 21, 0, 10, 0, time.UTC) // Monday.
+	for index, offset := range []int{0, 15, 30, 45} {
+		engine.evaluateSchedules(start.Add(time.Duration(offset) * time.Minute))
+		want := index + 1
+		waitFor(t, func() bool { return target.onCount() == want })
+		runs := engine.Snapshot().Runs
+		if len(runs) == 0 || runs[0].OffsetMinutes != offset {
+			t.Fatalf("offset %d run = %+v", offset, runs)
+		}
+	}
+
+	engine.evaluateSchedules(start.Add(45*time.Minute + 20*time.Second))
+	time.Sleep(30 * time.Millisecond)
+	if target.onCount() != 4 {
+		t.Fatalf("timed schedule ran %d times, want one run per offset", target.onCount())
+	}
+}
+
+func TestTimedScheduleAnchorsWeekdayBeforeMidnightCrossingAndDoesNotCatchUp(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	rule := Rule{
+		ID:      "late",
+		Name:    "Late",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+			Time: "23:50", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+		}},
+		Actions: []Action{
+			{DeviceID: target.id, Action: "off"},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 30},
+		},
+	}
+	replaceRules(t, engine, rule)
+	due := time.Date(2026, time.July, 21, 0, 20, 5, 0, time.UTC) // Tuesday, from Monday 23:50.
+	engine.evaluateSchedules(due)
+	waitFor(t, func() bool { return target.onCount() == 1 })
+
+	engine.evaluateSchedules(due.Add(time.Minute))
+	time.Sleep(30 * time.Millisecond)
+	if target.onCount() != 1 {
+		t.Fatalf("missed timed step was replayed: %d runs", target.onCount())
+	}
+}
+
+func TestRunNowTimedScheduleRunsOnlyOffsetZero(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	rule := Rule{
+		ID:      "manual_timeline",
+		Name:    "Manual timeline",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+			Time: "21:00", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+		}},
+		Actions: []Action{
+			{DeviceID: target.id, Action: "on"},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 15},
+		},
+	}
+	replaceRules(t, engine, rule)
+	if result, err := engine.RunNow(rule.ID); err != nil || result.Status != "queued" {
+		t.Fatalf("run timed schedule now = %+v, %v", result, err)
+	}
+	waitFor(t, func() bool { return len(engine.Snapshot().Runs) == 1 })
+	run := engine.Snapshot().Runs[0]
+	if target.onCount() != 1 || len(run.Results) != 1 || run.OffsetMinutes != 0 {
+		t.Fatalf("manual timed run = %+v, target runs = %d", run, target.onCount())
+	}
+}
+
+func TestTimedScheduleChecksTopLevelConditionsForEveryStep(t *testing.T) {
+	condition := &testSwitch{id: "condition"}
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, condition, target)
+	condition.set(true)
+	rule := Rule{
+		ID:      "guarded",
+		Name:    "Guarded",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+			Time: "18:00", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+		}},
+		Conditions: []Condition{{DeviceID: condition.id, On: true}},
+		Actions: []Action{
+			{DeviceID: target.id, Action: "on"},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 15},
+		},
+	}
+	replaceRules(t, engine, rule)
+	start := time.Date(2026, time.July, 20, 18, 0, 0, 0, time.UTC)
+	engine.evaluateSchedules(start)
+	waitFor(t, func() bool { return target.onCount() == 1 })
+	condition.set(false)
+	engine.evaluateSchedules(start.Add(15 * time.Minute))
+	time.Sleep(30 * time.Millisecond)
+	if target.onCount() != 1 {
+		t.Fatal("later timed step ignored its current top-level condition")
+	}
+}
+
+func TestTimedSchedulePreservesDeclaredOrderWithinOneOffset(t *testing.T) {
+	condition := &testSwitch{id: "condition"}
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, condition, target)
+	rule := Rule{
+		ID:      "ordered_timeline",
+		Name:    "Ordered timeline",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+			Time: "18:00", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+		}},
+		Actions: []Action{
+			{DeviceID: target.id, Action: "off"},
+			{DeviceID: condition.id, Action: "on", OffsetMinutes: 15},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 15, When: []Condition{{DeviceID: condition.id, On: true}}},
+		},
+	}
+	replaceRules(t, engine, rule)
+	due := time.Date(2026, time.July, 20, 18, 15, 0, 0, time.UTC)
+	engine.evaluateSchedules(due)
+	waitFor(t, func() bool { return len(engine.Snapshot().Runs) == 1 })
+	run := engine.Snapshot().Runs[0]
+	if !run.OK || run.OffsetMinutes != 15 || target.onCount() != 1 || len(run.Results) != 2 {
+		t.Fatalf("ordered timed step = %+v, target runs = %d", run, target.onCount())
+	}
+}
+
+func TestTimedScheduleDoesNotBacklogAnOverlappingStep(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	rule := Rule{
+		ID:      "overlap",
+		Name:    "Overlap",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+			Time: "18:00", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+		}},
+		Actions: []Action{
+			{DeviceID: target.id, Action: "on"},
+			{DeviceID: target.id, Action: "on", OffsetMinutes: 15},
+		},
+	}
+	replaceRules(t, engine, rule)
+	engine.mu.Lock()
+	engine.running[rule.ID] = true
+	engine.mu.Unlock()
+	due := time.Date(2026, time.July, 20, 18, 15, 0, 0, time.UTC)
+	engine.evaluateSchedules(due)
+	engine.mu.Lock()
+	delete(engine.running, rule.ID)
+	engine.mu.Unlock()
+	engine.evaluateSchedules(due.Add(20 * time.Second))
+	time.Sleep(30 * time.Millisecond)
+	if target.onCount() != 0 || len(engine.Snapshot().Runs) != 0 {
+		t.Fatal("overlapping timed step was queued or replayed")
+	}
+}
+
 func TestFullQueueDoesNotConsumeCooldown(t *testing.T) {
 	bus := events.NewBus()
 	target := &testSwitch{id: "target", bus: bus}
@@ -231,6 +413,58 @@ func TestFullQueueDoesNotConsumeCooldown(t *testing.T) {
 	result, err := engine.RunNow(rule.ID)
 	if err != nil || result.Status != "queued" {
 		t.Fatalf("retry after queue space = %+v, %v; cooldown was consumed", result, err)
+	}
+}
+
+func TestActionConditionSeesStateFromPreviousAction(t *testing.T) {
+	condition := &testSwitch{id: "condition"}
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, condition, target)
+	rule := webhookRule("guarded", target.id)
+	rule.Actions = []Action{
+		{DeviceID: condition.id, Action: "on"},
+		{DeviceID: target.id, Action: "on", When: []Condition{{DeviceID: condition.id, On: true}}},
+	}
+	replaceRules(t, engine, rule)
+	if result, err := engine.RunNow(rule.ID); err != nil || result.Status != "queued" {
+		t.Fatalf("run guarded actions = %+v, %v", result, err)
+	}
+	waitFor(t, func() bool { return len(engine.Snapshot().Runs) == 1 })
+	run := engine.Snapshot().Runs[0]
+	if !run.OK || target.onCount() != 1 || len(run.Results) != 2 || !run.Results[1].OK {
+		t.Fatalf("guarded run = %+v, target runs = %d", run, target.onCount())
+	}
+}
+
+func TestUnmetActionConditionIsSuccessfulSkip(t *testing.T) {
+	condition := &testSwitch{id: "condition"}
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, condition, target)
+	rule := webhookRule("guarded", target.id)
+	rule.Actions[0].When = []Condition{{DeviceID: condition.id, On: true}}
+	replaceRules(t, engine, rule)
+	if result, err := engine.RunNow(rule.ID); err != nil || result.Status != "queued" {
+		t.Fatalf("run guarded action = %+v, %v", result, err)
+	}
+	waitFor(t, func() bool { return len(engine.Snapshot().Runs) == 1 })
+	run := engine.Snapshot().Runs[0]
+	if !run.OK || target.onCount() != 0 || len(run.Results) != 1 || !run.Results[0].Skipped || run.Results[0].OK {
+		t.Fatalf("skipped run = %+v, target runs = %d", run, target.onCount())
+	}
+}
+
+func TestCommandFailureStillFailsRun(t *testing.T) {
+	target := &failingSwitch{testSwitch: testSwitch{id: "target"}}
+	engine := newTestEngine(t, target)
+	rule := webhookRule("failing", target.id)
+	replaceRules(t, engine, rule)
+	if result, err := engine.RunNow(rule.ID); err != nil || result.Status != "queued" {
+		t.Fatalf("run failing action = %+v, %v", result, err)
+	}
+	waitFor(t, func() bool { return len(engine.Snapshot().Runs) == 1 })
+	run := engine.Snapshot().Runs[0]
+	if run.OK || len(run.Results) != 1 || run.Results[0].Skipped || run.Results[0].Error == "" {
+		t.Fatalf("failed run = %+v", run)
 	}
 }
 
@@ -364,6 +598,57 @@ func TestNestedAutomationRunsInlineInActionOrder(t *testing.T) {
 	}
 }
 
+func TestNestedAutomationWithUnmetConditionsIsSkipped(t *testing.T) {
+	condition := &testSwitch{id: "condition"}
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, condition, target)
+	child := webhookRule("child", target.id)
+	child.Conditions = []Condition{{DeviceID: condition.id, On: true}}
+	parent := Rule{
+		ID:      "parent",
+		Name:    "Conditional child",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerWebhook, Webhook: &Webhook{}},
+		Actions: []Action{{Action: ActionAutomation, AutomationID: child.ID}},
+	}
+	replaceRules(t, engine, child, parent)
+	if result, err := engine.RunNow(parent.ID); err != nil || result.Status != "queued" {
+		t.Fatalf("run parent = %+v, %v", result, err)
+	}
+	waitFor(t, func() bool { return len(engine.Snapshot().Runs) == 1 })
+	run := engine.Snapshot().Runs[0]
+	if !run.OK || run.RuleID != parent.ID || len(run.Results) != 1 || !run.Results[0].Skipped || target.onCount() != 0 {
+		t.Fatalf("conditional child run = %+v, target runs = %d", run, target.onCount())
+	}
+}
+
+func TestActionConditionAndOffsetValidationIsBounded(t *testing.T) {
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, target)
+	rule := webhookRule("invalid", target.id)
+	rule.Actions[0].When = make([]Condition, MaxConditions+1)
+	_, err := engine.Replace(State{Version: FormatVersion, Revision: 0, Items: []Rule{rule}})
+	var invalid ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("oversized action condition error = %v, want ValidationError", err)
+	}
+
+	rule = webhookRule("invalid", target.id)
+	rule.Actions[0].OffsetMinutes = 15
+	_, err = engine.Replace(State{Version: FormatVersion, Revision: 0, Items: []Rule{rule}})
+	if !errors.As(err, &invalid) {
+		t.Fatalf("non-schedule offset error = %v, want ValidationError", err)
+	}
+
+	rule.Trigger = Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+		Time: "18:00", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+	}}
+	_, err = engine.Replace(State{Version: FormatVersion, Revision: 0, Items: []Rule{rule}})
+	if !errors.As(err, &invalid) {
+		t.Fatalf("timed schedule without start error = %v, want ValidationError", err)
+	}
+}
+
 func TestNestedAutomationCycleIsRejected(t *testing.T) {
 	target := &testSwitch{id: "target"}
 	engine := newTestEngine(t, target)
@@ -411,6 +696,34 @@ func TestNestedPowerRelationCycleIsRejected(t *testing.T) {
 	var invalid ValidationError
 	if !errors.As(err, &invalid) {
 		t.Fatalf("nested power cycle error = %v, want ValidationError", err)
+	}
+}
+
+func TestNestedTimedScheduleOnlyContributesImmediateEffects(t *testing.T) {
+	source := &testSwitch{id: "source"}
+	target := &testSwitch{id: "target"}
+	engine := newTestEngine(t, source, target)
+	timeline := Rule{
+		ID:      "timeline",
+		Name:    "Timeline",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerSchedule, Schedule: &Schedule{
+			Time: "18:00", Weekdays: []int{1}, UTCOffsetMinutes: 0,
+		}},
+		Actions: []Action{
+			{DeviceID: target.id, Action: "on"},
+			{DeviceID: source.id, Action: "on", OffsetMinutes: 15},
+		},
+	}
+	relation := Rule{
+		ID:      "relation",
+		Name:    "Relation",
+		Enabled: true,
+		Trigger: Trigger{Type: TriggerDeviceState, Device: &DeviceTrigger{DeviceID: source.id, On: true}},
+		Actions: []Action{{Action: ActionAutomation, AutomationID: timeline.ID}},
+	}
+	if _, err := engine.Replace(State{Version: FormatVersion, Revision: 0, Items: []Rule{timeline, relation}}); err != nil {
+		t.Fatalf("non-immediate timed effect was treated as a nested feedback loop: %v", err)
 	}
 }
 

@@ -27,12 +27,20 @@ func namesOnlyGrantedDevices(principal Principal, rule automation.Rule) bool {
 	if trigger := rule.Trigger.Offline; trigger != nil && !principal.CanSee(trigger.DeviceID) {
 		return false
 	}
+	if trigger := rule.Trigger.Online; trigger != nil && !principal.CanSee(trigger.DeviceID) {
+		return false
+	}
 	for _, condition := range rule.Conditions {
 		if !principal.CanSee(condition.DeviceID) {
 			return false
 		}
 	}
 	for _, action := range rule.Actions {
+		for _, condition := range action.When {
+			if !principal.CanSee(condition.DeviceID) {
+				return false
+			}
+		}
 		// A nested call names no device of its own; it is resolved below.
 		if action.Action == automation.ActionAutomation {
 			continue

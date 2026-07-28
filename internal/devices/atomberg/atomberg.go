@@ -482,6 +482,8 @@ func newBase(spec config.DeviceSpec, deps config.Deps) base {
 	}
 }
 
+func (*base) ReportsReachability() bool { return true }
+
 // New builds a plain Fan (matches config.Constructor).
 func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 	f := &Fan{base: newBase(spec, deps)}
@@ -508,6 +510,6 @@ func (b *base) pushState(light lightSupport) func(Snapshot) {
 
 // Register wires Atomberg's drivers into the factory (called from cmd/setu).
 func Register(f *config.Factory) {
-	f.Register(Brand, DriverFan, "Fan", New)
-	f.Register(Brand, DriverFanLight, "Fan with light", NewFanLight)
+	f.Register("Fan", Brand, DriverFan, "Fan", New)
+	f.Register("Fan", Brand, DriverFanLight, "Fan With Light", NewFanLight)
 }

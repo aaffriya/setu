@@ -19,8 +19,9 @@ Command success updates the cache immediately. Ambiguous transport failure
 attempts one same-device poll before returning. `ErrPollNoResponse` retains
 meaningful fallback state while diagnostics records failed contact.
 
-`DeviceView` adds brand/driver/model, supported ranges/options, scenes, and
-apps to state.
+`DeviceView` adds brand/driver/model, whether live state can be polled, whether
+`Online` reports live reachability, supported ranges/options, scenes, and apps
+to state.
 With no devices, `Snapshot` returns `[]`.
 
 ## Poller

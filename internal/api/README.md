@@ -14,7 +14,7 @@ authenticated JSON routes, and live state events.
 | `POST /api/activity` | reset poll idle backoff |
 | `POST /api/devices/{id}/refresh` | serialized one-device poll |
 | `POST /api/devices/{id}/command` | execute a uniform `control.Request` |
-| `GET /api/device-types` | registered brand/driver catalog, with labels |
+| `GET /api/device-types` | registered category/brand/driver catalog, with labels |
 | `POST /api/devices` | validate, store, start, and poll a device |
 | `PATCH /api/devices/{id}` | edit `name` or `model` only |
 | `DELETE /api/devices/{id}` | remove and close a device |
@@ -28,7 +28,7 @@ authenticated JSON routes, and live state events.
 | `GET`, `POST /api/users` | list and create accounts (token returned once) |
 | `PATCH`, `DELETE /api/users/{id}` | edit or remove an account |
 | `POST /api/users/{id}/token` | rotate and return a token once |
-| `GET /ws` | snapshot, then `state_changed` events |
+| `GET /ws` | snapshot, then `state_changed` and inventory invalidation events |
 | `GET /api/recover` | public app-cache recovery page |
 
 The static shell is public; device data and actions require a bearer token.
@@ -54,9 +54,10 @@ API call, restore, or damaged state file can lock them out.
 
 Reads are filtered rather than refused: `GET /api/devices`, `/api/diagnostics`
 and the WebSocket carry only granted devices, and `GET /api/automations` only
-the rules this account owns. A socket resolves its grants once, at connect, so a
-device granted afterwards appears on the next refresh and streams live after the
-next reconnect.
+the rules this account owns. Device add/remove/rename/restore and account access
+changes publish a metadata-free `inventory_changed` frame. Every socket
+re-resolves its grants before sending it, and the browser re-reads its filtered
+inventory/session, so left-open clients reconcile without polling or reconnecting.
 
 A rule is owned when every device it names was granted **and** every rule it
 calls is owned too — running a rule runs its callees' actions, so calling one is
@@ -74,8 +75,9 @@ refreshes share one token bucket (burst 20, 5/s sustained) — so a client stuck
 a retry loop cannot saturate one device by either route.
 
 Grants follow their device: deleting one clears it from every account, and a
-restore prunes grants to the device list it installed, so an id that returns
-later never arrives pre-shared.
+restore prunes grants to the device list it installed. Inventory and grants
+share one atomic state-file update, so an id that returns later never arrives
+pre-shared even if persistence fails during removal.
 
 ## Ownership
 

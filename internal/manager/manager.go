@@ -514,6 +514,8 @@ type DeviceView struct {
 	Model        string         `json:"model,omitempty"`
 	MAC          string         `json:"mac"`
 	Capabilities []string       `json:"capabilities"`
+	Pollable     bool           `json:"pollable"`
+	Reachability bool           `json:"reports_reachability"`
 	ColorTempMin int            `json:"color_temp_min,omitempty"` // hardware Kelvin range, for ColorTempControl devices
 	ColorTempMax int            `json:"color_temp_max,omitempty"`
 	SpeedMin     int            `json:"speed_min,omitempty"` // hardware step range, for SpeedControl devices
@@ -526,6 +528,7 @@ type DeviceView struct {
 
 // metaView projects a device's static metadata (everything but State).
 func metaView(d device.Device) DeviceView {
+	_, pollable := d.(device.Pollable)
 	v := DeviceView{
 		ID:           d.ID(),
 		Name:         d.Name(),
@@ -534,6 +537,8 @@ func metaView(d device.Device) DeviceView {
 		Model:        d.Model(),
 		MAC:          d.MAC(),
 		Capabilities: d.Capabilities(),
+		Pollable:     pollable,
+		Reachability: device.ReportsReachability(d),
 	}
 	if ct, ok := d.(device.ColorTempControl); ok {
 		v.ColorTempMin, v.ColorTempMax = ct.ColorTempRange()

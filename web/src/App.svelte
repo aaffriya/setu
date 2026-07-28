@@ -39,6 +39,7 @@
   let token = $state(getToken())
   let tokenDraft = $state(getToken())
   let showSettings = $state(false)
+  let openDevicesOnSettingsMount = $state(false)
   type SettingsTool = 'scenes' | 'automations' | 'rooms' | 'diagnostics' | 'devices' | 'people'
   let activeSettingsTool = $state<SettingsTool | ''>('')
   let themeChoice = $state<Theme>(getTheme())
@@ -68,6 +69,7 @@
     if (!showSettings) {
       confirmReset = false
       activeSettingsTool = ''
+      openDevicesOnSettingsMount = false
     }
   })
 
@@ -360,10 +362,16 @@
 
   function openSettings(event: MouseEvent) {
     tokenDraft = token
+    openDevicesOnSettingsMount = false
     // Pointer activation captures on pointerdown, before focus can move the
     // viewport. Keyboard/programmatic activation has no pointerdown.
     if (event.detail === 0) rememberSettingsScroll()
     showSettings = true
+  }
+
+  function openDeviceSettings(event: MouseEvent) {
+    openSettings(event)
+    openDevicesOnSettingsMount = true
   }
 
   function focusSettingsOnMount(node: HTMLElement) {
@@ -401,6 +409,13 @@
     offline: 'bg-rose-400',
     unauthorized: 'bg-rose-400',
   }
+  // No token is a neutral signed-out state. Reserve "Locked" for a token the
+  // server actually rejected, rather than showing an error before any attempt.
+  let visibleStatusLabel = $derived(token ? statusLabel[$connection] : 'Not connected')
+  let visibleStatusDot = $derived(token ? statusDot[$connection] : 'bg-ink/30')
+  let visibleStatusPulses = $derived(
+    Boolean(token) && ($connection === 'connecting' || $connection === 'online'),
+  )
 
   const iconBtn =
     'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink/5 text-ink/70 transition hover:bg-ink/10 hover:text-ink disabled:cursor-wait disabled:opacity-50 min-[360px]:h-9 min-[360px]:w-9'
@@ -446,16 +461,16 @@
           <h1 class="hidden text-lg font-semibold tracking-tight min-[360px]:block">सेतु</h1>
           <span
             class="flex items-center gap-1.5 rounded-full bg-ink/5 px-2.5 py-1 text-xs text-ink/60"
-            title={statusLabel[$connection]}
+            title={visibleStatusLabel}
           >
             <span class="relative flex h-2 w-2">
-              {#if $connection === 'connecting' || $connection === 'online'}
-                <span class="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 {statusDot[$connection]}"></span>
+              {#if visibleStatusPulses}
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 {visibleStatusDot}"></span>
               {/if}
-              <span class="relative inline-flex h-2 w-2 rounded-full {statusDot[$connection]}"></span>
+              <span class="relative inline-flex h-2 w-2 rounded-full {visibleStatusDot}"></span>
             </span>
             <!-- status always visible; the precise "· Xs ago" stays for sm+ to save width on phones -->
-            <span>{statusLabel[$connection]}</span>{#if agoLabel}<span class="hidden sm:inline">&nbsp;· {agoLabel}</span>{/if}
+            <span>{visibleStatusLabel}</span>{#if agoLabel}<span class="hidden sm:inline">&nbsp;· {agoLabel}</span>{/if}
           </span>
 
           <div class="ml-auto flex items-center gap-1 min-[360px]:gap-1.5">
@@ -618,7 +633,7 @@
             Scan your network for devices, or add one by hand. Nothing to edit, nothing to restart.
           </p>
           <button
-            onclick={openSettings}
+            onclick={openDeviceSettings}
             class="mt-4 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95 active:scale-[0.99]"
           >
             Add a device
@@ -693,7 +708,7 @@
                 />
               </div>
             {/if}
-            <DeviceCard {device} />
+            <DeviceCard {device} collapsed={organizing} />
             </div>
           </div>
         {/each}
@@ -754,8 +769,18 @@
         bind:value={tokenDraft}
         onkeydown={(e) => e.key === 'Enter' && saveToken()}
       />
+      <button
+        type="button"
+        onclick={saveToken}
+        class="mt-2 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95"
+      >
+        Save token
+      </button>
 
-      <span class="mt-4 block text-sm text-ink/60">Theme</span>
+      <span class="mt-4 flex items-center justify-between gap-2 text-sm text-ink/60">
+        <span>Theme</span>
+        <span class="text-xs text-ink/40">Applies immediately</span>
+      </span>
       <div class="mt-1.5 grid grid-cols-3 gap-1 rounded-xl bg-ink/5 p-1">
         {#each themes as t (t)}
           <button
@@ -771,24 +796,6 @@
 
       <span class="mt-4 block text-sm text-ink/60">Device tools</span>
       <div class="mt-1.5 space-y-1.5">
-        <Scenes
-          disabled={$connection !== 'online'}
-          onmodalchange={(open) => setSettingsTool('scenes', open)}
-        />
-        <Automations
-          disabled={$connection !== 'online'}
-          {canModify}
-          {isAdmin}
-          onmodalchange={(open) => setSettingsTool('automations', open)}
-        />
-        <RoomControls
-          disabled={$connection !== 'online'}
-          onmodalchange={(open) => setSettingsTool('rooms', open)}
-        />
-        <DeviceDiagnostics
-          disabled={!hasDevices}
-          onmodalchange={(open) => setSettingsTool('diagnostics', open)}
-        />
         <!-- Managing which devices exist needs the "modify" permission; the
              server refuses it either way, so an account that cannot do it is not
              offered the screen. Not gated on hasDevices: an empty install is
@@ -796,13 +803,8 @@
         {#if canModify}
           <Devices
             disabled={needsToken}
+            startOpen={openDevicesOnSettingsMount}
             onmodalchange={(open) => setSettingsTool('devices', open)}
-          />
-        {/if}
-        {#if canManageUsers}
-          <Users
-            disabled={needsToken}
-            onmodalchange={(open) => setSettingsTool('people', open)}
           />
         {/if}
         <button
@@ -826,7 +828,35 @@
           </span>
           <span class="text-lg text-ink/30" aria-hidden="true">›</span>
         </button>
+        <RoomControls
+          disabled={$connection !== 'online'}
+          onmodalchange={(open) => setSettingsTool('rooms', open)}
+        />
+        <Scenes
+          disabled={$connection !== 'online'}
+          onmodalchange={(open) => setSettingsTool('scenes', open)}
+        />
+        <Automations
+          disabled={$connection !== 'online'}
+          {canModify}
+          {isAdmin}
+          onmodalchange={(open) => setSettingsTool('automations', open)}
+        />
+        <DeviceDiagnostics
+          disabled={!hasDevices}
+          onmodalchange={(open) => setSettingsTool('diagnostics', open)}
+        />
       </div>
+
+      {#if canManageUsers}
+        <span class="mt-4 block border-t border-ink/10 pt-4 text-sm text-ink/60">Administration</span>
+        <div class="mt-1.5">
+          <Users
+            disabled={needsToken}
+            onmodalchange={(open) => setSettingsTool('people', open)}
+          />
+        </div>
+      {/if}
 
       {#if !isStandalone}
         <span class="mt-4 block text-sm text-ink/60">Install</span>
@@ -859,21 +889,6 @@
       {#if isAdmin}
         <BackupRestore />
       {/if}
-
-      <div class="mt-5 flex gap-2">
-        <button
-          onclick={() => (showSettings = false)}
-          class="flex-1 rounded-xl bg-ink/5 py-2.5 font-medium text-ink/70 transition hover:bg-ink/10"
-        >
-          Cancel
-        </button>
-        <button
-          onclick={saveToken}
-          class="flex-1 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2.5 font-medium text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-95"
-        >
-          Save
-        </button>
-      </div>
 
       <div class="mt-4 border-t border-ink/10 pt-4">
         <button

@@ -101,7 +101,8 @@ type State struct {
 //   - Brand is the vendor, in the one spelling that brand package chose.
 //   - Driver is which code drives it. With Brand it is identity: the pair picks
 //     a constructor out of the factory. It is a key, not prose, and is never
-//     shown to a user — the factory carries a human label for each pair.
+//     shown to a user — the factory carries a human category and label for each
+//     pair.
 //   - Model is the hardware itself, as the device reported it or as the user
 //     typed it. It is presentation only: nothing branches on it, and it is
 //     empty whenever nothing has said what the hardware is.
@@ -285,4 +286,22 @@ type Pollable interface {
 	// implementation should also refresh its own cached State so that State()
 	// stays consistent.
 	Poll() (State, error)
+}
+
+// ReachabilityReporter is implemented by pollable devices whose State.Online
+// specifically means that live hardware contact succeeded. Pollable alone is
+// not enough: a device such as a TV may return useful fallback state and remain
+// controllable by MAC even when it did not answer the poll.
+//
+// Reachability-based automations deliberately require this explicit opt-in so
+// a newly added driver cannot silently offer rules its state cannot support.
+type ReachabilityReporter interface {
+	ReportsReachability() bool
+}
+
+// ReportsReachability says whether d can drive offline/recovery automations.
+func ReportsReachability(d Device) bool {
+	_, pollable := d.(Pollable)
+	reporter, reports := d.(ReachabilityReporter)
+	return pollable && reports && reporter.ReportsReachability()
 }

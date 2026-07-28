@@ -41,12 +41,20 @@ func (d *testLamp) State() device.State {
 	return d.state
 }
 func (d *testLamp) Poll() (device.State, error) { return d.State(), nil }
+func (*testLamp) ReportsReachability() bool     { return true }
 func (d *testLamp) On() error                   { d.publish(func(s *device.State) { s.On = true }); return nil }
 func (d *testLamp) Off() error                  { d.publish(func(s *device.State) { s.On = false }); return nil }
 func (d *testLamp) SetBrightness(pct int) error {
 	d.publish(func(s *device.State) { s.On = true; s.Brightness = pct })
 	return nil
 }
+
+// pollOnlySwitch can be refreshed but deliberately does not claim that
+// State.Online is a live-contact signal, matching Samsung's MAC-only fallback
+// semantics.
+type pollOnlySwitch struct{ testSwitch }
+
+func (d *pollOnlySwitch) Poll() (device.State, error) { return d.State(), nil }
 
 func (d *testLamp) publish(mutate func(*device.State)) {
 	d.mu.Lock()
@@ -178,6 +186,319 @@ func TestMetricTriggerNeedsTheCapability(t *testing.T) {
 	var invalid ValidationError
 	if err == nil || !asValidation(err, &invalid) {
 		t.Fatalf("watching brightness on a plain switch = %v, want ValidationError", err)
+	}
+}
+
+func onlineRule(id, watched, target, operator string, minutes int) Rule {
+	return Rule{
+		ID: id, Name: "Device returned", Enabled: true,
+		Trigger: Trigger{Type: TriggerDeviceOnline, Online: &OnlineTrigger{
+			DeviceID: watched, Operator: operator, Minutes: minutes,
+		}},
+		Actions: []Action{{DeviceID: target, Action: "on"}},
+	}
+}
+
+func TestOnlineTriggerComparesCompletedOfflineMinutes(t *testing.T) {
+	tests := []struct {
+		name       string
+		operator   string
+		offlineFor time.Duration
+		wantRun    bool
+	}{
+		{name: "below", operator: OpBelow, offlineFor: 9*time.Minute + 30*time.Second, wantRun: true},
+		{name: "below boundary has completed ten", operator: OpBelow, offlineFor: 10*time.Minute + 30*time.Second},
+		{name: "equals minute bucket", operator: OpEquals, offlineFor: 10*time.Minute + 30*time.Second, wantRun: true},
+		{name: "equals excludes next minute", operator: OpEquals, offlineFor: 11*time.Minute + 30*time.Second},
+		{name: "above needs another completed minute", operator: OpAbove, offlineFor: 10*time.Minute + 30*time.Second},
+		{name: "above", operator: OpAbove, offlineFor: 11*time.Minute + 30*time.Second, wantRun: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lamp := &testLamp{id: "lamp"}
+			target := &testSwitch{id: "target"}
+			engine, _ := lampEngine(t, nil, lamp, target)
+			replaceRules(t, engine, onlineRule("returned", lamp.id, target.id, tt.operator, 10))
+
+			engine.mu.Lock()
+			engine.latestStates[lamp.id] = device.State{Online: false}
+			engine.offlineSince[lamp.id] = time.Now().Add(-tt.offlineFor)
+			engine.mu.Unlock()
+			engine.handleState(lamp.id, device.State{Online: true})
+
+			if tt.wantRun {
+				waitFor(t, func() bool { return target.onCount() == 1 })
+				runs := engine.Snapshot().Runs
+				if len(runs) != 1 || runs[0].Source != "online" {
+					t.Fatalf("online runs = %+v, want one online run", runs)
+				}
+				return
+			}
+			time.Sleep(60 * time.Millisecond)
+			if target.onCount() != 0 || len(engine.Snapshot().Runs) != 0 {
+				t.Fatalf("non-matching recovery ran: target=%d runs=%+v", target.onCount(), engine.Snapshot().Runs)
+			}
+		})
+	}
+}
+
+func TestOnlineTriggerFiresOnceAndRearmsAfterAnotherOutage(t *testing.T) {
+	lamp := &testLamp{id: "lamp"}
+	target := &testSwitch{id: "target"}
+	engine, _ := lampEngine(t, nil, lamp, target)
+	replaceRules(t, engine, onlineRule("returned", lamp.id, target.id, OpBelow, 10))
+
+	// The lamp was already offline at startup, so its observed episode began
+	// with that baseline. Returning now is a real recovery, not a startup edge.
+	engine.handleState(lamp.id, device.State{Online: true})
+	waitFor(t, func() bool { return target.onCount() == 1 })
+
+	// Re-reporting online cannot recover twice from one outage.
+	engine.handleState(lamp.id, device.State{Online: true})
+	time.Sleep(60 * time.Millisecond)
+	if target.onCount() != 1 {
+		t.Fatalf("duplicate online state fired again (%d runs)", target.onCount())
+	}
+
+	// A new observed outage creates one new recovery.
+	engine.handleState(lamp.id, device.State{Online: false})
+	engine.handleState(lamp.id, device.State{Online: true})
+	waitFor(t, func() bool { return target.onCount() == 2 })
+}
+
+func TestOnlineTriggerDoesNotTreatAnOnlineStartupBaselineAsRecovery(t *testing.T) {
+	lamp := &testLamp{id: "lamp", state: device.State{Online: true}}
+	target := &testSwitch{id: "target"}
+	engine, _ := lampEngine(t, nil, lamp, target)
+	replaceRules(t, engine, onlineRule("returned", lamp.id, target.id, OpBelow, 10))
+
+	engine.handleState(lamp.id, device.State{Online: true})
+	time.Sleep(60 * time.Millisecond)
+	if target.onCount() != 0 || len(engine.Snapshot().Runs) != 0 {
+		t.Fatalf("online startup baseline looked like a recovery: target=%d runs=%+v", target.onCount(), engine.Snapshot().Runs)
+	}
+}
+
+func TestOnlineTriggerOfflineStartupMeasuresOnlyPostStartTime(t *testing.T) {
+	lamp := &testLamp{id: "lamp"}
+	target := &testSwitch{id: "target"}
+	engine, _ := lampEngine(t, nil, lamp, target)
+	replaceRules(t, engine, onlineRule("returned", lamp.id, target.id, OpAbove, 1))
+
+	// The process cannot know how long the lamp was away before its baseline.
+	// An immediate recovery therefore has zero completed observed minutes.
+	engine.handleState(lamp.id, device.State{Online: true})
+	time.Sleep(60 * time.Millisecond)
+	if target.onCount() != 0 || len(engine.Snapshot().Runs) != 0 {
+		t.Fatalf("pre-start outage time was invented: target=%d runs=%+v", target.onCount(), engine.Snapshot().Runs)
+	}
+}
+
+func TestOnlineTriggerUsesNormalRuleGuards(t *testing.T) {
+	tests := []struct {
+		name     string
+		paused   bool
+		disabled bool
+		guarded  bool
+	}{
+		{name: "paused", paused: true},
+		{name: "disabled", disabled: true},
+		{name: "condition not met", guarded: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lamp := &testLamp{id: "lamp"}
+			condition := &testSwitch{id: "condition"}
+			target := &testSwitch{id: "target"}
+			engine, _ := lampEngine(t, nil, lamp, condition, target)
+			rule := onlineRule("returned", lamp.id, target.id, OpBelow, 10)
+			rule.Enabled = !tt.disabled
+			if tt.guarded {
+				rule.Conditions = []Condition{{DeviceID: condition.id, On: true}}
+			}
+			if _, err := engine.Replace(State{
+				Version:  FormatVersion,
+				Revision: engine.Snapshot().Revision,
+				Paused:   tt.paused,
+				Items:    []Rule{rule},
+			}); err != nil {
+				t.Fatalf("replace guarded rule: %v", err)
+			}
+
+			engine.handleState(lamp.id, device.State{Online: true})
+			time.Sleep(60 * time.Millisecond)
+			if target.onCount() != 0 || len(engine.Snapshot().Runs) != 0 {
+				t.Fatalf("guarded recovery ran: target=%d runs=%+v", target.onCount(), engine.Snapshot().Runs)
+			}
+		})
+	}
+}
+
+func TestOnlineTriggerUsesNormalCooldown(t *testing.T) {
+	lamp := &testLamp{id: "lamp"}
+	target := &testSwitch{id: "target"}
+	engine, _ := lampEngine(t, nil, lamp, target)
+	rule := onlineRule("returned", lamp.id, target.id, OpBelow, 10)
+	rule.CooldownSeconds = 60
+	replaceRules(t, engine, rule)
+
+	engine.handleState(lamp.id, device.State{Online: true})
+	waitFor(t, func() bool { return target.onCount() == 1 })
+	engine.handleState(lamp.id, device.State{Online: false})
+	engine.handleState(lamp.id, device.State{Online: true})
+	time.Sleep(60 * time.Millisecond)
+	if target.onCount() != 1 || len(engine.Snapshot().Runs) != 1 {
+		t.Fatalf("cooldown did not suppress the next recovery: target=%d runs=%+v", target.onCount(), engine.Snapshot().Runs)
+	}
+}
+
+func TestOnlineTriggerValidation(t *testing.T) {
+	lamp := &testLamp{id: "lamp"}
+	plain := &testSwitch{id: "plain"}
+	pollOnly := &pollOnlySwitch{testSwitch: testSwitch{id: "poll-only"}}
+	target := &testSwitch{id: "target"}
+	engine, _ := lampEngine(t, nil, lamp, plain, pollOnly, target)
+
+	tests := []struct {
+		name string
+		rule Rule
+	}{
+		{name: "invalid operator", rule: onlineRule("returned", lamp.id, target.id, "at_least", 10)},
+		{name: "zero minutes", rule: onlineRule("returned", lamp.id, target.id, OpEquals, 0)},
+		{name: "too many minutes", rule: onlineRule("returned", lamp.id, target.id, OpEquals, MaxOfflineMinutes+1)},
+		{name: "unknown device", rule: onlineRule("returned", "missing", target.id, OpEquals, 10)},
+		{name: "non-pollable device", rule: onlineRule("returned", plain.id, target.id, OpEquals, 10)},
+		{name: "pollable without reachability", rule: onlineRule("returned", pollOnly.id, target.id, OpEquals, 10)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := engine.Replace(State{
+				Version: FormatVersion, Revision: engine.Snapshot().Revision, Items: []Rule{tt.rule},
+			})
+			var invalid ValidationError
+			if err == nil || !asValidation(err, &invalid) {
+				t.Fatalf("invalid online trigger = %v, want ValidationError", err)
+			}
+		})
+	}
+}
+
+func TestOfflineTriggerRejectsPollableWithoutReachability(t *testing.T) {
+	pollOnly := &pollOnlySwitch{testSwitch: testSwitch{id: "poll-only"}}
+	target := &testSwitch{id: "target"}
+	engine, _ := lampEngine(t, nil, pollOnly, target)
+	_, err := engine.Replace(State{
+		Version:  FormatVersion,
+		Revision: engine.Snapshot().Revision,
+		Items: []Rule{{
+			ID: "gone", Name: "Gone", Enabled: true,
+			Trigger: Trigger{Type: TriggerDeviceOffline, Offline: &OfflineTrigger{
+				DeviceID: pollOnly.id, Minutes: 5,
+			}},
+			Actions: []Action{{DeviceID: target.id, Action: "on"}},
+		}},
+	})
+	var invalid ValidationError
+	if err == nil || !asValidation(err, &invalid) {
+		t.Fatalf("poll-only offline trigger = %v, want ValidationError", err)
+	}
+}
+
+func TestInventoryRemovalStopsOfflineClock(t *testing.T) {
+	lamp := &testLamp{id: "lamp", state: device.State{Online: true}}
+	target := &testSwitch{id: "target"}
+	engine, bus := lampEngine(t, nil, lamp, target)
+	replaceRules(t, engine, Rule{
+		ID: "gone", Name: "Lamp is gone", Enabled: true,
+		Trigger: Trigger{Type: TriggerDeviceOffline, Offline: &OfflineTrigger{
+			DeviceID: lamp.id, Minutes: 5,
+		}},
+		Actions: []Action{{DeviceID: target.id, Action: "on"}},
+	})
+
+	bus.Publish(events.Event{Type: events.StateChanged, DeviceID: lamp.id, State: device.State{Online: false}})
+	waitFor(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		_, counting := engine.offlineSince[lamp.id]
+		return counting
+	})
+	if !engine.mgr.Remove(lamp.id) {
+		t.Fatal("remove lamp")
+	}
+	bus.Publish(events.Event{Type: events.InventoryChanged, DeviceIDs: []string{target.id}})
+	waitFor(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		_, counting := engine.offlineSince[lamp.id]
+		_, known := engine.latestStates[lamp.id]
+		return !counting && !known
+	})
+
+	engine.evaluateOffline(time.Now().Add(10 * time.Minute))
+	time.Sleep(60 * time.Millisecond)
+	if target.onCount() != 0 {
+		t.Fatal("removed device completed an offline trigger")
+	}
+}
+
+func TestReaddedDeviceStartsAsBaselineNotRecovery(t *testing.T) {
+	lamp := &testLamp{id: "lamp", state: device.State{Online: true}}
+	target := &testSwitch{id: "target"}
+	engine, bus := lampEngine(t, nil, lamp, target)
+	replaceRules(t, engine, onlineRule("returned", lamp.id, target.id, OpBelow, 10))
+
+	bus.Publish(events.Event{Type: events.StateChanged, DeviceID: lamp.id, State: device.State{Online: false}})
+	waitFor(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		_, counting := engine.offlineSince[lamp.id]
+		return counting
+	})
+	if !engine.mgr.Remove(lamp.id) {
+		t.Fatal("remove lamp")
+	}
+	bus.Publish(events.Event{Type: events.InventoryChanged, DeviceIDs: []string{target.id}})
+	waitFor(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		_, known := engine.latestStates[lamp.id]
+		return !known
+	})
+
+	readded := &testLamp{id: lamp.id, state: device.State{Online: true}, bus: bus}
+	if err := engine.mgr.Add(readded); err != nil {
+		t.Fatalf("re-add lamp: %v", err)
+	}
+	bus.Publish(events.Event{Type: events.InventoryChanged, DeviceIDs: []string{lamp.id, target.id}})
+	waitFor(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		state, known := engine.latestStates[lamp.id]
+		return known && state.Online
+	})
+	bus.Publish(events.Event{Type: events.StateChanged, DeviceID: lamp.id, State: device.State{Online: true}})
+	time.Sleep(60 * time.Millisecond)
+	if target.onCount() != 0 {
+		t.Fatal("re-added device was treated as a recovery")
+	}
+}
+
+func TestStateResyncDoesNotManufactureRecovery(t *testing.T) {
+	lamp := &testLamp{id: "lamp", state: device.State{Online: true}}
+	target := &testSwitch{id: "target"}
+	engine, _ := lampEngine(t, nil, lamp, target)
+	replaceRules(t, engine, onlineRule("returned", lamp.id, target.id, OpBelow, 10))
+
+	engine.handleState(lamp.id, device.State{Online: false})
+	lamp.mu.Lock()
+	lamp.state.Online = true
+	lamp.mu.Unlock()
+	engine.resyncStates()
+
+	time.Sleep(60 * time.Millisecond)
+	if target.onCount() != 0 {
+		t.Fatal("authoritative resync manufactured a recovery from incomplete history")
 	}
 }
 

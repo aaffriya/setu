@@ -176,6 +176,26 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// publishInventoryChanged carries no inventory data. Each socket re-resolves
+// its own token and each browser re-reads its permission-filtered views, so one
+// broadcast stays small and cannot disclose another account's device names.
+func (s *Server) publishInventoryChanged() {
+	s.bus.Publish(events.Event{Type: events.InventoryChanged})
+}
+
+// publishDeviceInventoryChanged adds the authoritative membership only to the
+// in-process event. WebSocket clients still receive the same metadata-free
+// invalidation, while the automation engine can forget clocks for removed
+// devices without racing a quick remove-and-re-add of the same MAC-derived id.
+func (s *Server) publishDeviceInventoryChanged(reset bool) {
+	specs := s.inventory.Specs()
+	ids := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		ids = append(ids, spec.ID)
+	}
+	s.bus.Publish(events.Event{Type: events.InventoryChanged, DeviceIDs: ids, ResetDevices: reset})
+}
+
 type errorResponse struct {
 	Error  string              `json:"error"`
 	Device *manager.DeviceView `json:"device,omitempty"`

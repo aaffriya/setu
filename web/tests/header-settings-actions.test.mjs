@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8')
+const devices = readFileSync(
+  new URL('../src/lib/components/Devices.svelte', import.meta.url),
+  'utf8',
+)
 const scenes = readFileSync(
   new URL('../src/lib/components/Scenes.svelte', import.meta.url),
   'utf8',
@@ -19,10 +23,16 @@ const diagnostics = readFileSync(
   new URL('../src/lib/components/DeviceDiagnostics.svelte', import.meta.url),
   'utf8',
 )
+const deviceCard = readFileSync(
+  new URL('../src/lib/components/DeviceCard.svelte', import.meta.url),
+  'utf8',
+)
 const focusTrap = readFileSync(new URL('../src/lib/focus-trap.ts', import.meta.url), 'utf8')
 const store = readFileSync(new URL('../src/lib/store.ts', import.meta.url), 'utf8')
 const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8')
 const appCSS = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8')
+const indexHTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
+const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8')
 
 test('header keeps refresh and search while device tools live in Settings', () => {
   const [beforeSettings, settings] = app.split('{#if showSettings}')
@@ -45,6 +55,46 @@ test('moved tools use full-width Settings rows', () => {
   assert.match(automations, /flex w-full items-center gap-3/)
   assert.match(roomControls, /flex w-full items-center gap-3/)
   assert.match(diagnostics, /flex w-full items-center gap-3/)
+})
+
+test('device tools follow setup-to-operation order and People is separated last', () => {
+  const tools = app.slice(app.indexOf('>Device tools</'), app.indexOf('{#if !isStandalone}'))
+  const positions = [
+    tools.indexOf('<Devices'),
+    tools.indexOf('>Arrange devices</'),
+    tools.indexOf('<RoomControls'),
+    tools.indexOf('<Scenes'),
+    tools.indexOf('<Automations'),
+    tools.indexOf('<DeviceDiagnostics'),
+    tools.indexOf('>Administration</'),
+    tools.indexOf('<Users'),
+  ]
+  assert.ok(positions.every((position) => position >= 0))
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b))
+  assert.match(tools, /border-t border-ink\/10/)
+
+  assert.match(app, /function openDeviceSettings\(event: MouseEvent\)/)
+  assert.match(app, /onclick=\{openDeviceSettings\}[\s\S]{0,300}Add a device/)
+  assert.match(app, /<Devices[\s\S]{0,180}startOpen=\{openDevicesOnSettingsMount\}/)
+  assert.match(devices, /startOpen = false/)
+  assert.match(devices, /if \(startOpen\) openDialog\(\)/)
+})
+
+test('Settings makes token save and immediate theme behavior explicit', () => {
+  const settings = app.slice(app.indexOf('{#if showSettings}'))
+  const token = settings.indexOf('id="token-input"')
+  const save = settings.indexOf('Save token')
+  assert.ok(token >= 0 && save > token && save - token < 800)
+  assert.match(settings, /Applies immediately/)
+  assert.doesNotMatch(settings, />\s*Cancel\s*</)
+})
+
+test('mobile accessibility keeps pinch zoom and one search close action', () => {
+  const viewport = indexHTML.match(/<meta\s+name="viewport"[\s\S]*?\/>/)?.[0] ?? ''
+  assert.doesNotMatch(viewport, /maximum-scale|user-scalable/)
+  assert.doesNotMatch(main, /gesturestart|touches\.length/)
+  assert.match(appCSS, /input\[type='search'\]::\-webkit-search-cancel-button/)
+  assert.match(appCSS, /-webkit-appearance: none/)
 })
 
 test('child dialogs own Escape and keep Settings open', () => {
@@ -139,6 +189,48 @@ test('arrange mode has a visible Done action outside Settings', () => {
   assert.match(app, /aria-label="Done arranging devices"/)
   assert.match(app, /onclick=\{\(\) => \(organizing = false\)\}/)
   assert.match(app, /organizing = true\s+showSettings = false/)
+  assert.match(app, /<DeviceCard \{device\} collapsed=\{organizing\} \/>/)
+  assert.match(deviceCard, /let \{ device, collapsed = false \}/)
+  assert.match(deviceCard, /let isOpen = \$derived\(!collapsed/)
+  assert.match(deviceCard, /\{#if !collapsed && \(hasLight \|\| hasMedia \|\| hasFan\)\}/)
+})
+
+test('Scenes require an eligible non-WoL device before opening', () => {
+  assert.match(scenes, /sceneDevices = \$derived\(\$devices\.filter\(\(d\) => !d\.capabilities\.includes\('wol'\)\)\)/)
+  assert.match(scenes, /let canCreate = \$derived\(!disabled && sceneDevices\.length > 0\)/)
+  assert.match(scenes, /sceneDevices\.length === 0 && \$scenes\.length === 0/)
+  assert.match(scenes, /disabled=\{unavailable\}/)
+  assert.match(scenes, /Add a scene-capable device first/)
+  assert.match(scenes, /Review or remove saved scenes/)
+  assert.match(scenes, /function openCreate\(\)\s*\{\s*if \(!canCreate\) return/)
+  assert.match(scenes, /disabled=\{!canCreate\}/)
+  assert.match(scenes, /disabled=\{!canRun\(scene\.id\)\}/)
+})
+
+test('inventory WebSocket events reconcile lists and grants without refresh storms', () => {
+  assert.match(store, /msg\.type === 'inventory_changed'/)
+  assert.match(store, /Promise\.all\(\[refresh\(false\), loadSession\(\)\]\)/)
+  assert.match(store, /inventoryRefreshPending = true/)
+  assert.match(store, /while \(inventoryRefreshPending\)/)
+  assert.match(store, /reconcileOnOpen = true/)
+  assert.match(store, /msg\.type !== 'snapshot' && msg\.type !== 'state_changed'/)
+})
+
+test('small control labels and weekday order are explicit', () => {
+  assert.match(deviceCard, />Fan speed</)
+  assert.match(deviceCard, />Light brightness</)
+  assert.match(automations, /\{ value: 1, label: 'Mon' \}[\s\S]*\{ value: 0, label: 'Sun' \}/)
+  assert.match(automations, /toggleDay\(day\.value\)/)
+  assert.match(automations, /weekdays\.includes\(day\.value\)/)
+})
+
+test('pre-token status is neutral and settings tool tint is consistent', () => {
+  assert.match(app, /token \? statusLabel\[\$connection\] : 'Not connected'/)
+  assert.match(app, /token \? statusDot\[\$connection\] : 'bg-ink\/30'/)
+  assert.match(devices, /bg-indigo-500\/10 text-indigo-500 dark:text-indigo-300/)
+  assert.match(diagnostics, /bg-indigo-500\/10 text-indigo-500 dark:text-indigo-300/)
+  assert.doesNotMatch(devices, /bg-sky-500\/10/)
+  assert.doesNotMatch(diagnostics, /bg-emerald-500\/10/)
 })
 
 test('refresh keeps the same symbol and rotates it while active', () => {

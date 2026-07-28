@@ -49,7 +49,7 @@ func newTestServer(t *testing.T, specs []config.DeviceSpec, scanners []resolver.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	factory := config.NewFactory()
-	factory.Register("test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
+	factory.Register("Light", "test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
 		return &storedDevice{spec: spec}, nil
 	})
 
@@ -62,7 +62,7 @@ func newTestServer(t *testing.T, specs []config.DeviceSpec, scanners []resolver.
 			t.Fatal(err)
 		}
 	}
-	inv, err := inventory.New(file, factory, config.Deps{}, mgr, log)
+	inv, err := inventory.New(file, factory, config.Deps{}, mgr, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,8 @@ func TestDeviceTypesListsRegisteredBrands(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&types); err != nil {
 		t.Fatal(err)
 	}
-	if len(types) != 1 || types[0].Brand != "test" || types[0].Driver != "lamp" || types[0].Label != "Lamp" {
+	if len(types) != 1 || types[0].Category != "Light" || types[0].Brand != "test" ||
+		types[0].Driver != "lamp" || types[0].Label != "Lamp" {
 		t.Fatalf("types = %+v", types)
 	}
 }

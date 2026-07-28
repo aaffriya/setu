@@ -24,7 +24,6 @@ import (
 	"setu/internal/automation"
 	"setu/internal/config"
 	"setu/internal/devices/atomberg"
-	"setu/internal/devices/example"
 	"setu/internal/devices/samsung"
 	"setu/internal/devices/wiz"
 	"setu/internal/devices/wol"
@@ -42,6 +41,13 @@ func main() {
 		slog.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+func registerDeviceTypes(factory *config.Factory) {
+	wiz.Register(factory)      // Philips WiZ bulbs (UDP)
+	samsung.Register(factory)  // Samsung Tizen TVs (REST + WebSocket + WoL)
+	atomberg.Register(factory) // Atomberg BLDC fans (UDP, local)
+	wol.Register(factory)      // Wake-on-LAN targets (PC/NAS/router — magic packet)
 }
 
 func run() error {
@@ -84,11 +90,7 @@ func run() error {
 
 	// Register device types. Adding a brand is ONE line here.
 	factory := config.NewFactory()
-	example.Register(factory)  // template / blueprint (no real protocol)
-	wiz.Register(factory)      // Philips WiZ bulbs (UDP)
-	samsung.Register(factory)  // Samsung Tizen TVs (REST + WebSocket + WoL)
-	atomberg.Register(factory) // Atomberg BLDC fans (UDP, local)
-	wol.Register(factory)      // Wake-on-LAN targets (PC/NAS/router — magic packet)
+	registerDeviceTypes(factory)
 
 	// Brands that can enumerate their devices on the LAN, for the UI's device
 	// scan. Same seam as the resolver, used the other way round: not "where is
@@ -120,7 +122,7 @@ func run() error {
 	// The devices the user added, loaded from the state file and brought online.
 	// They are managed from the UI (scan or manual entry), so this is also the
 	// only writer of that section of the file.
-	devices, err := inventory.New(state, factory, config.Deps{Resolver: res, Bus: bus}, mgr, log)
+	devices, err := inventory.New(state, factory, config.Deps{Resolver: res, Bus: bus}, mgr, accounts, log)
 	if err != nil {
 		return err
 	}

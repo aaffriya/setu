@@ -24,6 +24,9 @@ added from the app.
   without deleting them one at a time. Both matter because device ids are
   derived from the brand and MAC, so the same id returns when the same hardware
   is added again — and it must not arrive pre-shared.
+- Inventory uses `RetainDevicesAndUpdateState` to persist that cleanup together
+  with the new device list in one state-file update. A failed write changes
+  neither section nor the registry's in-memory grants.
 
 ## Tokens
 

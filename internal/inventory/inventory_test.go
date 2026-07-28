@@ -31,11 +31,11 @@ func newInventory(t *testing.T, file *store.Store) (*Inventory, *manager.Manager
 	t.Cleanup(mgr.Close)
 
 	factory := config.NewFactory()
-	factory.Register("test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
+	factory.Register("Light", "test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
 		return &fakeDevice{spec: spec}, nil
 	})
 
-	inv, err := New(file, factory, config.Deps{}, mgr, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	inv, err := New(file, factory, config.Deps{}, mgr, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,9 +238,9 @@ func TestSameMACIsAllowedForAnotherBrand(t *testing.T) {
 	build := func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
 		return &fakeDevice{spec: spec}, nil
 	}
-	factory.Register("test", "lamp", "Lamp", build)
-	factory.Register("wol", "device", "Wake-on-LAN target", build)
-	inv, err := New(file, factory, config.Deps{}, mgr, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	factory.Register("Light", "test", "lamp", "Lamp", build)
+	factory.Register("Wake-on-LAN", "wol", "device", "Wake-on-LAN Target", build)
+	inv, err := New(file, factory, config.Deps{}, mgr, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,10 +1,13 @@
 package users
 
 import (
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"setu/internal/config"
 	"setu/internal/store"
 )
 
@@ -137,6 +140,73 @@ func TestForgetDeviceClearsGrants(t *testing.T) {
 	}
 	if reloaded.CanSee("lamp") || !reloaded.CanSee("fan") {
 		t.Fatalf("grants after forget = %v, want [fan]", reloaded.Devices)
+	}
+}
+
+func TestRetainDevicesAndStateUpdateCommitTogether(t *testing.T) {
+	registry, file := newRegistry(t)
+	user, _, err := registry.Create("Priya", RoleRead, []string{"lamp"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := file.Update(func(state *store.State) error {
+		state.Devices = []config.DeviceSpec{{
+			ID: "lamp", Brand: "test", Driver: "lamp", Name: "Lamp", MAC: "02:00:00:00:00:01",
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed devices: %v", err)
+	}
+
+	sentinel := errors.New("device mutation failed")
+	err = registry.RetainDevicesAndUpdateState(nil, func(state *store.State) error {
+		state.Devices = nil
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("combined update = %v, want sentinel", err)
+	}
+	reloaded, _ := registry.Get(user.ID)
+	if !reloaded.CanSee("lamp") {
+		t.Fatal("failed device mutation still committed the in-memory grant cleanup")
+	}
+	state, err := file.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(state.Devices) != 1 || state.Devices[0].ID != "lamp" {
+		t.Fatalf("failed combined update changed devices: %+v", state.Devices)
+	}
+	var persisted State
+	if err := json.Unmarshal(state.Users, &persisted); err != nil {
+		t.Fatalf("decode users: %v", err)
+	}
+	if len(persisted.Items) != 1 || !persisted.Items[0].CanSee("lamp") {
+		t.Fatalf("failed combined update changed persisted grants: %+v", persisted.Items)
+	}
+
+	if err := registry.RetainDevicesAndUpdateState(nil, func(state *store.State) error {
+		state.Devices = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("combined update: %v", err)
+	}
+	reloaded, _ = registry.Get(user.ID)
+	if reloaded.CanSee("lamp") {
+		t.Fatal("successful combined update kept the in-memory grant")
+	}
+	state, err = file.Load()
+	if err != nil {
+		t.Fatalf("reload state: %v", err)
+	}
+	if len(state.Devices) != 0 {
+		t.Fatalf("successful combined update kept devices: %+v", state.Devices)
+	}
+	if err := json.Unmarshal(state.Users, &persisted); err != nil {
+		t.Fatalf("decode updated users: %v", err)
+	}
+	if len(persisted.Items) != 1 || persisted.Items[0].CanSee("lamp") {
+		t.Fatalf("successful combined update kept persisted grant: %+v", persisted.Items)
 	}
 }
 

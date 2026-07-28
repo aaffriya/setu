@@ -18,3 +18,4 @@ any UDP failure clears the cached address. Brightness below the hardware's 10%
 floor is clamped.
 
 Both driver paths have physical-hardware verification.
+Both explicitly report live reachability for offline/recovery automations.

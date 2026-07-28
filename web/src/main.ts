@@ -5,19 +5,6 @@ import { getTheme, applyTheme } from './lib/theme'
 // Apply any forced theme before mount so there's no flash of the OS theme.
 applyTheme(getTheme())
 
-// Lock zoom for an app-like feel. The viewport meta's `user-scalable=no` is
-// ignored by iOS Safari, so block pinch-zoom (any multi-touch move) and the
-// iOS pinch gesture explicitly. Single-finger scrolling and taps are untouched;
-// double-tap zoom is already handled by `touch-action: manipulation` in app.css.
-document.addEventListener(
-  'touchmove',
-  (e) => {
-    if (e.touches.length > 1) e.preventDefault()
-  },
-  { passive: false },
-)
-document.addEventListener('gesturestart', (e) => e.preventDefault())
-
 // Load the processed app stylesheet asynchronously so Vite does not emit a
 // render-blocking <link> ahead of the inline splash. The splash remains on top
 // until both CSS and Svelte are ready, so a slow first request still has a real

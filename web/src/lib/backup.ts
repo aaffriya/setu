@@ -305,10 +305,14 @@ function ruleMatchesInstall(
     if (!capability || !source?.capabilities.includes(capability)) return false
   }
   if (rule.trigger.type === 'device_offline') {
-    // Reachability is only observable for a device Setu can read back; a
-    // write-only Wake-on-LAN target never answers either way.
+    // Reachability requires an explicit live-contact signal; being pollable is
+    // not enough when Online means control availability.
     const source = devices.get(rule.trigger.offline.device_id)
-    if (!source || source.capabilities.every((capability) => capability === 'wol')) return false
+    if (!source?.reports_reachability) return false
+  }
+  if (rule.trigger.type === 'device_online') {
+    const source = devices.get(rule.trigger.online.device_id)
+    if (!source?.reports_reachability) return false
   }
   // A presence rule restored onto a host that cannot read its neighbour table
   // would be refused, taking the whole restore with it.
@@ -317,6 +321,9 @@ function ruleMatchesInstall(
     if (!devices.get(condition.device_id)?.capabilities.includes('switch')) return false
   }
   return rule.actions.every((action) => {
+    for (const condition of action.when ?? []) {
+      if (!devices.get(condition.device_id)?.capabilities.includes('switch')) return false
+    }
     if (action.action === 'run_automation') {
       return (
         typeof action.automation_id === 'string' &&

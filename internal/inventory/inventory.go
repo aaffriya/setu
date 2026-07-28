@@ -21,6 +21,7 @@ import (
 	"setu/internal/manager"
 	"setu/internal/resolver"
 	"setu/internal/store"
+	"setu/internal/users"
 )
 
 // MaxDevices bounds a home installation. Setu runs on router hardware; an
@@ -34,6 +35,7 @@ type Inventory struct {
 	deps    config.Deps
 	mgr     *manager.Manager
 	file    *store.Store
+	users   *users.Registry
 	log     *slog.Logger
 
 	mu    sync.Mutex
@@ -47,12 +49,12 @@ type Inventory struct {
 // device because this build cannot drive it would be worse — so it still
 // appears in a backup export, can be removed by id, and comes online as soon as
 // an edit makes it valid again.
-func New(file *store.Store, factory *config.Factory, deps config.Deps, mgr *manager.Manager, log *slog.Logger) (*Inventory, error) {
+func New(file *store.Store, factory *config.Factory, deps config.Deps, mgr *manager.Manager, accounts *users.Registry, log *slog.Logger) (*Inventory, error) {
 	state, err := file.Load()
 	if err != nil {
 		return nil, err
 	}
-	inv := &Inventory{factory: factory, deps: deps, mgr: mgr, file: file, log: log, specs: state.Devices}
+	inv := &Inventory{factory: factory, deps: deps, mgr: mgr, file: file, users: accounts, log: log, specs: state.Devices}
 	for _, spec := range inv.specs {
 		// Validate on the way in as well as on the way out. Everything Setu
 		// writes has passed this already, but the file is editable, and an id
@@ -74,8 +76,8 @@ func New(file *store.Store, factory *config.Factory, deps config.Deps, mgr *mana
 	return inv, nil
 }
 
-// Types returns the drivers Setu can build, labelled, for the UI's manual add
-// form and to describe scan results.
+// Types returns the categorized, labelled drivers Setu can build, for the UI's
+// manual add form and to describe scan results.
 func (i *Inventory) Types() []config.DeviceType { return i.factory.Types() }
 
 // Specs returns the stored device list — the backup form of an installation.
@@ -190,7 +192,7 @@ func (i *Inventory) Remove(id string) error {
 		return errNotFound
 	}
 	next := append(append([]config.DeviceSpec(nil), i.specs[:index]...), i.specs[index+1:]...)
-	if err := i.persist(next); err != nil {
+	if err := i.persistWithPrunedGrants(next); err != nil {
 		return err
 	}
 	i.mgr.Remove(id)
@@ -240,7 +242,7 @@ func (i *Inventory) Replace(specs []config.DeviceSpec) ([]config.DeviceSpec, err
 		devices = append(devices, dev)
 	}
 
-	if err := i.persist(next); err != nil {
+	if err := i.persistWithPrunedGrants(next); err != nil {
 		return nil, err
 	}
 	for _, spec := range i.specs {
@@ -299,6 +301,23 @@ func (i *Inventory) build(spec config.DeviceSpec) (device.Device, error) {
 
 func (i *Inventory) persist(specs []config.DeviceSpec) error {
 	return i.file.Update(func(state *store.State) error {
+		state.Devices = specs
+		return nil
+	})
+}
+
+// persistWithPrunedGrants writes membership and access together. Device ids are
+// MAC-derived and may return later, so a successful removal must never leave an
+// old grant behind in either memory or the state file.
+func (i *Inventory) persistWithPrunedGrants(specs []config.DeviceSpec) error {
+	if i.users == nil {
+		return i.persist(specs)
+	}
+	ids := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		ids = append(ids, spec.ID)
+	}
+	return i.users.RetainDevicesAndUpdateState(ids, func(state *store.State) error {
 		state.Devices = specs
 		return nil
 	})

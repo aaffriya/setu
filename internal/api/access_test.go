@@ -23,13 +23,19 @@ import (
 // devices and a user registry, behind the administrator's token.
 func accessServer(t *testing.T, specs ...config.DeviceSpec) (http.Handler, *users.Registry, *manager.Manager) {
 	t.Helper()
+	handler, registry, mgr, _ := accessServerWithBus(t, specs...)
+	return handler, registry, mgr
+}
+
+func accessServerWithBus(t *testing.T, specs ...config.DeviceSpec) (http.Handler, *users.Registry, *manager.Manager, *events.Bus) {
+	t.Helper()
 	bus := events.NewBus()
 	mgr := manager.New(bus, nil)
 	t.Cleanup(mgr.Close)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	factory := config.NewFactory()
-	factory.Register("test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
+	factory.Register("Light", "test", "lamp", "Lamp", func(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
 		return &storedDevice{spec: spec}, nil
 	})
 
@@ -42,11 +48,11 @@ func accessServer(t *testing.T, specs ...config.DeviceSpec) (http.Handler, *user
 			t.Fatal(err)
 		}
 	}
-	inv, err := inventory.New(file, factory, config.Deps{}, mgr, log)
+	registry, err := users.New(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := users.New(file)
+	inv, err := inventory.New(file, factory, config.Deps{}, mgr, registry, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +64,7 @@ func accessServer(t *testing.T, specs ...config.DeviceSpec) (http.Handler, *user
 		Token:     "admin-token",
 		Logger:    log,
 	})
-	return srv.Handler(), registry, mgr
+	return srv.Handler(), registry, mgr, bus
 }
 
 func as(t *testing.T, handler http.Handler, token, method, path, body string) *httptest.ResponseRecorder {

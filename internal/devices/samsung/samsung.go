@@ -1165,7 +1165,7 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 
 // Register wires the Samsung drivers into the factory (called from cmd/setu/main.go).
 func Register(f *config.Factory) {
-	f.Register(Brand, DriverTizen, "Tizen TV", New)
+	f.Register("TV", Brand, DriverTizen, "Tizen TV", New)
 }
 
 // sanitizeID makes a config id safe to embed in a token filename.

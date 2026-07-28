@@ -10,6 +10,17 @@ import (
 	"setu/internal/device"
 )
 
+func TestBulbsAdvertiseLiveReachability(t *testing.T) {
+	for name, bulb := range map[string]device.Device{
+		"colour":        &ColorBulb{},
+		"tunable white": &TunableWhiteBulb{},
+	} {
+		if !device.ReportsReachability(bulb) {
+			t.Errorf("%s bulb did not advertise live reachability", name)
+		}
+	}
+}
+
 // An unreachable bulb still has a meaningful state — offline — so Poll must wrap
 // ErrPollNoResponse. Without it the manager discards the read model update, and
 // an unplugged bulb keeps rendering as online and controllable in the UI.

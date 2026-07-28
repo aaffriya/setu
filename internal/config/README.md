@@ -38,7 +38,7 @@ bind address like a server that started and cannot be reached.
 - `Config` and `Load`: environment → defaults → validation.
 - `DeviceSpec`: `id`, `brand`, `driver`, optional `model`, `name`, and `mac`.
 - `Factory`: case-insensitive `(brand, driver)` registration and construction,
-  each pair carrying the human `label` the UI shows for it.
+  each pair carrying the human `category` and `label` the UI shows for it.
 - `Deps`: injected resolver and event bus.
 - `LegacyDeviceSpec.Upgrade`: version-1 data, where `model` meant the driver key
   and `series` meant the hardware.

@@ -63,17 +63,34 @@
     return () => document.removeEventListener('keydown', onKey)
   })
 
-  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  // Keep the persisted values compatible with JavaScript's Sunday=0 numbering,
+  // but present the week in the more familiar Monday-first order.
+  const weekdays = [
+    { value: 1, label: 'Mon' },
+    { value: 2, label: 'Tue' },
+    { value: 3, label: 'Wed' },
+    { value: 4, label: 'Thu' },
+    { value: 5, label: 'Fri' },
+    { value: 6, label: 'Sat' },
+    { value: 0, label: 'Sun' },
+  ]
   const AUTOMATION_TARGET = '@automation'
 
   // The trigger kinds, in the order they appear as tabs. Presence needs a host
   // that can read its neighbour table; where it cannot, the server refuses such
   // a rule, so the tab is disabled rather than offered and then rejected.
-  type TriggerKind = 'schedule' | 'device_state' | 'device_offline' | 'presence' | 'webhook'
+  type TriggerKind =
+    | 'schedule'
+    | 'device_state'
+    | 'device_offline'
+    | 'device_online'
+    | 'presence'
+    | 'webhook'
   const triggerKinds: Array<{ value: TriggerKind; label: string }> = [
     { value: 'schedule', label: 'Time' },
     { value: 'device_state', label: 'Device' },
     { value: 'device_offline', label: 'Offline' },
+    { value: 'device_online', label: 'Online' },
     { value: 'presence', label: 'Presence' },
     { value: 'webhook', label: 'Webhook' },
   ]
@@ -94,13 +111,20 @@
     { value: 'below', label: 'falls below' },
     { value: 'equals', label: 'reaches' },
   ]
+  const onlineComparisons: Array<{
+    value: AutomationComparison
+    label: string
+    symbol: string
+  }> = [
+    { value: 'below', label: 'less than', symbol: '<' },
+    { value: 'equals', label: 'exactly', symbol: '=' },
+    { value: 'above', label: 'more than', symbol: '>' },
+  ]
 
   let switchDevices = $derived($devices.filter((device) => device.capabilities.includes('switch')))
-  // Only a device Setu can read back is ever "offline" in a sense a rule could
-  // act on; a write-only Wake-on-LAN target never answers either way.
-  let reachableDevices = $derived(
-    $devices.filter((device) => !device.capabilities.includes('wol') || device.capabilities.length > 1),
-  )
+  // Only a device Setu can read back is ever online/offline in a sense a rule
+  // can act on. This is driver truth, not a capability-name heuristic.
+  let reachableDevices = $derived($devices.filter((device) => device.reports_reachability))
   let actionDevices = $derived($devices.filter((device) => actionOptions(device).length > 0))
   let callableRules = $derived(
     (snapshot?.items ?? []).filter((rule) => rule.id !== draft?.id && rule.enabled),
@@ -304,6 +328,9 @@
 
   function setTrigger(type: TriggerKind) {
     if (!draft) return
+    if (type !== 'schedule') {
+      for (const action of draft.actions) delete action.offset_minutes
+    }
     if (type === 'schedule') {
       draft.trigger = {
         type,
@@ -322,6 +349,15 @@
       draft.trigger = {
         type,
         offline: { device_id: reachableDevices[0]?.id ?? '', minutes: 10 },
+      }
+    } else if (type === 'device_online') {
+      draft.trigger = {
+        type,
+        online: {
+          device_id: reachableDevices[0]?.id ?? '',
+          operator: 'above',
+          minutes: 10,
+        },
       }
     } else if (type === 'presence') {
       draft.trigger = { type, presence: { mac: '', present: true, stable_seconds: 300 } }
@@ -408,6 +444,15 @@
   function addAction() {
     if (!draft || !canAddAction || draft.actions.length >= 16) return
     draft.actions = [...draft.actions, firstDraftAction()]
+  }
+
+  function addActionCondition(action: AutomationAction) {
+    if (!switchDevices.length || (action.when?.length ?? 0) >= 4) return
+    action.when = [...(action.when ?? []), { device_id: switchDevices[0].id, on: true }]
+  }
+
+  function removeActionCondition(action: AutomationAction, index: number) {
+    action.when = action.when?.filter((_, item) => item !== index)
   }
 
   function deviceFor(id: string): Device | undefined {
@@ -498,6 +543,10 @@
     action.value = Number(value)
   }
 
+  function setActionOffset(action: AutomationAction, value: string) {
+    action.offset_minutes = Number(value)
+  }
+
   // A <select> hands back strings, so booleans need converting on the way in.
   function setBool(action: AutomationAction, value: string) {
     action.value = value === 'true'
@@ -537,12 +586,16 @@
     const available = new Set($devices.map((device) => device.id))
     const ids = [
       ...(rule.conditions ?? []).map((condition) => condition.device_id),
+      ...rule.actions.flatMap((action) =>
+        (action.when ?? []).map((condition) => condition.device_id),
+      ),
       ...rule.actions
         .filter((action) => action.action !== 'run_automation')
         .map((action) => action.device_id),
     ]
     if (rule.trigger.type === 'device_state') ids.push(rule.trigger.device.device_id)
     if (rule.trigger.type === 'device_offline') ids.push(rule.trigger.offline.device_id)
+    if (rule.trigger.type === 'device_online') ids.push(rule.trigger.online.device_id)
     return [...new Set(ids.filter((id) => !available.has(id)))]
   }
 
@@ -551,6 +604,11 @@
     switch (rule.trigger.type) {
       case 'device_offline':
         return `offline ${rule.trigger.offline.minutes}m`
+      case 'device_online': {
+        const recovered = rule.trigger.online
+        const comparison = onlineComparisons.find((item) => item.value === recovered.operator)
+        return `online after ${comparison?.symbol ?? ''}${recovered.minutes}m offline`
+      }
       case 'presence':
         return rule.trigger.presence.present ? 'arrives' : 'leaves'
       case 'device_state': {
@@ -568,10 +626,49 @@
     }
   }
 
+  function isTimedRule(rule: AutomationRule): boolean {
+    return (
+      rule.trigger.type === 'schedule' &&
+      rule.actions.some((action) => (action.offset_minutes ?? 0) > 0)
+    )
+  }
+
+  function actionSummary(rule: AutomationRule): string {
+    if (!isTimedRule(rule)) {
+      return `${rule.actions.length} action${rule.actions.length === 1 ? '' : 's'}`
+    }
+    const steps = new Set(rule.actions.map((action) => action.offset_minutes ?? 0)).size
+    return `${steps} timed step${steps === 1 ? '' : 's'}`
+  }
+
+  function runMeta(run: AutomationSnapshot['runs'][number]): string {
+    const offset = (run.offset_minutes ?? 0) > 0 ? ` +${run.offset_minutes}m` : ''
+    const skipped = run.results.filter((result) => result.skipped).length
+    return `${run.source}${offset}${skipped ? ` · ${skipped} skipped` : ''}`
+  }
+
   // A draft is savable when its trigger is actually complete. Each kind has one
   // field that cannot be defaulted sensibly.
   function draftIsComplete(rule: AutomationRule): boolean {
     if (!rule.name.trim() || rule.actions.length === 0) return false
+    if (
+      rule.actions.some(
+        (action) =>
+          (action.when?.length ?? 0) > 4 ||
+          (action.offset_minutes ?? 0) < 0 ||
+          (action.offset_minutes ?? 0) > 1439 ||
+          (rule.trigger.type !== 'schedule' && (action.offset_minutes ?? 0) !== 0),
+      )
+    ) {
+      return false
+    }
+    if (
+      rule.trigger.type === 'schedule' &&
+      rule.actions.some((action) => (action.offset_minutes ?? 0) > 0) &&
+      !rule.actions.some((action) => (action.offset_minutes ?? 0) === 0)
+    ) {
+      return false
+    }
     switch (rule.trigger.type) {
       case 'schedule':
         return rule.trigger.schedule.weekdays.length > 0
@@ -579,6 +676,15 @@
         return rule.trigger.device.device_id !== ''
       case 'device_offline':
         return rule.trigger.offline.device_id !== '' && rule.trigger.offline.minutes >= 1
+      case 'device_online': {
+        const recovered = rule.trigger.online
+        return (
+          recovered.device_id !== '' &&
+          recovered.minutes >= 1 &&
+          recovered.minutes <= 1440 &&
+          onlineComparisons.some((item) => item.value === recovered.operator)
+        )
+      }
       case 'presence':
         return isMAC(rule.trigger.presence.mac)
       default:
@@ -665,7 +771,7 @@
 
           <div>
             <span class="text-xs text-ink/55">Trigger</span>
-            <div class="mt-1 grid grid-cols-5 gap-1 rounded-xl bg-ink/5 p-1">
+            <div class="mt-1 grid grid-cols-3 gap-1 rounded-xl bg-ink/5 p-1 sm:grid-cols-6">
               {#each triggerKinds as kind (kind.value)}
                 <button
                   type="button"
@@ -684,8 +790,8 @@
             <div class="rounded-xl bg-ink/[0.03] p-3">
               <input type="time" bind:value={draft.trigger.schedule.time} class="w-full rounded-lg border border-ink/10 bg-ink/5 px-3 py-2 text-sm" />
               <div class="mt-2 flex flex-wrap gap-1">
-                {#each weekdays as day, index (day)}
-                  <button type="button" onclick={() => toggleDay(index)} class="rounded-full px-2 py-1 text-[11px] font-medium {draft.trigger.schedule.weekdays.includes(index) ? 'bg-indigo-500 text-white' : 'bg-ink/5 text-ink/50'}">{day}</button>
+                {#each weekdays as day (day.value)}
+                  <button type="button" onclick={() => toggleDay(day.value)} class="rounded-full px-2 py-1 text-[11px] font-medium {draft.trigger.schedule.weekdays.includes(day.value) ? 'bg-indigo-500 text-white' : 'bg-ink/5 text-ink/50'}">{day.label}</button>
                 {/each}
               </div>
               <p class="mt-2 text-[11px] text-ink/40">Uses this browser’s current UTC offset. Update the rule if daylight-saving offset changes.</p>
@@ -730,6 +836,24 @@
                 Runs once when the device has been unreachable that long, and arms again only after it is seen back on the network.
               </p>
             </div>
+          {:else if draft.trigger.type === 'device_online'}
+            <div class="grid grid-cols-2 gap-2 rounded-xl bg-ink/[0.03] p-3">
+              <select bind:value={draft.trigger.online.device_id} aria-label="Device to watch" class="col-span-2 rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
+                {#each reachableDevices as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}
+              </select>
+              <select bind:value={draft.trigger.online.operator} aria-label="Recovery offline-duration comparison" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
+                {#each onlineComparisons as comparison (comparison.value)}
+                  <option value={comparison.value}>{comparison.label}</option>
+                {/each}
+              </select>
+              <label class="flex items-center gap-2 text-[11px] text-ink/45">
+                <input type="number" min="1" max="1440" bind:value={draft.trigger.online.minutes} class="w-20 rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm" />
+                minutes
+              </label>
+              <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
+                Runs once when the device returns. Duration uses completed minutes, so exactly 10 means 10:00–10:59 offline.
+              </p>
+            </div>
           {:else if draft.trigger.type === 'presence'}
             <div class="grid grid-cols-2 gap-2 rounded-xl bg-ink/[0.03] p-3">
               <input
@@ -760,7 +884,7 @@
           {/if}
 
           <div>
-            <div class="flex items-center justify-between"><span class="text-xs text-ink/55">Conditions (all must match)</span><button type="button" onclick={addCondition} disabled={(draft.conditions?.length ?? 0) >= 4 || !switchDevices.length} class="text-xs font-medium text-indigo-500 disabled:opacity-40">+ Add</button></div>
+            <div class="flex items-center justify-between"><span class="text-xs text-ink/55">{draft.trigger.type === 'schedule' ? 'Step conditions (checked each time)' : 'Conditions (all must match)'}</span><button type="button" onclick={addCondition} disabled={(draft.conditions?.length ?? 0) >= 4 || !switchDevices.length} class="text-xs font-medium text-indigo-500 disabled:opacity-40">+ Add</button></div>
             {#each draft.conditions ?? [] as condition, index (index)}
               <div class="mt-1 flex gap-1">
                 <select bind:value={condition.device_id} class="min-w-0 flex-1 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each switchDevices as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}</select>
@@ -771,7 +895,8 @@
           </div>
 
           <div>
-            <div class="flex items-center justify-between"><span class="text-xs text-ink/55">Actions (in order)</span><button type="button" onclick={addAction} disabled={draft.actions.length >= 16 || !canAddAction} class="text-xs font-medium text-indigo-500 disabled:opacity-40">+ Add</button></div>
+            <div class="flex items-center justify-between"><span class="text-xs text-ink/55">{draft.trigger.type === 'schedule' ? 'Timed steps' : 'Actions (in order)'}</span><button type="button" onclick={addAction} disabled={draft.actions.length >= 16 || !canAddAction} class="text-xs font-medium text-indigo-500 disabled:opacity-40">+ Add</button></div>
+            {#if draft.trigger.type === 'schedule'}<p class="mt-1 text-[11px] text-ink/40">Offset 0 is the start step. Later offsets use the shared clock and do not occupy a worker while waiting.</p>{/if}
             <div class="mt-1 space-y-2">
               {#each draft.actions as action, index (index)}
                 <div class="rounded-xl bg-ink/[0.03] p-2">
@@ -803,6 +928,26 @@
                   {:else if NUMERIC_ACTIONS.includes(action.action)}
                     <input type="number" value={Number(action.value ?? 0)} oninput={(event) => setNumber(action, event.currentTarget.value)} min={actionMin(action)} max={actionMax(action)} class="mt-2 w-full rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs" />
                   {/if}
+                  {#if draft.trigger.type === 'schedule'}
+                    <label class="mt-2 flex items-center gap-2 text-[11px] text-ink/40">
+                      <span class="min-w-0 flex-1">Run after start</span>
+                      <input type="number" min="0" max="1439" value={action.offset_minutes ?? 0} oninput={(event) => setActionOffset(action, event.currentTarget.value)} class="w-20 shrink-0 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1" />
+                      <span class="shrink-0">min</span>
+                    </label>
+                  {/if}
+                  <div class="mt-2 rounded-lg border border-ink/5 bg-ink/[0.02] p-2">
+                    <div class="flex items-center justify-between">
+                      <span class="text-[11px] text-ink/40">Only if (checked before action)</span>
+                      <button type="button" onclick={() => addActionCondition(action)} disabled={(action.when?.length ?? 0) >= 4 || !switchDevices.length} class="text-[11px] font-medium text-indigo-500 disabled:opacity-40">+ Add</button>
+                    </div>
+                    {#each action.when ?? [] as condition, conditionIndex (conditionIndex)}
+                      <div class="mt-1 flex gap-1">
+                        <select bind:value={condition.device_id} aria-label="Action condition device" class="min-w-0 flex-1 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs">{#each switchDevices as device (device.id)}<option value={device.id}>{device.name || device.id}</option>{/each}</select>
+                        <select bind:value={condition.on} aria-label="Action condition state" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-1.5 text-xs"><option value={true}>is on</option><option value={false}>is off</option></select>
+                        <button type="button" onclick={() => removeActionCondition(action, conditionIndex)} class="h-8 w-8 rounded-lg text-rose-500" aria-label="Remove action condition">×</button>
+                      </div>
+                    {/each}
+                  </div>
                   <label class="mt-2 flex items-center gap-2 text-[11px] text-ink/40">
                     <span class="min-w-0 flex-1">Wait before action</span>
                     <input type="number" min="0" max="60" bind:value={action.delay_seconds} class="w-16 shrink-0 rounded-lg border border-ink/10 bg-ink/5 px-2 py-1" />
@@ -846,8 +991,8 @@
               <div class="min-w-0 rounded-2xl border border-ink/10 bg-ink/[0.025] p-3" in:fly={{ y: 5, duration: 120 }}>
                 <div class="flex min-w-0 items-center gap-2">
                   <button type="button" onclick={() => toggleRule(rule)} disabled={!canModify || saving || missing.length > 0 || unavailableAutomation.length > 0} aria-label={rule.enabled ? `Disable ${rule.name}` : `Enable ${rule.name}`} class="h-5 w-9 shrink-0 rounded-full p-0.5 transition {rule.enabled ? 'bg-emerald-500' : 'bg-ink/15'} disabled:opacity-40"><span class="block h-4 w-4 rounded-full bg-white shadow transition {rule.enabled ? 'translate-x-4' : ''}"></span></button>
-                  <button type="button" onclick={() => canModify && (draft = cloneRule(rule))} disabled={!canModify} class="min-w-0 flex-1 text-left disabled:cursor-default"><span class="block truncate text-sm font-medium">{rule.name}</span><span class="block text-[11px] text-ink/40">{triggerLabel(rule)} · {rule.actions.length} action{rule.actions.length === 1 ? '' : 's'}</span></button>
-                  <button type="button" onclick={() => run(rule)} disabled={saving || snapshot?.paused || !rule.enabled || missing.length > 0 || unavailableAutomation.length > 0} class="shrink-0 rounded-lg bg-indigo-500/10 px-2 py-1.5 text-[11px] font-medium text-indigo-600 disabled:opacity-30 dark:text-indigo-300">Run</button>
+                  <button type="button" onclick={() => canModify && (draft = cloneRule(rule))} disabled={!canModify} class="min-w-0 flex-1 text-left disabled:cursor-default"><span class="block truncate text-sm font-medium">{rule.name}</span><span class="block text-[11px] text-ink/40">{triggerLabel(rule)} · {actionSummary(rule)}</span></button>
+                  <button type="button" onclick={() => run(rule)} disabled={saving || snapshot?.paused || !rule.enabled || missing.length > 0 || unavailableAutomation.length > 0} class="shrink-0 rounded-lg bg-indigo-500/10 px-2 py-1.5 text-[11px] font-medium text-indigo-600 disabled:opacity-30 dark:text-indigo-300">{isTimedRule(rule) ? 'Run first step' : 'Run'}</button>
                   {#if canModify}
                     <button type="button" onclick={() => removeRule(rule.id)} disabled={saving} class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-rose-500">×</button>
                   {/if}
@@ -864,7 +1009,7 @@
           {#if snapshot?.runs.length}
             <h3 class="px-1 pt-3 text-xs font-medium text-ink/50">Recent runs (memory only)</h3>
             {#each snapshot.runs.slice(0, 5) as run (run.id)}
-              <div class="flex min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-xs"><span class="h-2 w-2 shrink-0 rounded-full {run.ok ? 'bg-emerald-500' : 'bg-rose-500'}"></span><span class="min-w-0 flex-1 truncate">{run.rule_name}</span><span class="max-w-[40%] shrink-0 truncate text-[10px] text-ink/35">{run.source}</span></div>
+              <div class="flex min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-xs"><span class="h-2 w-2 shrink-0 rounded-full {run.ok ? 'bg-emerald-500' : 'bg-rose-500'}"></span><span class="min-w-0 flex-1 truncate">{run.rule_name}</span><span class="max-w-[50%] shrink-0 truncate text-[10px] text-ink/35">{runMeta(run)}</span></div>
             {/each}
           {/if}
         </div>

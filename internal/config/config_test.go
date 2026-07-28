@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -160,7 +161,7 @@ func TestDeviceSpecNormalized(t *testing.T) {
 func TestFactory(t *testing.T) {
 	f := NewFactory()
 	var built DeviceSpec
-	f.Register("acme", "widget", "Widget", func(spec DeviceSpec, deps Deps) (device.Device, error) {
+	f.Register("Tool", "acme", "widget", "Widget", func(spec DeviceSpec, deps Deps) (device.Device, error) {
 		built = spec
 		return nil, nil
 	})
@@ -177,7 +178,45 @@ func TestFactory(t *testing.T) {
 	if !f.Supports("ACME", "Widget") {
 		t.Error("Supports() must match the same case-insensitive key as Build()")
 	}
-	if types := f.Types(); len(types) != 1 || types[0].Brand != "acme" || types[0].Driver != "widget" || types[0].Label != "Widget" {
+	if types := f.Types(); len(types) != 1 || types[0].Category != "Tool" ||
+		types[0].Brand != "acme" || types[0].Driver != "widget" || types[0].Label != "Widget" {
 		t.Errorf("Types() = %+v, want the registered driver as spelled, with its label", types)
+	}
+}
+
+func TestFactoryTypesSortForPicker(t *testing.T) {
+	f := NewFactory()
+	build := func(DeviceSpec, Deps) (device.Device, error) { return nil, nil }
+	f.Register("TV", "Zulu", "tv", "Television", build)
+	f.Register("Light", "Zulu", "white", "White Bulb", build)
+	f.Register("Light", "Acme", "color", "Colour Bulb", build)
+	f.Register("Light", "Acme", "basic", "Basic Bulb", build)
+
+	got := f.Types()
+	want := []DeviceType{
+		{Category: "Light", Brand: "Acme", Driver: "basic", Label: "Basic Bulb"},
+		{Category: "Light", Brand: "Acme", Driver: "color", Label: "Colour Bulb"},
+		{Category: "Light", Brand: "Zulu", Driver: "white", Label: "White Bulb"},
+		{Category: "TV", Brand: "Zulu", Driver: "tv", Label: "Television"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Types() = %+v; want %+v", got, want)
+	}
+}
+
+func TestFactoryRejectsMissingCatalogLabels(t *testing.T) {
+	build := func(DeviceSpec, Deps) (device.Device, error) { return nil, nil }
+	for name, register := range map[string]func(){
+		"category": func() { NewFactory().Register("", "acme", "widget", "Widget", build) },
+		"label":    func() { NewFactory().Register("Tool", "acme", "widget", "", build) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("Register did not panic")
+				}
+			}()
+			register()
+		})
 	}
 }

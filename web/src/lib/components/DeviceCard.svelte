@@ -22,7 +22,7 @@
   // Renders one device entirely from its data + capabilities — no per-device
   // markup. Adding a device type to the backend lights up the right controls
   // here automatically.
-  let { device }: { device: Device } = $props()
+  let { device, collapsed = false }: { device: Device; collapsed?: boolean } = $props()
 
   let caps = $derived(new Set(device.capabilities))
   // A Wake-on-LAN device is just a MAC + a Wake button — no light, no media, and
@@ -34,7 +34,7 @@
 
   // Collapsed by default: a card shows only its name, power, and the expand
   // chevron until opened. The open/closed state is persisted per device.
-  let isOpen = $derived($expanded[device.id] ?? false)
+  let isOpen = $derived(!collapsed && ($expanded[device.id] ?? false))
   // The subtitle is the vendor plus the hardware, when anything knows what the
   // hardware is — scanned off the device or typed in. Nothing is invented from
   // the driver key: "Color Bulb" under a bulb named "Desk lamp" is noise.
@@ -173,7 +173,7 @@
       {#if caps.has('wol')}
         <WakeButton onWake={() => command(device.id, 'wake')} />
       {/if}
-      {#if hasLight || hasMedia || hasFan}
+      {#if !collapsed && (hasLight || hasMedia || hasFan)}
         <button
           type="button"
           onclick={() => {
@@ -204,13 +204,16 @@
   {#if isOpen && hasFan}
     <div class="mt-5 space-y-4" transition:slide={{ duration: 250 }}>
       {#if caps.has('speed')}
-        <FanSpeedSlider
-          value={device.state.speed}
-          min={device.speed_min ?? 1}
-          max={device.speed_max ?? 6}
-          disabled={offline}
-          onChange={setSpeed}
-        />
+        <div class="space-y-1.5">
+          <span class="block text-xs font-medium text-ink/50">Fan speed</span>
+          <FanSpeedSlider
+            value={device.state.speed}
+            min={device.speed_min ?? 1}
+            max={device.speed_max ?? 6}
+            disabled={offline}
+            onChange={setSpeed}
+          />
+        </div>
       {/if}
       {#if caps.has('light')}
         <!-- The lamp is its own circuit: it works with the blades stopped, so
@@ -251,7 +254,12 @@
   {#if isOpen && hasLight}
     <div class="mt-5 space-y-4" transition:slide={{ duration: 250 }}>
       {#if caps.has('brightness')}
-        <BrightnessSlider value={device.state.brightness} disabled={lightDisabled} onChange={setBrightness} />
+        <div class="space-y-1.5">
+          {#if hasFan}
+            <span class="block text-xs font-medium text-ink/50">Light brightness</span>
+          {/if}
+          <BrightnessSlider value={device.state.brightness} disabled={lightDisabled} onChange={setBrightness} />
+        </div>
       {/if}
       {#if caps.has('color_temp')}
         <ColorTempSlider

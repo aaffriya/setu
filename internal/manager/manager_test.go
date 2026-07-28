@@ -32,6 +32,9 @@ func TestViewOfIncludesColorTempRange(t *testing.T) {
 	if view.ColorTempMin != 2700 || view.ColorTempMax != 6500 {
 		t.Fatalf("color temperature range = %d–%d, want 2700–6500", view.ColorTempMin, view.ColorTempMax)
 	}
+	if view.Pollable {
+		t.Fatal("non-pollable device was advertised as pollable")
+	}
 }
 
 type stalePollDevice struct {
@@ -76,6 +79,13 @@ func (d *stalePollDevice) Poll() (device.State, error) {
 	d.state = stale
 	d.mu.Unlock()
 	return stale, nil
+}
+func (*stalePollDevice) ReportsReachability() bool { return true }
+
+func TestViewOfIncludesPollableMetadata(t *testing.T) {
+	if view := ViewOf(&stalePollDevice{}); !view.Pollable || !view.Reachability {
+		t.Fatal("pollable device was not advertised as pollable")
+	}
 }
 
 func TestCommandWaitsForInFlightPoll(t *testing.T) {

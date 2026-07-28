@@ -42,6 +42,8 @@ export type Device = {
   model?: string
   mac: string
   capabilities: string[]
+  pollable: boolean
+  reports_reachability: boolean
   color_temp_min?: number
   color_temp_max?: number
   speed_min?: number // hardware step range, for devices with a speed capability
@@ -79,10 +81,16 @@ export type DiscoveredDevice = {
   device_id?: string
 }
 
-// One driver this build can run, under the name to show for it. The catalog
-// comes from the server, so the manual add form can never offer something Setu
-// cannot build — and the UI never has to turn a driver key into English.
-export type DeviceType = { brand: string; driver: string; label: string }
+// One driver this build can run, under the category and name to show for it.
+// The catalog comes from the server, so the manual add form can never offer
+// something Setu cannot build — and the UI never has to turn a driver key into
+// English.
+export type DeviceType = {
+  category: string
+  brand: string
+  driver: string
+  label: string
+}
 
 // What Setu stores for one device — the form used to add one and to back the
 // list up. Identity (brand, driver, mac) is fixed once added; only the name and
@@ -155,6 +163,8 @@ export type AutomationAction = {
   action: AutomationActionName
   value?: number | string | boolean | Color
   delay_seconds?: number
+  offset_minutes?: number
+  when?: AutomationCondition[]
 }
 
 export type AutomationCondition = { device_id: string; on: boolean }
@@ -188,6 +198,12 @@ export type AutomationTrigger =
   // Fires once when a device has been unreachable for this long, and arms again
   // only after it has been seen back on the network.
   | { type: 'device_offline'; offline: { device_id: string; minutes: number } }
+  // Fires on the recovery edge when the completed minutes in the just-finished
+  // offline episode match this comparison.
+  | {
+      type: 'device_online'
+      online: { device_id: string; operator: AutomationComparison; minutes: number }
+    }
   // Watches a MAC on the LAN — a phone arriving or leaving — with no device
   // added for it.
   | { type: 'presence'; presence: { mac: string; present: boolean; stable_seconds?: number } }
@@ -215,6 +231,7 @@ export type AutomationRun = {
   rule_id: string
   rule_name: string
   source: string
+  offset_minutes?: number
   started_at: string
   duration_ms: number
   ok: boolean
@@ -223,6 +240,7 @@ export type AutomationRun = {
     automation_id?: string
     action: string
     ok: boolean
+    skipped?: boolean
     error?: string
   }>
 }
@@ -405,6 +423,8 @@ export function normalizeDevices(value: unknown): Device[] {
       model: asString(item.model) || undefined,
       mac: asString(item.mac),
       capabilities: asStringArray(item.capabilities),
+      pollable: item.pollable === true,
+      reports_reachability: item.reports_reachability === true,
       color_temp_min: colorTempRange.min,
       color_temp_max: colorTempRange.max,
       speed_min: speedRange.min,

@@ -19,6 +19,9 @@ Model-to-driver mapping is explicit in `driverFor`; the beacon's "series" code
 ("R1", "I1") is this brand's model, and an unknown one is scanned with no
 driver.
 
+Both driver paths explicitly report live reachability for offline/recovery
+automations.
+
 Resolution is fresh beacon → cached IP → cold-cache beacon wait → ARP. Commands
 have no acknowledgement; `Poll` sends `speedDelta:0` and waits for a newer
 broadcast. The driver is simulator-verified end to end but not yet verified on

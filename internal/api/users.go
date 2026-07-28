@@ -80,6 +80,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user updated", "user", user.ID, "role", user.Role, "devices", len(user.Devices))
+	s.publishInventoryChanged()
 	writeJSON(w, http.StatusOK, userResponse{User: user})
 }
 
@@ -91,6 +92,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user removed", "user", id)
+	s.publishInventoryChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -103,6 +105,7 @@ func (s *Server) handleRotateUserToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user token rotated", "user", user.ID)
+	s.publishInventoryChanged()
 	writeJSON(w, http.StatusOK, userResponse{User: user, Token: token})
 }
 

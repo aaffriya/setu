@@ -271,6 +271,10 @@ func (b *Bulb) Poll() (device.State, error) {
 	return b.State(), nil
 }
 
+// ReportsReachability opts this driver into offline/recovery automations:
+// unlike a MAC-only fallback device, its Online field represents live contact.
+func (*Bulb) ReportsReachability() bool { return true }
+
 // ---------------------------------------------------------------------------
 // Construction & registration
 // ---------------------------------------------------------------------------
@@ -299,13 +303,14 @@ func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {
 // (cmd/setu/main.go) calls this once — that single call is the "register one
 // factory line" step when adding a device.
 //
-// The third argument is the label the UI shows wherever a person picks a driver
-// (the manual add form, an unnamed scan result). Write it as the shortest thing
-// a user would recognise on the box, not as the key.
+// The first and fourth arguments are the category and label the UI shows
+// wherever a person picks a driver (the manual add form, an unnamed scan
+// result). Write the label as the shortest thing a user would recognise on the
+// box, not as the key.
 func Register(f *config.Factory) {
-	f.Register(Brand, DriverBulb, "Bulb", New)
+	f.Register("Light", Brand, DriverBulb, "Bulb", New)
 	// A second driver of the same brand would be added here, e.g.:
-	//   f.Register(Brand, DriverPlug, "Smart plug", NewPlug)
+	//   f.Register("Plug", Brand, DriverPlug, "Smart Plug", NewPlug)
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +329,7 @@ func Register(f *config.Factory) {
 //     meaningful — see the Poll doc comment; getting this wrong makes an
 //     unreachable device render as a healthy one.
 //  5. Export New (a config.Constructor) and a Register(*config.Factory), giving
-//     every driver a human label there.
+//     every driver a human category and label there.
 //  6. Call <brand>.Register(factory) once in cmd/setu/main.go — and add the
 //     discoverer to the `scanners` slice there if it implements Scan.
 //  7. Add the device from Settings → Devices: a network scan finds it, or it

@@ -1,8 +1,10 @@
 # `internal/events`
 
-Small dependency-free pub/sub bus for `StateChanged` events.
+Small dependency-free pub/sub bus for replaceable device state and inventory
+invalidation events.
 
-- Publishers: device command methods, manager polling, and pushed device state.
+- Publishers: device command methods, manager polling, pushed device state, and
+  successful inventory/account-access mutations.
 - Consumers: manager cache, API WebSockets, and automation.
 - `Publish` is non-blocking; one slow subscriber cannot stall devices.
 - `Subscribe` returns an idempotent cancel function.
@@ -11,5 +13,9 @@ Small dependency-free pub/sub bus for `StateChanged` events.
   authoritative snapshot is installed.
 - `Publish` stamps a missing event time.
 
-Dropped state events are acceptable only because every consumer has a snapshot
-recovery path. Do not use this bus for commands or irreplaceable audit data.
+Dropped events are acceptable only because every consumer has a snapshot
+recovery path. A device-membership `InventoryChanged` may carry the current ids
+inside the process so automation can prune transient clocks; WebSockets expose
+only the event type and cause a permission-filtered re-read. Account-only
+changes carry no ids. Do not use this bus for commands or irreplaceable audit
+data.

@@ -43,8 +43,8 @@
       if (event.key !== 'Escape') return
       event.preventDefault()
       event.stopPropagation()
-      if (issued) issued = null
-      else if (draft) draft = null
+      if (issued) return
+      if (draft) draft = null
       else open = false
     }
     document.addEventListener('keydown', onKey)
@@ -55,6 +55,14 @@
     { value: 'read', label: 'Control', hint: 'Use the devices below. Cannot add devices or write automations.' },
     { value: 'modify', label: 'Manage', hint: 'Also add devices and write automations — still only for the devices below.' },
   ]
+
+  function closePeople() {
+    // The plaintext token exists only in this dialog. Require the deliberate
+    // acknowledgement button instead of letting backdrop, Escape, or × discard
+    // it accidentally.
+    if (issued) return
+    open = false
+  }
 
   async function show() {
     open = true
@@ -203,7 +211,7 @@
   <div
     class="fixed inset-0 z-40 grid place-items-center overflow-hidden overscroll-none bg-black/50 p-3 backdrop-blur-sm"
     transition:fade={{ duration: 150 }}
-    onclick={(event) => event.target === event.currentTarget && (open = false)}
+    onclick={(event) => event.target === event.currentTarget && closePeople()}
   >
     <div
       class="flex max-h-[92dvh] w-full min-w-0 max-w-lg flex-col overflow-hidden rounded-3xl border border-ink/10 bg-panel p-4 shadow-2xl min-[360px]:p-5"
@@ -221,7 +229,13 @@
           <h2 class="truncate text-lg font-semibold">{draft ? (draft.id ? 'Edit person' : 'Add person') : 'People'}</h2>
           <p class="truncate text-xs text-ink/45">Each person signs in with their own token.</p>
         </div>
-        <button type="button" onclick={() => (open = false)} class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink/5 text-ink/60" aria-label="Close people">×</button>
+        <button
+          type="button"
+          onclick={closePeople}
+          disabled={Boolean(issued)}
+          class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink/5 text-ink/60 disabled:opacity-30"
+          aria-label={issued ? 'Save or dismiss token before closing people' : 'Close people'}
+        >×</button>
       </div>
 
       {#if loading}
@@ -341,7 +355,7 @@
           <code class="mt-1 block break-all text-[10px] text-ink/55">{issued.token}</code>
           <div class="mt-2 flex gap-2">
             <button type="button" onclick={copyToken} class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white">Copy token</button>
-            <button type="button" onclick={() => (issued = null)} class="rounded-lg bg-ink/5 px-3 py-1.5 text-xs font-medium text-ink/60">Done</button>
+            <button type="button" onclick={() => (issued = null)} class="rounded-lg bg-ink/5 px-3 py-1.5 text-xs font-medium text-ink/60">I’ve saved it</button>
           </div>
           <p class="mt-1.5 text-[11px] leading-relaxed text-ink/45">
             They enter it in Settings → Access token on their own device. A lost token is replaced with “New token”.

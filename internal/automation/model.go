@@ -14,20 +14,22 @@ import (
 )
 
 const (
-	FormatVersion = 1
-	MaxRules      = 64
-	MaxConditions = 4
-	MaxActions    = 16
-	MaxDelay      = 60
-	MaxNesting    = 8
-	MaxRunActions = MaxActions * MaxNesting
-	MaxRunDelay   = MaxActions * MaxDelay
+	FormatVersion    = 1
+	MaxRules         = 64
+	MaxConditions    = 4
+	MaxActions       = 16
+	MaxDelay         = 60
+	MaxOffsetMinutes = 1439
+	MaxNesting       = 8
+	MaxRunActions    = MaxActions * MaxNesting
+	MaxRunDelay      = MaxActions * MaxDelay
 )
 
 const (
 	TriggerSchedule      = "schedule"
 	TriggerDeviceState   = "device_state"
 	TriggerDeviceOffline = "device_offline"
+	TriggerDeviceOnline  = "device_online"
 	TriggerPresence      = "presence"
 	TriggerWebhook       = "webhook"
 	ActionAutomation     = "run_automation"
@@ -119,6 +121,7 @@ type Trigger struct {
 	Schedule *Schedule       `json:"schedule,omitempty"`
 	Device   *DeviceTrigger  `json:"device,omitempty"`
 	Offline  *OfflineTrigger `json:"offline,omitempty"`
+	Online   *OnlineTrigger  `json:"online,omitempty"`
 	Presence *Presence       `json:"presence,omitempty"`
 	Webhook  *Webhook        `json:"webhook,omitempty"`
 }
@@ -196,6 +199,28 @@ type OfflineTrigger struct {
 	Minutes  int    `json:"minutes"`
 }
 
+// OnlineTrigger fires when a device returns after one observed unreachable
+// episode whose completed minutes match Operator and Minutes. The episode clock
+// is RAM-only, so a restart starts measuring an already-offline device again.
+type OnlineTrigger struct {
+	DeviceID string `json:"device_id"`
+	Operator string `json:"operator"`
+	Minutes  int    `json:"minutes"`
+}
+
+func (t OnlineTrigger) matches(offlineFor time.Duration) bool {
+	minutes := int(offlineFor / time.Minute)
+	switch t.Operator {
+	case OpAbove:
+		return minutes > t.Minutes
+	case OpBelow:
+		return minutes < t.Minutes
+	case OpEquals:
+		return minutes == t.Minutes
+	}
+	return false
+}
+
 // Presence fires when a MAC appears on — or disappears from — the LAN, as seen
 // in the kernel's neighbour table. It is how "when my phone gets home" is
 // written without any device being added for the phone.
@@ -221,11 +246,13 @@ type Condition struct {
 }
 
 type Action struct {
-	DeviceID     string          `json:"device_id"`
-	AutomationID string          `json:"automation_id,omitempty"`
-	Action       string          `json:"action"`
-	Value        json.RawMessage `json:"value,omitempty"`
-	DelaySeconds int             `json:"delay_seconds,omitempty"`
+	DeviceID      string          `json:"device_id"`
+	AutomationID  string          `json:"automation_id,omitempty"`
+	Action        string          `json:"action"`
+	Value         json.RawMessage `json:"value,omitempty"`
+	DelaySeconds  int             `json:"delay_seconds,omitempty"`
+	OffsetMinutes int             `json:"offset_minutes,omitempty"`
+	When          []Condition     `json:"when,omitempty"`
 }
 
 func (a Action) request() control.Request {
@@ -237,18 +264,20 @@ type ActionResult struct {
 	AutomationID string `json:"automation_id,omitempty"`
 	Action       string `json:"action"`
 	OK           bool   `json:"ok"`
+	Skipped      bool   `json:"skipped,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
 
 type Run struct {
-	ID         string         `json:"id"`
-	RuleID     string         `json:"rule_id"`
-	RuleName   string         `json:"rule_name"`
-	Source     string         `json:"source"`
-	StartedAt  time.Time      `json:"started_at"`
-	DurationMS int64          `json:"duration_ms"`
-	OK         bool           `json:"ok"`
-	Results    []ActionResult `json:"results"`
+	ID            string         `json:"id"`
+	RuleID        string         `json:"rule_id"`
+	RuleName      string         `json:"rule_name"`
+	Source        string         `json:"source"`
+	OffsetMinutes int            `json:"offset_minutes"`
+	StartedAt     time.Time      `json:"started_at"`
+	DurationMS    int64          `json:"duration_ms"`
+	OK            bool           `json:"ok"`
+	Results       []ActionResult `json:"results"`
 }
 
 type Snapshot struct {
@@ -306,20 +335,8 @@ func validateState(state State, mgr *manager.Manager, presence bool) error {
 		if err := validateTrigger(rule.ID, rule.Enabled, rule.Trigger, mgr, presence); err != nil {
 			return err
 		}
-		if len(rule.Conditions) > MaxConditions {
-			return fmt.Errorf("automation %q has too many conditions", rule.ID)
-		}
-		for _, condition := range rule.Conditions {
-			if !rule.Enabled {
-				continue
-			}
-			dev, ok := mgr.Device(condition.DeviceID)
-			if !ok {
-				return fmt.Errorf("automation %q condition references unknown device %q", rule.ID, condition.DeviceID)
-			}
-			if _, ok := dev.(device.Switchable); !ok {
-				return fmt.Errorf("automation %q condition device %q has no power state", rule.ID, condition.DeviceID)
-			}
+		if err := validateConditions(rule.ID, "condition", rule.Conditions, rule.Enabled, mgr); err != nil {
+			return err
 		}
 		if len(rule.Actions) == 0 || len(rule.Actions) > MaxActions {
 			return fmt.Errorf("automation %q must have 1-%d actions", rule.ID, MaxActions)
@@ -330,6 +347,15 @@ func validateState(state State, mgr *manager.Manager, presence bool) error {
 			}
 			if len(action.Value) > 1024 {
 				return fmt.Errorf("automation %q action value is too large", rule.ID)
+			}
+			if action.OffsetMinutes < 0 || action.OffsetMinutes > MaxOffsetMinutes {
+				return fmt.Errorf("automation %q action offset must be 0-%d minutes", rule.ID, MaxOffsetMinutes)
+			}
+			if action.OffsetMinutes > 0 && rule.Trigger.Type != TriggerSchedule {
+				return fmt.Errorf("automation %q action offsets require a schedule trigger", rule.ID)
+			}
+			if err := validateConditions(rule.ID, "action condition", action.When, rule.Enabled, mgr); err != nil {
+				return err
 			}
 			if _, allowed := safeActions[action.Action]; !allowed {
 				return fmt.Errorf("automation %q action %q is not safe for automatic execution", rule.ID, action.Action)
@@ -357,11 +383,41 @@ func validateState(state State, mgr *manager.Manager, presence bool) error {
 				return fmt.Errorf("automation %q action for %q: %w", rule.ID, action.DeviceID, err)
 			}
 		}
+		if rule.Trigger.Type == TriggerSchedule {
+			hasTimedStep := false
+			hasStartStep := false
+			for _, action := range rule.Actions {
+				hasTimedStep = hasTimedStep || action.OffsetMinutes > 0
+				hasStartStep = hasStartStep || action.OffsetMinutes == 0
+			}
+			if hasTimedStep && !hasStartStep {
+				return fmt.Errorf("automation %q timed schedule needs an action at offset 0", rule.ID)
+			}
+		}
 	}
 	if err := validateAutomationCalls(state.Items); err != nil {
 		return err
 	}
 	return validateFeedbackLoops(state.Items)
+}
+
+func validateConditions(ruleID, label string, conditions []Condition, enabled bool, mgr *manager.Manager) error {
+	if len(conditions) > MaxConditions {
+		return fmt.Errorf("automation %q has too many %ss", ruleID, label)
+	}
+	if !enabled {
+		return nil
+	}
+	for _, condition := range conditions {
+		dev, ok := mgr.Device(condition.DeviceID)
+		if !ok {
+			return fmt.Errorf("automation %q %s references unknown device %q", ruleID, label, condition.DeviceID)
+		}
+		if _, ok := dev.(device.Switchable); !ok {
+			return fmt.Errorf("automation %q %s device %q has no power state", ruleID, label, condition.DeviceID)
+		}
+	}
+	return nil
 }
 
 func validateAutomationCalls(rules []Rule) error {
@@ -436,6 +492,7 @@ func exactlyOne(trigger Trigger, want string) bool {
 		{TriggerSchedule, trigger.Schedule != nil},
 		{TriggerDeviceState, trigger.Device != nil},
 		{TriggerDeviceOffline, trigger.Offline != nil},
+		{TriggerDeviceOnline, trigger.Online != nil},
 		{TriggerPresence, trigger.Presence != nil},
 		{TriggerWebhook, trigger.Webhook != nil},
 	}
@@ -523,11 +580,34 @@ func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.
 		if !ok {
 			return fmt.Errorf("automation %q trigger references unknown device %q", ruleID, trigger.Offline.DeviceID)
 		}
-		// Reachability is only observable for a device Setu can read back. A
-		// write-only target (a Wake-on-LAN card) is never "offline" in any sense
-		// this trigger could act on.
-		if _, ok := dev.(device.Pollable); !ok {
+		// Polling is not by itself a reachability signal: Samsung TVs retain
+		// Online=true when live contact fails because Wake-on-LAN is still
+		// available. Require a driver that explicitly gives Online the
+		// live-contact meaning this trigger needs.
+		if !device.ReportsReachability(dev) {
 			return fmt.Errorf("automation %q trigger device %q cannot report whether it is reachable", ruleID, trigger.Offline.DeviceID)
+		}
+	case TriggerDeviceOnline:
+		if !exactlyOne(trigger, TriggerDeviceOnline) {
+			return fmt.Errorf("automation %q has an invalid online trigger", ruleID)
+		}
+		if trigger.Online.Minutes < 1 || trigger.Online.Minutes > MaxOfflineMinutes {
+			return fmt.Errorf("automation %q online recovery time must be 1-%d minutes", ruleID, MaxOfflineMinutes)
+		}
+		switch trigger.Online.Operator {
+		case OpAbove, OpBelow, OpEquals:
+		default:
+			return fmt.Errorf("automation %q online recovery has an invalid comparison", ruleID)
+		}
+		if !enabled {
+			return nil
+		}
+		dev, ok := mgr.Device(trigger.Online.DeviceID)
+		if !ok {
+			return fmt.Errorf("automation %q trigger references unknown device %q", ruleID, trigger.Online.DeviceID)
+		}
+		if !device.ReportsReachability(dev) {
+			return fmt.Errorf("automation %q trigger device %q cannot report whether it is reachable", ruleID, trigger.Online.DeviceID)
 		}
 	case TriggerPresence:
 		if !exactlyOne(trigger, TriggerPresence) {
@@ -600,6 +680,15 @@ func ruleBindingError(rule Rule, rules map[string]Rule, mgr *manager.Manager, pr
 		}
 	}
 	for _, action := range rule.Actions {
+		for _, condition := range action.When {
+			dev, ok := mgr.Device(condition.DeviceID)
+			if !ok {
+				return fmt.Errorf("missing action condition device")
+			}
+			if _, ok := dev.(device.Switchable); !ok {
+				return fmt.Errorf("action condition device has no power state")
+			}
+		}
 		if action.Action == ActionAutomation {
 			target, ok := rules[action.AutomationID]
 			if !ok || !target.Enabled {
@@ -696,9 +785,10 @@ func actionNumber(action Action) (int, bool) {
 // a chain where running one rule can retrigger a rule that leads back to it.
 //
 // Only device-state triggers take part. A schedule and a webhook come from
-// outside; a presence trigger watches a MAC no action can move; an offline
-// trigger fires once per unreachable episode and rearms only after the device is
-// seen again, so none of them can be driven round a loop by an action.
+// outside; a presence trigger watches a MAC no action can move; offline and
+// online-recovery triggers each fire once per unreachable episode and need a
+// new reachability transition to rearm, so none can be driven round a loop by
+// an action.
 func validateFeedbackLoops(rules []Rule) error {
 	byID := make(map[string]Rule, len(rules))
 	for _, rule := range rules {
@@ -782,6 +872,9 @@ func nestedEffects(rule Rule, byID map[string]Rule, memo map[string][]effect) []
 	for _, action := range rule.Actions {
 		if action.Action == ActionAutomation {
 			if target, ok := byID[action.AutomationID]; ok && target.Enabled {
+				if target.Trigger.Type == TriggerSchedule {
+					target.Actions = actionsAtOffset(target.Actions, 0)
+				}
 				for _, item := range nestedEffects(target, byID, memo) {
 					add(item)
 				}
@@ -807,6 +900,7 @@ func cloneState(state State) State {
 		for j, action := range rule.Actions {
 			out.Items[i].Actions[j] = action
 			out.Items[i].Actions[j].Value = append(json.RawMessage(nil), action.Value...)
+			out.Items[i].Actions[j].When = append([]Condition(nil), action.When...)
 		}
 		if rule.Trigger.Schedule != nil {
 			schedule := *rule.Trigger.Schedule
@@ -820,6 +914,10 @@ func cloneState(state State) State {
 		if rule.Trigger.Offline != nil {
 			offline := *rule.Trigger.Offline
 			out.Items[i].Trigger.Offline = &offline
+		}
+		if rule.Trigger.Online != nil {
+			online := *rule.Trigger.Online
+			out.Items[i].Trigger.Online = &online
 		}
 		if rule.Trigger.Presence != nil {
 			presence := *rule.Trigger.Presence

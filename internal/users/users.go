@@ -334,7 +334,7 @@ func (r *Registry) Grant(id, deviceID string) error {
 // ForgetDevice drops a deleted device from every user's grants, so removing and
 // re-adding hardware with the same id cannot silently restore old access.
 func (r *Registry) ForgetDevice(deviceID string) error {
-	return r.prune(func(id string) bool { return id != deviceID })
+	return r.prune(func(id string) bool { return id != deviceID }, nil)
 }
 
 // RetainDevices drops every grant naming a device that is not in keep. It is the
@@ -349,12 +349,27 @@ func (r *Registry) RetainDevices(keep []string) error {
 	return r.prune(func(id string) bool {
 		_, ok := wanted[id]
 		return ok
-	})
+	}, nil)
 }
 
-// prune rewrites every user's grants, keeping the ids that pass. It persists
-// only when something actually changed.
-func (r *Registry) prune(keep func(deviceID string) bool) error {
+// RetainDevicesAndUpdateState prunes grants and applies another state-file
+// mutation in one atomic write. Inventory removal/restore uses it so the device
+// list can never be persisted without its corresponding grant cleanup.
+func (r *Registry) RetainDevicesAndUpdateState(keep []string, update func(*store.State) error) error {
+	wanted := make(map[string]struct{}, len(keep))
+	for _, id := range keep {
+		wanted[id] = struct{}{}
+	}
+	return r.prune(func(id string) bool {
+		_, ok := wanted[id]
+		return ok
+	}, update)
+}
+
+// prune rewrites every user's grants, keeping the ids that pass. When update is
+// provided, both sections share one Store.Update and either both commit or
+// neither does.
+func (r *Registry) prune(keep func(deviceID string) bool, update func(*store.State) error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	next := append([]User(nil), r.items...)
@@ -372,13 +387,34 @@ func (r *Registry) prune(keep func(deviceID string) bool) error {
 		next[i].Devices = kept
 		changed = true
 	}
-	if !changed {
+	if !changed && update == nil {
 		return nil
 	}
-	if err := r.persist(next); err != nil {
-		return err
+	if update == nil {
+		if err := r.persist(next); err != nil {
+			return err
+		}
+	} else {
+		var encoded json.RawMessage
+		var err error
+		if changed {
+			encoded, err = encodeState(next)
+			if err != nil {
+				return err
+			}
+		}
+		if err := r.file.Update(func(state *store.State) error {
+			if changed {
+				state.Users = encoded
+			}
+			return update(state)
+		}); err != nil {
+			return err
+		}
 	}
-	r.items = next
+	if changed {
+		r.items = next
+	}
 	return nil
 }
 
@@ -416,17 +452,25 @@ func (r *Registry) Authenticate(token string) (User, bool) {
 }
 
 func (r *Registry) persist(items []User) error {
-	encoded, err := json.Marshal(State{Version: FormatVersion, Items: items})
+	encoded, err := encodeState(items)
 	if err != nil {
-		return fmt.Errorf("users: encode state: %w", err)
-	}
-	if len(encoded) > MaxStateBytes {
-		return fmt.Errorf("users: state is larger than %d KB", MaxStateBytes/1024)
+		return err
 	}
 	return r.file.Update(func(state *store.State) error {
 		state.Users = encoded
 		return nil
 	})
+}
+
+func encodeState(items []User) (json.RawMessage, error) {
+	encoded, err := json.Marshal(State{Version: FormatVersion, Items: items})
+	if err != nil {
+		return nil, fmt.Errorf("users: encode state: %w", err)
+	}
+	if len(encoded) > MaxStateBytes {
+		return nil, fmt.Errorf("users: state is larger than %d KB", MaxStateBytes/1024)
+	}
+	return encoded, nil
 }
 
 func (r *Registry) indexOf(id string) int {

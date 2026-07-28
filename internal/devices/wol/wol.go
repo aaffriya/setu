@@ -66,5 +66,5 @@ func New(spec config.DeviceSpec, _ config.Deps) (device.Device, error) {
 
 // Register wires the (brand, driver) pair into the factory.
 func Register(f *config.Factory) {
-	f.Register(Brand, DriverTarget, "Wake-on-LAN target", New)
+	f.Register("Wake-on-LAN", Brand, DriverTarget, "Wake-on-LAN Target", New)
 }
