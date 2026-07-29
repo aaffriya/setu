@@ -56,6 +56,41 @@ type pollOnlySwitch struct{ testSwitch }
 
 func (d *pollOnlySwitch) Poll() (device.State, error) { return d.State(), nil }
 
+// testWoLDevice mimics the Samsung TV driver's shape: State.Online is always
+// true (Wake-on-LAN makes it always controllable), so it supplies the real
+// live-contact signal separately via Reachable, matching device.LiveReachability.
+// It exists to prove offline/online triggers key off that signal end to end
+// through the engine, not off the always-true Online.
+type testWoLDevice struct {
+	id string
+
+	mu        sync.Mutex
+	reachable bool
+}
+
+func (d *testWoLDevice) ID() string           { return d.id }
+func (d *testWoLDevice) Name() string         { return d.id }
+func (*testWoLDevice) Brand() string          { return "test" }
+func (*testWoLDevice) Driver() string         { return "wol" }
+func (*testWoLDevice) Model() string          { return "" }
+func (*testWoLDevice) MAC() string            { return "02:00:00:00:00:08" }
+func (*testWoLDevice) Capabilities() []string { return nil }
+func (*testWoLDevice) State() device.State    { return device.State{Online: true} }
+func (d *testWoLDevice) Poll() (device.State, error) {
+	return d.State(), nil
+}
+func (*testWoLDevice) ReportsReachability() bool { return true }
+func (d *testWoLDevice) Reachable() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.reachable
+}
+func (d *testWoLDevice) setReachable(v bool) {
+	d.mu.Lock()
+	d.reachable = v
+	d.mu.Unlock()
+}
+
 func (d *testLamp) publish(mutate func(*device.State)) {
 	d.mu.Lock()
 	// Answering at all means reachable, which is what a real driver reports too.
@@ -402,6 +437,41 @@ func TestOfflineTriggerRejectsPollableWithoutReachability(t *testing.T) {
 	if err == nil || !asValidation(err, &invalid) {
 		t.Fatalf("poll-only offline trigger = %v, want ValidationError", err)
 	}
+}
+
+// A device like the Samsung TV always reports Online=true (Wake-on-LAN keeps
+// it controllable), so offline/online triggers must be driven by its separate
+// Reachable signal instead. This proves that wiring end to end through the
+// engine — not just at the driver level, which triggers_test's samsung-package
+// counterpart already covers.
+func TestOfflineAndOnlineTriggersUseLiveReachabilityNotAlwaysOnline(t *testing.T) {
+	tv := &testWoLDevice{id: "tv"}
+	tv.setReachable(true)
+	target := &testSwitch{id: "target"}
+	engine, bus := lampEngine(t, nil, tv, target)
+	replaceRules(t, engine,
+		Rule{
+			ID: "gone", Name: "TV is gone", Enabled: true,
+			Trigger: Trigger{Type: TriggerDeviceOffline, Offline: &OfflineTrigger{DeviceID: tv.id, Minutes: 5}},
+			Actions: []Action{{DeviceID: target.id, Action: "on"}},
+		},
+		onlineRule("returned", tv.id, target.id, OpBelow, 10),
+	)
+
+	// Going unreachable never touches Online — it stays true throughout, as a
+	// real Samsung TV's would.
+	tv.setReachable(false)
+	bus.Publish(events.Event{Type: events.StateChanged, DeviceID: tv.id, State: tv.State()})
+	time.Sleep(40 * time.Millisecond)
+
+	engine.evaluateOffline(time.Now().Add(6 * time.Minute))
+	waitFor(t, func() bool { return target.onCount() == 1 })
+
+	// Coming back — again with Online staying true the whole time — is what
+	// rearms the offline rule and fires the online-recovery rule.
+	tv.setReachable(true)
+	bus.Publish(events.Event{Type: events.StateChanged, DeviceID: tv.id, State: tv.State()})
+	waitFor(t, func() bool { return target.onCount() == 2 })
 }
 
 func TestInventoryRemovalStopsOfflineClock(t *testing.T) {

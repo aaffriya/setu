@@ -99,9 +99,9 @@ test('the editor offers metric, offline, online and presence triggers', () => {
     assert.match(automations, new RegExp(`value: '${kind}'`))
   }
   assert.match(automations, /function setMetric/)
-  assert.match(automations, /Runs on the crossing, not while the value stays there/)
-  assert.match(automations, /arms again only after it is seen back on the network/)
-  assert.match(automations, /Duration uses completed minutes/)
+  assert.match(automations, /Runs the moment the value passes this point/)
+  assert.match(automations, /arms again only once it is seen back online/)
+  assert.match(automations, /comparing how long it was gone against the number below/)
   assert.match(automations, /grid-cols-3[\s\S]{0,100}sm:grid-cols-6/)
   assert.match(api, /type: 'device_online'/)
   assert.match(api, /operator: AutomationComparison/)

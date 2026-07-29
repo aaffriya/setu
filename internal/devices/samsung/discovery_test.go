@@ -61,9 +61,18 @@ func TestResolveIPCachesAndReresolvesAfterInvalidation(t *testing.T) {
 	}
 }
 
-func TestTVDoesNotAdvertiseStateOnlineAsReachability(t *testing.T) {
-	if device.ReportsReachability(&TV{}) {
-		t.Fatal("Samsung Online is control availability, not live reachability")
+func TestTVReportsReachabilityViaReachableNotOnline(t *testing.T) {
+	tv := &TV{}
+	if !device.ReportsReachability(tv) {
+		t.Fatal("TV should opt into offline/recovery automations via Reachable()")
+	}
+	if device.LiveOnline(tv, tv.State()) {
+		t.Fatal("a TV that has never polled should not read as live-reachable")
+	}
+
+	tv.base.reachable = true
+	if !device.LiveOnline(tv, tv.State()) {
+		t.Fatal("LiveOnline should read Reachable(), not the always-true State.Online")
 	}
 }
 
@@ -83,6 +92,9 @@ func TestPollReportsMissingLiveResponseWithoutDisablingWake(t *testing.T) {
 	}
 	if state.On {
 		t.Fatal("missing live response did not clear stale power state")
+	}
+	if tv.Reachable() {
+		t.Fatal("missing live response should leave Reachable false even though Online stays true")
 	}
 }
 

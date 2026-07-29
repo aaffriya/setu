@@ -104,12 +104,13 @@ type base struct {
 	timeout              time.Duration
 	tokenPath            string
 
-	mu      sync.Mutex
-	ip      net.IP
-	token   string
-	state   device.State
-	powerAt time.Time // when On/Off was last commanded (start of the grace window)
-	powerOn bool      // the power state that command intended
+	mu        sync.Mutex
+	ip        net.IP
+	token     string
+	state     device.State
+	powerAt   time.Time // when On/Off was last commanded (start of the grace window)
+	powerOn   bool      // the power state that command intended
+	reachable bool      // last poll's live-contact result (see Reachable)
 
 	wsMu   sync.Mutex      // serializes the remote-control socket (dial + writes); guards wsConn/closed
 	wsConn *websocket.Conn // reused remote-control socket (nil = none open)
@@ -130,6 +131,16 @@ func (b *base) State() device.State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.state
+}
+
+// Reachable reports whether the last poll actually made live contact,
+// independent of State.Online (which stays true for Wake-on-LAN control even
+// when contact fails — see Poll). It implements device.LiveReachability so
+// offline/recovery automations key off real reachability instead.
+func (b *base) Reachable() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.reachable
 }
 
 // resolveIP: cached → injected ARP resolver → MAC-verified Samsung SSDP
@@ -1080,6 +1091,11 @@ func (t *TV) launchOne(ip net.IP, appID string) (int, error) {
 // (see markPower): the TV's power transition takes a few seconds, which would
 // otherwise flicker the state.
 //
+// The real live-contact result (reachable, below) is not discarded: it is kept
+// on the side as Reachable() so offline/recovery automations can key off it
+// (see device.LiveReachability) without disturbing what Online means for
+// everything else.
+//
 // While the TV is on, Poll also reads the real volume and mute over UPnP (so
 // changes made with the physical remote land in the UI within a tick) and
 // keeps the event socket connected (so IME events stream in).
@@ -1107,6 +1123,9 @@ func (t *TV) Poll() (device.State, error) {
 
 	intended, fresh := t.intendedPower()
 	t.updateState(func(s *device.State) {
+		// Set alongside State under the same lock so a concurrent State()/
+		// Reachable() pair can never observe one updated and not the other.
+		t.reachable = reachable
 		s.Online = true // always controllable: power-on is WoL by MAC alone
 		if fresh {
 			s.On = intended // just commanded — hold it through the power transition
@@ -1130,6 +1149,11 @@ func (t *TV) Poll() (device.State, error) {
 	}
 	return state, nil
 }
+
+// ReportsReachability opts the TV into offline/recovery automations. Online
+// alone couldn't support them (see Poll), but Reachable() gives them a real
+// live-contact signal to use instead.
+func (t *TV) ReportsReachability() bool { return true }
 
 // New builds a Samsung TV from its config entry (matches config.Constructor).
 func New(spec config.DeviceSpec, deps config.Deps) (device.Device, error) {

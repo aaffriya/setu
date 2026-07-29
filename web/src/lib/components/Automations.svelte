@@ -784,6 +784,9 @@
                 </button>
               {/each}
             </div>
+            {#if !hasPresence}
+              <p class="mt-1 text-[11px] text-ink/40">Presence is greyed out: this host cannot read its LAN neighbour table.</p>
+            {/if}
           </div>
 
           {#if draft.trigger.type === 'schedule'}
@@ -810,13 +813,16 @@
               </select>
               {#if metric === 'power'}
                 <select bind:value={watched.on} class="col-span-2 rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm"><option value={true}>Turns on</option><option value={false}>Turns off</option></select>
+                <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
+                  Runs the moment the device turns on or off — not the whole time it stays that way.
+                </p>
               {:else}
                 <select bind:value={watched.operator} aria-label="Comparison" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm">
                   {#each comparisons as comparison (comparison.value)}<option value={comparison.value}>{comparison.label}</option>{/each}
                 </select>
                 <input type="number" bind:value={watched.value} min={metricMin(watched)} max={metricMax(watched)} aria-label="Compared value" class="rounded-lg border border-ink/10 bg-ink/5 px-2 py-2 text-sm" />
                 <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
-                  Runs on the crossing, not while the value stays there — and never while the device is unreachable.
+                  Runs the moment the value passes this point — not the whole time it stays past it — and never while the device is unreachable.
                 </p>
               {/if}
               <label class="col-span-2 text-[11px] text-ink/45">Must stay changed for
@@ -833,7 +839,7 @@
                 minutes
               </label>
               <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
-                Runs once when the device has been unreachable that long, and arms again only after it is seen back on the network.
+                Only devices that can report a live connection status are listed above. Runs once the device has been unreachable for at least this long, then arms again only once it is seen back online. There is no comparison option here — while a device is still offline there is nothing yet to compare its duration against.
               </p>
             </div>
           {:else if draft.trigger.type === 'device_online'}
@@ -851,7 +857,7 @@
                 minutes
               </label>
               <p class="col-span-2 text-[11px] leading-relaxed text-ink/40">
-                Runs once when the device returns. Duration uses completed minutes, so exactly 10 means 10:00–10:59 offline.
+                Only devices that can report a live connection status are listed above. Runs once the device reconnects, comparing how long it was gone against the number below — “exactly 10” means it was gone 10 up to 11 minutes, not to the second.
               </p>
             </div>
           {:else if draft.trigger.type === 'presence'}

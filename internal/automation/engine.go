@@ -191,7 +191,7 @@ func (e *Engine) Run(ctx context.Context, ready <-chan struct{}) {
 	// Startup is a baseline, not a transition: a device that is already
 	// unreachable starts its clock now rather than looking like it just left.
 	for id, state := range baseline {
-		if !state.Online {
+		if !e.liveOnline(id, state) {
 			e.offlineSince[id] = now
 		}
 	}
@@ -836,6 +836,17 @@ func (e *Engine) readStates() map[string]device.State {
 	return states
 }
 
+// liveOnline reports whether deviceID made live contact, for offline/recovery
+// tracking. It defers to the device's own device.LiveReachability signal when
+// it implements one (State.Online alone can mean something else, e.g. a TV's
+// Wake-on-LAN controllability), and to state.Online otherwise.
+func (e *Engine) liveOnline(deviceID string, state device.State) bool {
+	if dev, ok := e.mgr.Device(deviceID); ok {
+		return device.LiveOnline(dev, state)
+	}
+	return state.Online
+}
+
 // reconcileInventory installs new devices as a baseline and forgets every
 // transient clock belonging to a removed device. deviceIDs is captured by the
 // inventory mutation itself: consulting only the manager here would race a
@@ -872,7 +883,7 @@ func (e *Engine) reconcileInventory(deviceIDs []string, reset bool) {
 			continue
 		}
 		e.latestStates[id] = state
-		if !state.Online {
+		if !e.liveOnline(id, state) {
 			e.offlineSince[id] = now
 		}
 	}
@@ -916,7 +927,7 @@ func (e *Engine) resyncStates() {
 	// manufacture a recovery from a partial event stream.
 	for id, state := range states {
 		delete(e.offlineSince, id)
-		if !state.Online {
+		if !e.liveOnline(id, state) {
 			e.offlineSince[id] = now
 		}
 	}
@@ -998,7 +1009,7 @@ func (e *Engine) handleState(deviceID string, state device.State) {
 // recovery triggers. It returns the just-finished observed outage exactly once.
 // The caller must hold e.mu.
 func (e *Engine) trackReachabilityLocked(deviceID string, state device.State, now time.Time) (time.Duration, bool) {
-	if state.Online {
+	if e.liveOnline(deviceID, state) {
 		since, recovered := e.offlineSince[deviceID]
 		delete(e.offlineSince, deviceID)
 		// Coming back is what rearms the rules watching this device; without it

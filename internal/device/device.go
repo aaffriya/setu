@@ -288,10 +288,13 @@ type Pollable interface {
 	Poll() (State, error)
 }
 
-// ReachabilityReporter is implemented by pollable devices whose State.Online
-// specifically means that live hardware contact succeeded. Pollable alone is
-// not enough: a device such as a TV may return useful fallback state and remain
-// controllable by MAC even when it did not answer the poll.
+// ReachabilityReporter is implemented by pollable devices that can drive
+// offline/recovery automations. Pollable alone is not enough: most drivers'
+// State.Online already means live hardware contact succeeded, which is
+// sufficient by itself, but a driver whose Online carries a different meaning
+// — a TV, which remains controllable by MAC (Wake-on-LAN) even when it did
+// not answer the poll — must additionally implement LiveReachability to
+// supply that missing signal; see LiveOnline.
 //
 // Reachability-based automations deliberately require this explicit opt-in so
 // a newly added driver cannot silently offer rules its state cannot support.
@@ -304,4 +307,31 @@ func ReportsReachability(d Device) bool {
 	_, pollable := d.(Pollable)
 	reporter, reports := d.(ReachabilityReporter)
 	return pollable && reports && reporter.ReportsReachability()
+}
+
+// LiveReachability is implemented by a ReachabilityReporter whose State.Online
+// does not itself mean live contact succeeded — for example a TV, which stays
+// Online for Wake-on-LAN control (see samsung.TV.Poll) regardless of whether
+// the last poll actually reached it. Such a device reports the true
+// live-contact result here instead. A device without this interface doesn't
+// need it: its Online already carries that meaning.
+//
+// Like State(), Reachable must return a cheap, already-cached value and must
+// not do I/O: LiveOnline below is called from inside the automation engine's
+// locked sections, and a blocking Reachable would stall it.
+type LiveReachability interface {
+	Reachable() bool
+}
+
+// LiveOnline reports whether d made live contact on its last poll, for
+// offline/recovery automations to key off. It defers to LiveReachability when
+// d both implements it and opts in via ReportsReachability — the same
+// explicit-opt-in gate validateTrigger enforces, so a device can never be
+// trusted here that automations were never allowed to target — and to
+// state.Online otherwise.
+func LiveOnline(d Device, state State) bool {
+	if lr, ok := d.(LiveReachability); ok && ReportsReachability(d) {
+		return lr.Reachable()
+	}
+	return state.Online
 }

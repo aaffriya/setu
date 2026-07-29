@@ -580,10 +580,11 @@ func validateTrigger(ruleID string, enabled bool, trigger Trigger, mgr *manager.
 		if !ok {
 			return fmt.Errorf("automation %q trigger references unknown device %q", ruleID, trigger.Offline.DeviceID)
 		}
-		// Polling is not by itself a reachability signal: Samsung TVs retain
-		// Online=true when live contact fails because Wake-on-LAN is still
-		// available. Require a driver that explicitly gives Online the
-		// live-contact meaning this trigger needs.
+		// Polling is not by itself a reachability signal: a device's Online can
+		// carry a different meaning (e.g. a Samsung TV's Wake-on-LAN
+		// controllability). Require a driver that explicitly opts in, either
+		// because Online already means live contact or because it supplies that
+		// signal separately (see device.LiveOnline).
 		if !device.ReportsReachability(dev) {
 			return fmt.Errorf("automation %q trigger device %q cannot report whether it is reachable", ruleID, trigger.Offline.DeviceID)
 		}
