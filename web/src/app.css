@@ -44,8 +44,11 @@
 
   html {
     -webkit-tap-highlight-color: transparent;
-    /* App-like touch: kill the double-tap-to-zoom delay (pinch-zoom still works). */
-    touch-action: manipulation;
+    /* App-like touch: scrolling only. Listing the two pan directions (rather
+       than `manipulation`, which still permits zooming) leaves double-tap and
+       pinch with nothing to do, so a tap acts immediately and the layout keeps
+       the scale index.html asked for. */
+    touch-action: pan-x pan-y;
   }
 
   /* A modal owns scrolling while it is open. `body` is fixed instead of only

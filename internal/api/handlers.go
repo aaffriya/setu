@@ -10,9 +10,8 @@ import (
 )
 
 // handleListDevices returns all devices with capabilities and current state. A
-// refresh=true request performs a one-shot hardware poll first; successfully
-// read states are overlaid on the cached snapshot so the response cannot race
-// the manager's asynchronous event consumer.
+// refresh=true request performs a one-shot hardware poll first and then reads
+// the cache, which the poll has already updated.
 //
 // The list is the caller's own: an account limited to a few devices never
 // receives the others, so nothing it cannot use ever reaches the browser.
@@ -28,18 +27,17 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	states, err := s.poller.Refresh(r.Context())
-	if err != nil {
+	if err := s.poller.Refresh(r.Context()); err != nil {
 		writeError(w, http.StatusGatewayTimeout, "device refresh timed out")
 		return
 	}
-	views := granted(principal, s.mgr.Snapshot())
-	for i := range views {
-		if state, ok := states[views[i].ID]; ok {
-			views[i].State = state
-		}
-	}
-	writeJSON(w, http.StatusOK, views)
+	// Snapshot after the poll rather than overlaying its result: Manager.Poll
+	// and Manager.Command both write the read model synchronously, so the cache
+	// already holds everything this poll read — plus any command that landed
+	// while it ran, which is newer. Overlaying would put the older reading back
+	// and visibly revert the change the user just made. A poll cycle's result is
+	// also reused for a few seconds, so it can be older than the request itself.
+	writeJSON(w, http.StatusOK, granted(principal, s.mgr.Snapshot()))
 }
 
 // granted keeps only the devices this caller may see. It always returns a

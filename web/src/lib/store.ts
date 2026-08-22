@@ -228,21 +228,36 @@ function noteAuthoritative(id: string): void {
   authoritativeVersions.set(id, (authoritativeVersions.get(id) ?? 0) + 1)
 }
 
-function replaceAuthoritativeDevices(next: Device[]): void {
+// replaceAuthoritativeDevices installs a whole device list. Membership and
+// metadata always come from the list, but a device whose state was updated by a
+// command response or a WebSocket event since `before` keeps that newer state:
+// the list answers a read that started earlier, so writing it back would undo a
+// change the user just made until the next poll corrects it.
+function replaceAuthoritativeDevices(next: Device[], before: Map<string, number>): void {
+  const held = new Map(get(devices).map((device) => [device.id, device]))
+  const merged = next.map((device) => {
+    const newer = (authoritativeVersions.get(device.id) ?? 0) !== (before.get(device.id) ?? 0)
+    const current = held.get(device.id)
+    return newer && current ? { ...device, state: current.state } : device
+  })
   const present = new Set(next.map((device) => device.id))
   for (const id of authoritativeVersions.keys()) {
     if (!present.has(id)) authoritativeVersions.delete(id)
   }
-  for (const device of next) noteAuthoritative(device.id)
-  devices.set(next)
+  for (const device of merged) noteAuthoritative(device.id)
+  devices.set(merged)
 }
 
 export async function refresh(hardwareRefresh = false): Promise<void> {
   const generation = ++refreshGeneration
+  // A hardware refresh reads every device and can take seconds. Record what the
+  // store already knew, so anything that changes while the request is in flight
+  // can be told apart from the older snapshot it answers with.
+  const before = new Map(authoritativeVersions)
   try {
     const next = await listDevices(hardwareRefresh)
     if (generation !== refreshGeneration) return
-    replaceAuthoritativeDevices(next)
+    replaceAuthoritativeDevices(next, before)
     connection.set('online')
     lastUpdated.set(Date.now())
     setError('')

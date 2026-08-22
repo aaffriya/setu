@@ -42,7 +42,8 @@ include both server and client sections, but never exports the access token.
 - Only one WebSocket may be active/connecting. Old handlers identity-check
   their socket; token changes disconnect before reconnecting.
 - Foreground/online events coalesce refresh and reconnect; `pagehide` closes
-  the socket. Newer refreshes supersede older ones.
+  the socket. Newer refreshes supersede older ones, and a refresh never
+  overwrites state that arrived while it was in flight.
 - Optional browser features such as vibration and wake lock are feature-tested
   and fail soft.
 - `GET /api/session` says what the signed-in account may do, and the UI hides

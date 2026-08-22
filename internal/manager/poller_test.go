@@ -148,25 +148,21 @@ func TestManualRefreshWhenScheduledPollingDisabled(t *testing.T) {
 	}()
 
 	refreshCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	states, err := p.Refresh(refreshCtx)
-	if err != nil {
+	if err := p.Refresh(refreshCtx); err != nil {
 		cancel()
 		stop()
 		<-done
 		t.Fatalf("Refresh: %v", err)
 	}
-	if got := states[dev.ID()].Brightness; got != 1 {
-		t.Errorf("refreshed brightness = %d, want 1", got)
-	}
-	states, err = p.Refresh(refreshCtx)
+	err := p.Refresh(refreshCtx)
 	cancel()
 	if err != nil {
 		stop()
 		<-done
 		t.Fatalf("second Refresh: %v", err)
 	}
-	if got := states[dev.ID()].Brightness; got != 1 {
-		t.Errorf("reused brightness = %d, want 1", got)
+	if got := m.Snapshot()[0].State.Brightness; got != 1 {
+		t.Errorf("refreshed brightness = %d, want 1", got)
 	}
 	if got := dev.polls.Load(); got != 1 {
 		t.Errorf("back-to-back refreshes ran %d hardware polls, want 1", got)
@@ -218,14 +214,14 @@ func TestRefreshReusesInFlightInitialPoll(t *testing.T) {
 	}()
 
 	refreshCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	states, err := p.Refresh(refreshCtx)
+	err := p.Refresh(refreshCtx)
 	cancel()
 	if err != nil {
 		stop()
 		<-done
 		t.Fatalf("Refresh: %v", err)
 	}
-	if got := states[dev.ID()].Brightness; got != 1 {
+	if got := m.Snapshot()[0].State.Brightness; got != 1 {
 		t.Errorf("startup brightness = %d, want 1", got)
 	}
 	if got := dev.polls.Load(); got != 1 {

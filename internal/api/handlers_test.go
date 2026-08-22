@@ -105,6 +105,63 @@ func TestListDevicesHardwareRefresh(t *testing.T) {
 	}
 }
 
+// A hardware refresh reuses a recent poll cycle, so its result can predate a
+// command sent moments ago. The response must still report what the command
+// did — otherwise the app shows the light turning itself back off.
+func TestHardwareRefreshKeepsStateFromACommandDuringThePoll(t *testing.T) {
+	bus := events.NewBus()
+	dev := &refreshDevice{}
+	mgr := manager.New(bus, []device.Device{dev})
+	defer mgr.Close()
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	poller := manager.NewPoller(mgr, 0, log)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		poller.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	srv := New(Options{Manager: mgr, Poller: poller, Bus: bus, Token: "secret", Logger: log})
+
+	list := func() []manager.DeviceView {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/devices?refresh=true", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var views []manager.DeviceView
+		if err := json.NewDecoder(w.Body).Decode(&views); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return views
+	}
+
+	if views := list(); len(views) != 1 || views[0].State.On {
+		t.Fatalf("baseline views = %+v, want one device that is off", views)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/refreshable/command", strings.NewReader(`{"action":"on"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("command status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	if views := list(); len(views) != 1 || !views[0].State.On {
+		t.Fatalf("views after the command = %+v, want the device still on", views)
+	}
+}
+
 func TestCommandErrorIncludesReconciledDevice(t *testing.T) {
 	bus := events.NewBus()
 	dev := &refreshDevice{commandErr: true}

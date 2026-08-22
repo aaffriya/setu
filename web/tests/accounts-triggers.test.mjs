@@ -99,8 +99,8 @@ test('the editor offers metric, offline, online and presence triggers', () => {
     assert.match(automations, new RegExp(`value: '${kind}'`))
   }
   assert.match(automations, /function setMetric/)
-  assert.match(automations, /Runs the moment the value passes this point/)
-  assert.match(automations, /arms again only once it is seen back online/)
+  assert.match(automations, /Runs the moment the value crosses this point/)
+  assert.match(automations, /arms again once it is back online/)
   assert.match(automations, /comparing how long it was gone against the number below/)
   assert.match(automations, /grid-cols-3[\s\S]{0,100}sm:grid-cols-6/)
   assert.match(api, /type: 'device_online'/)

@@ -41,7 +41,9 @@ Scheduled polling starts with one baseline. The configured interval is a floor:
 
 `SETU_POLL_INTERVAL=0` disables scheduled polling but not manual refresh.
 Devices are polled concurrently per cycle. Cycles never overlap, and refreshes
-during or within 5 seconds of a cycle reuse its result.
+during or within 5 seconds of a cycle reuse its result. A cycle writes the read
+model as each device answers, so a refresh reply is the snapshot taken after it
+— never the cycle's own readings, which a command sent meanwhile has outdated.
 
 The browser sends throttled activity hints. Foreground resume and the header
 refresh request a hardware refresh and reset idle backoff.
@@ -76,6 +78,9 @@ RAM-only diagnostics entry. Diagnostics never trigger I/O.
   older ones.
 - Commands queue per device to preserve tap order. Reconciled command errors,
   newer WebSocket events, and newer REST results outrank old optimistic state.
+- A device list answers a read that started earlier. It always sets membership
+  and metadata, but a device whose state advanced while it was in flight keeps
+  that newer state, so a slow refresh cannot undo a command it predates.
 
 ## Persistence and caches
 

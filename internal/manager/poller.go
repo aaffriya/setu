@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"setu/internal/device"
 )
 
 // Poller periodically re-reads the state of every device.Pollable device and
@@ -22,17 +20,9 @@ type Poller struct {
 	log      *slog.Logger
 
 	activity  chan struct{}
-	refresh   chan refreshRequest
+	refresh   chan chan struct{}
 	ready     chan struct{}
 	readyOnce sync.Once
-}
-
-type refreshRequest struct {
-	reply chan refreshResult
-}
-
-type refreshResult struct {
-	states map[string]device.State
 }
 
 const (
@@ -52,7 +42,7 @@ func NewPoller(mgr *Manager, interval time.Duration, log *slog.Logger) *Poller {
 		interval: interval,
 		log:      log,
 		activity: make(chan struct{}, 1),
-		refresh:  make(chan refreshRequest),
+		refresh:  make(chan chan struct{}),
 		ready:    make(chan struct{}),
 	}
 }
@@ -72,12 +62,10 @@ func (p *Poller) Run(ctx context.Context) {
 	var timerC <-chan time.Time
 	var nextPoll time.Time
 	var lastPollAt time.Time
-	var lastPollStates map[string]device.State
 
 	if p.interval > 0 {
-		states, changed := p.pollOnce() // prime state before the first client connects
+		changed := p.pollOnce() // prime state before the first client connects
 		lastPollAt = time.Now()
-		lastPollStates = states
 		if changed {
 			lastActivity = lastPollAt
 		}
@@ -105,26 +93,23 @@ func (p *Poller) Run(ctx context.Context) {
 				resetTimer(timer, p.interval)
 				nextPoll = now.Add(p.interval)
 			}
-		case req := <-p.refresh:
+		case reply := <-p.refresh:
 			now := time.Now()
-			states := lastPollStates
 			if lastPollAt.IsZero() || now.Sub(lastPollAt) > refreshReuseWindow {
-				states, _ = p.pollOnce()
+				p.pollOnce()
 				now = time.Now()
 				lastPollAt = now
-				lastPollStates = states
 			}
 			lastActivity = now
-			req.reply <- refreshResult{states: states}
+			reply <- struct{}{}
 			if timer != nil {
 				resetTimer(timer, p.interval)
 				nextPoll = now.Add(p.interval)
 			}
 		case <-timerC:
-			states, changed := p.pollOnce()
+			changed := p.pollOnce()
 			now := time.Now()
 			lastPollAt = now
-			lastPollStates = states
 			if changed {
 				// A physical/out-of-band change is useful activity too: stay fresh
 				// briefly in case more changes follow.
@@ -146,23 +131,24 @@ func (p *Poller) Activity() {
 	}
 }
 
-// Refresh returns every successfully read state from a hardware poll. Requests
+// Refresh runs one hardware poll and returns once it has finished. Requests
 // arriving during or just after a cycle reuse that recent result, preventing a
 // startup or multi-client burst from polling every device again. It works even
-// when scheduled polling is disabled. The caller can overlay the result on the
-// manager snapshot without racing the manager's async bus consumer.
-func (p *Poller) Refresh(ctx context.Context) (map[string]device.State, error) {
-	reply := make(chan refreshResult, 1)
+// when scheduled polling is disabled. Every read state is already in the
+// manager's read model by then, so the caller reads it from there — a snapshot
+// taken afterwards is never older than this poll.
+func (p *Poller) Refresh(ctx context.Context) error {
+	reply := make(chan struct{}, 1)
 	select {
-	case p.refresh <- refreshRequest{reply: reply}:
+	case p.refresh <- reply:
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
 	select {
-	case result := <-reply:
-		return result.states, nil
+	case <-reply:
+		return nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
 }
 
@@ -201,7 +187,8 @@ func adaptiveInterval(base, idle time.Duration) time.Duration {
 	return next
 }
 
-// pollOnce polls every Pollable device once and publishes any changes.
+// pollOnce polls every Pollable device once, publishes any changes, and reports
+// whether any device changed.
 //
 // Devices are polled concurrently, NOT in sequence: a Poll on an unreachable
 // device runs to its full network timeout (an off TV is ~4s of REST connect
@@ -210,16 +197,15 @@ func adaptiveInterval(base, idle time.Duration) time.Duration {
 // its own worst case. One goroutine per device per cycle is bounded and cheap.
 // The coordinator and final Wait keep cycles from overlapping, so a device is
 // never polled twice at once; the next delay starts after the cycle completes.
-func (p *Poller) pollOnce() (map[string]device.State, bool) {
+func (p *Poller) pollOnce() bool {
 	var wg sync.WaitGroup
 	var resultMu sync.Mutex
-	states := make(map[string]device.State)
 	changedAny := false
 	for _, d := range p.mgr.Devices() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			state, pollable, changed, err := p.mgr.Poll(d.ID())
+			_, pollable, changed, err := p.mgr.Poll(d.ID())
 			if !pollable {
 				return
 			}
@@ -228,7 +214,6 @@ func (p *Poller) pollOnce() (map[string]device.State, bool) {
 				return
 			}
 			resultMu.Lock()
-			states[d.ID()] = state
 			if changed {
 				changedAny = true
 			}
@@ -236,5 +221,5 @@ func (p *Poller) pollOnce() (map[string]device.State, bool) {
 		}()
 	}
 	wg.Wait()
-	return states, changedAny
+	return changedAny
 }

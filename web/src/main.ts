@@ -5,6 +5,29 @@ import { getTheme, applyTheme } from './lib/theme'
 // Apply any forced theme before mount so there's no flash of the OS theme.
 applyTheme(getTheme())
 
+// Setu is a fixed-scale app surface (see index.html's viewport). Every browser
+// but one honours that: iOS Safari applies `user-scalable=no` to the automatic
+// zoom into a focused field and to a standalone PWA, yet still allows the pinch
+// gesture in a tab. These WebKit-only events are what is left to refuse, so an
+// accidental two-finger touch cannot leave the app scrolling around a zoomed
+// page. Registered once, before mount, so it covers the splash screen too.
+for (const gesture of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(gesture, (event) => event.preventDefault(), { passive: false })
+}
+
+// A desktop trackpad pinch arrives as a wheel event with ctrl held, and that one
+// IS cancellable — so the same two-finger gesture is refused on a laptop as on a
+// phone. The keyboard shortcuts and the browser's own zoom control are user-agent
+// accelerators: no page can intercept those, and page zoom is remembered per
+// origin, so a level set there stays until the user resets it.
+window.addEventListener(
+  'wheel',
+  (event) => {
+    if (event.ctrlKey || event.metaKey) event.preventDefault()
+  },
+  { passive: false },
+)
+
 // Load the processed app stylesheet asynchronously so Vite does not emit a
 // render-blocking <link> ahead of the inline splash. The splash remains on top
 // until both CSS and Svelte are ready, so a slow first request still has a real

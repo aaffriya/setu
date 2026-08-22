@@ -31,8 +31,6 @@ const focusTrap = readFileSync(new URL('../src/lib/focus-trap.ts', import.meta.u
 const store = readFileSync(new URL('../src/lib/store.ts', import.meta.url), 'utf8')
 const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8')
 const appCSS = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8')
-const indexHTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
-const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8')
 
 test('header keeps refresh and search while device tools live in Settings', () => {
   const [beforeSettings, settings] = app.split('{#if showSettings}')
@@ -89,10 +87,8 @@ test('Settings makes token save and immediate theme behavior explicit', () => {
   assert.doesNotMatch(settings, />\s*Cancel\s*</)
 })
 
-test('mobile accessibility keeps pinch zoom and one search close action', () => {
-  const viewport = indexHTML.match(/<meta\s+name="viewport"[\s\S]*?\/>/)?.[0] ?? ''
-  assert.doesNotMatch(viewport, /maximum-scale|user-scalable/)
-  assert.doesNotMatch(main, /gesturestart|touches\.length/)
+// The app's fixed scale is asserted in zoom-lock.test.mjs.
+test('search offers one close action, not two', () => {
   assert.match(appCSS, /input\[type='search'\]::\-webkit-search-cancel-button/)
   assert.match(appCSS, /-webkit-appearance: none/)
 })
