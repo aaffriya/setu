@@ -3,7 +3,14 @@
 
 export type Color = { r: number; g: number; b: number }
 
-export type Scene = { id: number; name: string; dynamic: boolean }
+export type Scene = {
+  id: number
+  name: string
+  dynamic: boolean
+  // Some devices treat the scene's level as part of the preset; on others the
+  // scene is only a colour mode and brightness must be restored separately.
+  brightness_locked?: boolean
+}
 
 export type App = { id: string; name: string }
 

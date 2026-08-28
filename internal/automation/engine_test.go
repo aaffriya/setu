@@ -125,6 +125,32 @@ func waitFor(t *testing.T, condition func() bool) {
 	t.Fatal("condition was not met")
 }
 
+func TestStateReadsUseManagerAuthority(t *testing.T) {
+	bus := events.NewBus()
+	dev := &testSwitch{id: "target", bus: bus}
+	mgr := manager.New(bus, []device.Device{dev})
+	defer mgr.Close()
+
+	// Deliberately advance only the manager read model. This is the same shape as
+	// a retained authoritative state around driver lifecycle changes.
+	bus.Publish(events.Event{
+		Type: events.StateChanged, DeviceID: dev.id,
+		State: device.State{Online: true, On: true},
+	})
+	waitFor(t, func() bool {
+		view, ok := mgr.View(dev.id)
+		return ok && view.State.On
+	})
+
+	engine := &Engine{mgr: mgr}
+	if !engine.conditionsMet([]Condition{{DeviceID: dev.id, On: true}}) {
+		t.Fatal("condition read the driver's stale state instead of the manager state")
+	}
+	if state := engine.readStates()[dev.id]; !state.On {
+		t.Fatal("baseline read the driver's stale state instead of the manager state")
+	}
+}
+
 func TestWebhookSecretIsHashedAndDeliveryIsIdempotent(t *testing.T) {
 	target := &testSwitch{id: "target"}
 	engine := newTestEngine(t, target)
@@ -318,6 +344,10 @@ func TestTimedScheduleChecksTopLevelConditionsForEveryStep(t *testing.T) {
 	engine.evaluateSchedules(start)
 	waitFor(t, func() bool { return target.onCount() == 1 })
 	condition.set(false)
+	waitFor(t, func() bool {
+		view, ok := engine.mgr.View(condition.id)
+		return ok && !view.State.On
+	})
 	engine.evaluateSchedules(start.Add(15 * time.Minute))
 	time.Sleep(30 * time.Millisecond)
 	if target.onCount() != 1 {

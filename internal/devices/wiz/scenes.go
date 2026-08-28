@@ -48,7 +48,9 @@ func buildScenes() []device.Scene {
 	out := make([]device.Scene, len(sceneNames))
 	for i, name := range sceneNames {
 		id := i + 1
-		out[i] = device.Scene{ID: id, Name: name, Dynamic: dynamicSceneIDs[id]}
+		out[i] = device.Scene{
+			ID: id, Name: name, Dynamic: dynamicSceneIDs[id], BrightnessLocked: true,
+		}
 	}
 	return out
 }

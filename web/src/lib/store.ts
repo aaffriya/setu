@@ -473,6 +473,10 @@ function applyOptimistic(
       break
     case 'set_scene':
       next.scene = value as number
+      // Scene is exclusive with white-temp mode on the wire (matches set_color
+      // above), so drop a stale color_temp locally too — otherwise the card
+      // glow keeps tinting for the old Kelvin value until the next poll.
+      next.color_temp = 0
       next.on = true
       break
     case 'set_scene_speed':
@@ -514,9 +518,9 @@ export type Favorite = {
   kind: 'color' | 'color_temp' | 'scene'
   value: Color | number
   label: string
-  // Captured brightness (0–100) so a favourite restores the whole look — the
-  // colour/temp/scene *and* how bright it was. Optional: older saved favourites
-  // (and devices without a brightness control) simply omit it.
+  // Captured brightness (0–100). A scene whose device marks brightness as part
+  // of the preset omits it; a scene that is only a colour mode keeps it.
+  // Optional: older saved favourites and devices without a dimmer omit it too.
   brightness?: number
 }
 
@@ -547,22 +551,38 @@ export function removeFavorite(deviceId: string, id: string): void {
   }))
 }
 
-// applyFavorite re-sends a saved preset as the appropriate command, then restores
-// the captured brightness so the whole look (mode + level) comes back.
-export function applyFavorite(deviceId: string, fav: Favorite): void {
-  switch (fav.kind) {
-    case 'color':
-      void command(deviceId, 'set_color', fav.value as Color)
-      break
-    case 'color_temp':
-      void command(deviceId, 'set_color_temp', fav.value as number)
-      break
-    case 'scene':
-      void command(deviceId, 'set_scene', fav.value as number)
-      break
+function sceneLocksBrightness(device: Device, sceneID: number): boolean {
+  return device.scenes?.find((scene) => scene.id === sceneID)?.brightness_locked === true
+}
+
+// applyFavorite re-sends a saved preset as the appropriate command, then
+// restores a separately controlled brightness where that device supports it.
+export async function applyFavorite(deviceId: string, fav: Favorite): Promise<void> {
+  if (fav.kind === 'scene') {
+    const sceneID = fav.value as number
+    const device = get(devices).find((candidate) => candidate.id === deviceId)
+    if (
+      device &&
+      !sceneLocksBrightness(device, sceneID) &&
+      typeof fav.brightness === 'number' &&
+      fav.brightness > 0
+    ) {
+      // On a fan this also turns the independent lamp on. Apply the colour mode
+      // afterwards so the final command always selects the saved scene.
+      const lit = await command(deviceId, 'set_brightness', fav.brightness)
+      if (!lit) return
+    }
+    await command(deviceId, 'set_scene', sceneID)
+    return
   }
+
+  const applied =
+    fav.kind === 'color'
+      ? await command(deviceId, 'set_color', fav.value as Color)
+      : await command(deviceId, 'set_color_temp', fav.value as number)
+  if (!applied) return
   if (typeof fav.brightness === 'number' && fav.brightness > 0) {
-    void command(deviceId, 'set_brightness', fav.brightness)
+    await command(deviceId, 'set_brightness', fav.brightness)
   }
 }
 
@@ -772,22 +792,35 @@ function snapshotCommands(d: Device): SceneCommand[] {
   const caps = new Set(d.capabilities)
   const s = d.state
   const out: SceneCommand[] = []
+  const activeScene = d.scenes?.find((scene) => scene.id === s.scene)
+  const independentDimmableLamp = caps.has('speed') && caps.has('brightness')
   if (caps.has('switch') && !s.on) {
     out.push({ deviceId: d.id, action: 'off' })
     // A fan's lamp is its own circuit and stays meaningful with the blades
     // stopped, so it is the one thing still worth restoring on a powered-off
     // device. Everything else follows the switch.
     if (caps.has('light')) out.push({ deviceId: d.id, action: 'set_light', value: s.light })
+    // A dimmable fan lamp is also independent of the motor, but is represented
+    // by brightness + scene rather than the simple `light` capability.
+    if (independentDimmableLamp) {
+      out.push({ deviceId: d.id, action: 'set_brightness', value: s.brightness })
+      if (s.brightness > 0 && activeScene)
+        out.push({ deviceId: d.id, action: 'set_scene', value: activeScene.id })
+    }
     return out
   }
   if (caps.has('switch')) out.push({ deviceId: d.id, action: 'on' })
-  if (caps.has('brightness') && s.brightness > 0)
+  if (
+    caps.has('brightness') &&
+    (s.brightness > 0 || independentDimmableLamp) &&
+    !activeScene?.brightness_locked
+  )
     out.push({ deviceId: d.id, action: 'set_brightness', value: s.brightness })
   // A white WiZ scene can report both its scene id and the temperature it is
   // currently rendering. Scene is the selected mode and must win, matching the
   // per-device favourites behavior; otherwise a snapshot silently degrades the
   // preset into a plain fixed temperature.
-  if (caps.has('scene') && s.scene > 0)
+  if (caps.has('scene') && s.scene > 0 && !(independentDimmableLamp && s.brightness === 0))
     out.push({ deviceId: d.id, action: 'set_scene', value: s.scene })
   else if (caps.has('color_temp') && s.color_temp > 0)
     out.push({ deviceId: d.id, action: 'set_color_temp', value: s.color_temp })
@@ -830,10 +863,25 @@ export function removeScene(id: string): void {
 
 // runScene replays a scene's commands through the normal (optimistic) command
 // path. Devices it referenced that no longer exist are skipped harmlessly.
+// Commands for the same device run in sequence — command() tracks staleness with
+// one generation counter per device, so firing a device's commands concurrently
+// lets a later one silently steal an earlier one's resolution (see
+// applyFavorite). Different devices still run fully concurrently.
 export function runScene(scene: Scene): void {
   const live = new Set(get(devices).map((d) => d.id))
+  const byDevice = new Map<string, SceneCommand[]>()
   for (const c of scene.commands) {
-    if (live.has(c.deviceId)) void command(c.deviceId, c.action, c.value)
+    if (!live.has(c.deviceId)) continue
+    const list = byDevice.get(c.deviceId)
+    if (list) list.push(c)
+    else byDevice.set(c.deviceId, [c])
+  }
+  for (const cmds of byDevice.values()) {
+    void (async () => {
+      for (const c of cmds) {
+        if (!(await command(c.deviceId, c.action, c.value))) break
+      }
+    })()
   }
 }
 

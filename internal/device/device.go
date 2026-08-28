@@ -165,6 +165,9 @@ type Scene struct {
 	ID      int    `json:"id"`
 	Name    string `json:"name"`
 	Dynamic bool   `json:"dynamic"`
+	// BrightnessLocked means selecting this scene also selects its light level;
+	// a later standalone brightness command would leave or alter the preset.
+	BrightnessLocked bool `json:"brightness_locked,omitempty"`
 }
 
 // SceneControl is implemented by devices with named built-in scenes. Scenes

@@ -214,9 +214,10 @@ type Labels struct {
 	Model *string
 }
 
-// Update edits a device's labels. The device is rebuilt because its name is
-// fixed at construction, but it keeps its place and its last known state, so
-// renaming does not blank the card until the next poll.
+// Update edits a device's labels without rebuilding a live protocol driver.
+// Rebuilding for presentation-only metadata would discard its cached state and
+// any long-lived transport resources. An unusable entry is still built here so
+// a label repair can bring it online without a restart.
 func (i *Inventory) Update(id string, labels Labels) (config.DeviceSpec, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -237,17 +238,28 @@ func (i *Inventory) Update(id string, labels Labels) (config.DeviceSpec, error) 
 		return config.DeviceSpec{}, err
 	}
 
-	dev, err := i.build(spec)
-	if err != nil {
-		return config.DeviceSpec{}, err
+	_, live := i.mgr.Device(id)
+	var dev device.Device
+	var err error
+	if !live {
+		dev, err = i.build(spec)
+		if err != nil {
+			return config.DeviceSpec{}, err
+		}
 	}
 	next := append([]config.DeviceSpec(nil), i.specs...)
 	next[index] = spec
 	if err := i.persist(next); err != nil {
-		release(dev)
+		if dev != nil {
+			release(dev)
+		}
 		return config.DeviceSpec{}, err
 	}
-	if !i.mgr.Replace(dev) {
+	if live {
+		if !i.mgr.UpdateLabels(id, spec.Name, spec.Model) {
+			return config.DeviceSpec{}, fmt.Errorf("device %q stopped while its labels were being updated", id)
+		}
+	} else {
 		// The entry was stored but not live — it failed validation or its build
 		// when Setu started. The edit just repaired it, so bring it online now
 		// rather than making the user restart to see their own fix.

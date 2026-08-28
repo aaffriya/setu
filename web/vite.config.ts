@@ -67,7 +67,7 @@ function stampServiceWorker(): Plugin {
 }
 
 // Setu's frontend is a single static build (web/dist) embedded into the Go
-// binary. During development, `npm run dev` proxies /api and /ws to the Go
+// binary. During development, `bun run dev` proxies /api and /ws to the Go
 // server on :8080 so the SPA talks to a real backend with no CORS fuss. The
 // shipped binary defaults to port 80; for sudo-free hot-reload dev, run the
 // backend with `SETU_PORT=8080` to match this proxy (see README).

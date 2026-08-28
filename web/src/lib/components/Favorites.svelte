@@ -20,15 +20,30 @@
 
   function saveCurrent() {
     const s = device.state
-    // Capture the current brightness too (when the device dims and is lit), so a
-    // favourite restores the whole look. Shown in the chip label as "· NN%".
+    if (s.scene) {
+      const scene = device.scenes?.find((x) => x.id === s.scene)
+      const brightness =
+        !scene?.brightness_locked &&
+        device.capabilities.includes('brightness') &&
+        s.brightness > 0
+          ? s.brightness
+          : undefined
+      const suffix = brightness ? ` · ${brightness}%` : ''
+      addFavorite(device.id, {
+        kind: 'scene',
+        value: s.scene,
+        label: `${scene?.name ?? `Scene ${s.scene}`}${suffix}`,
+        brightness,
+      })
+      return
+    }
+
+    // Direct colour/temperature looks still capture their level and show it in
+    // the chip label as "· NN%".
     const bri =
       device.capabilities.includes('brightness') && s.brightness > 0 ? s.brightness : undefined
     const suffix = bri ? ` · ${bri}%` : ''
-    if (s.scene) {
-      const name = device.scenes?.find((x) => x.id === s.scene)?.name ?? `Scene ${s.scene}`
-      addFavorite(device.id, { kind: 'scene', value: s.scene, label: name + suffix, brightness: bri })
-    } else if (s.color_temp) {
+    if (s.color_temp) {
       addFavorite(device.id, {
         kind: 'color_temp',
         value: s.color_temp,

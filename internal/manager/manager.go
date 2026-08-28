@@ -27,12 +27,22 @@ type Manager struct {
 	order   []string                 // device ids in config order
 	devices map[string]device.Device // id → device
 	latest  map[string]device.State  // id → most recent state (event-driven)
+	labels  map[string]deviceLabels  // editable presentation metadata
 	ops     map[string]*deviceOperation
 	health  map[string]DeviceDiagnostics
 
 	unsubscribe func()
 	done        chan struct{}
 	closed      bool
+}
+
+type deviceLabels struct {
+	name  string
+	model string
+}
+
+func labelsOf(d device.Device) deviceLabels {
+	return deviceLabels{name: d.Name(), model: d.Model()}
 }
 
 // deviceOperation owns the device instance used by serialized hardware work.
@@ -69,6 +79,7 @@ func New(bus *events.Bus, devices []device.Device) *Manager {
 		bus:     bus,
 		devices: make(map[string]device.Device, len(devices)),
 		latest:  make(map[string]device.State, len(devices)),
+		labels:  make(map[string]deviceLabels, len(devices)),
 		ops:     make(map[string]*deviceOperation, len(devices)),
 		health:  make(map[string]DeviceDiagnostics, len(devices)),
 		done:    make(chan struct{}),
@@ -77,6 +88,7 @@ func New(bus *events.Bus, devices []device.Device) *Manager {
 		m.order = append(m.order, d.ID())
 		m.devices[d.ID()] = d
 		m.latest[d.ID()] = d.State() // seed cache from initial device state
+		m.labels[d.ID()] = labelsOf(d)
 		m.ops[d.ID()] = newDeviceOperation(d)
 		_, pollable := d.(device.Pollable)
 		m.health[d.ID()] = DeviceDiagnostics{ID: d.ID(), Pollable: pollable}
@@ -191,6 +203,7 @@ func (m *Manager) Close() {
 	m.order = nil
 	clear(m.devices)
 	clear(m.latest)
+	clear(m.labels)
 	clear(m.ops)
 	clear(m.health)
 	m.mu.Unlock()
@@ -212,6 +225,7 @@ func (m *Manager) Add(d device.Device) error {
 	m.order = append(m.order, id)
 	m.devices[id] = d
 	m.latest[id] = d.State()
+	m.labels[id] = labelsOf(d)
 	m.ops[id] = newDeviceOperation(d)
 	_, pollable := d.(device.Pollable)
 	m.health[id] = DeviceDiagnostics{ID: id, Pollable: pollable}
@@ -246,6 +260,7 @@ func (m *Manager) Remove(id string) bool {
 	}
 	delete(m.devices, id)
 	delete(m.latest, id)
+	delete(m.labels, id)
 	delete(m.ops, id)
 	delete(m.health, id)
 	m.order = withoutID(m.order, id)
@@ -257,9 +272,8 @@ func (m *Manager) Remove(id string) bool {
 	return true
 }
 
-// Replace swaps in a rebuilt device with the same id, keeping its position in
-// the list and its cached state: editing a device's name must not blank its
-// card until the next poll.
+// Replace swaps in a rebuilt device with the same id, keeping its position and
+// cached read-model state. Ordinary label edits use UpdateLabels instead.
 func (m *Manager) Replace(d device.Device) bool {
 	id := d.ID()
 	m.mu.RLock()
@@ -286,6 +300,7 @@ func (m *Manager) Replace(d device.Device) bool {
 	}
 	op.device = d
 	m.devices[id] = d
+	m.labels[id] = labelsOf(d)
 	_, pollable := d.(device.Pollable)
 	entry := m.health[id]
 	entry.Pollable = pollable
@@ -293,6 +308,22 @@ func (m *Manager) Replace(d device.Device) bool {
 	m.mu.Unlock()
 
 	closeDevice(previous)
+	return true
+}
+
+// UpdateLabels changes only presentation metadata. Keeping it in the manager
+// avoids rebuilding a live protocol driver (and losing its cached state and
+// long-lived resources) for a rename or model-label edit.
+func (m *Manager) UpdateLabels(id, name, model string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return false
+	}
+	if _, ok := m.devices[id]; !ok {
+		return false
+	}
+	m.labels[id] = deviceLabels{name: name, model: model}
 	return true
 }
 
@@ -353,7 +384,7 @@ func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, err
 		if !errors.As(err, &inputErr) {
 			state, pollable, _, pollErr := m.pollLocked(id, dev)
 			if pollable && (pollErr == nil || errors.Is(pollErr, device.ErrPollNoResponse)) {
-				view := ViewOf(dev)
+				view := m.viewOf(dev, state)
 				view.State = state
 				return view, true, err
 			}
@@ -361,7 +392,7 @@ func (m *Manager) Command(id string, req control.Request) (DeviceView, bool, err
 		return DeviceView{}, true, err
 	}
 	m.recordCommand(id, req.Action, nil)
-	view := ViewOf(dev)
+	view := m.viewOf(dev, dev.State())
 	// Command events update this cache asynchronously too, but writing the fresh
 	// state here makes an immediate snapshot authoritative even if a subscriber
 	// was briefly backlogged.
@@ -473,6 +504,7 @@ func (m *Manager) View(id string) (DeviceView, bool) {
 		return DeviceView{}, false
 	}
 	view := metaView(dev)
+	applyLabels(&view, m.labels[id])
 	view.State = m.latest[id]
 	return view, true
 }
@@ -569,6 +601,20 @@ func metaView(d device.Device) DeviceView {
 	return v
 }
 
+func applyLabels(view *DeviceView, labels deviceLabels) {
+	view.Name = labels.name
+	view.Model = labels.model
+}
+
+func (m *Manager) viewOf(d device.Device, state device.State) DeviceView {
+	v := metaView(d)
+	m.mu.RLock()
+	applyLabels(&v, m.labels[d.ID()])
+	m.mu.RUnlock()
+	v.State = state
+	return v
+}
+
 // ViewOf builds a view for a single device using its own live State (used to
 // return the freshest result right after a command).
 func ViewOf(d device.Device) DeviceView {
@@ -586,6 +632,7 @@ func (m *Manager) Snapshot() []DeviceView {
 	views := make([]DeviceView, 0, len(m.order))
 	for _, id := range m.order {
 		v := metaView(m.devices[id])
+		applyLabels(&v, m.labels[id])
 		v.State = m.latest[id]
 		views = append(views, v)
 	}

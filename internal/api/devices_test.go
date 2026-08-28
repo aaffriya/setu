@@ -142,7 +142,8 @@ func TestAddDeviceRejectsDuplicatesAndBadInput(t *testing.T) {
 	}
 }
 
-// Renaming rebuilds the device, so the risk is losing what the card shows.
+// Renaming changes presentation metadata only, so it must keep the live state
+// and the device's place in the configured order.
 func TestUpdateDeviceKeepsItsPlaceAndState(t *testing.T) {
 	handler, inv, mgr := deviceServer(t, lamp("desk", "98:77:d5:a2:34:f2"), lamp("shelf", "98:77:d5:a2:34:f3"))
 

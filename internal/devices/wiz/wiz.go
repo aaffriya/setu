@@ -199,8 +199,20 @@ func (b *base) setBrightness(pct int) error {
 	if err := b.setPilot(map[string]any{"state": true, "dimming": d}); err != nil {
 		return err
 	}
-	b.applyState(func(s *device.State) { s.Online = true; s.On = true; s.Brightness = d })
+	b.applyState(func(s *device.State) { applyBrightnessState(s, d) })
 	return nil
+}
+
+// applyBrightnessState mirrors WiZ's dimming-only setPilot semantics. On this
+// hardware a standalone brightness write leaves a built-in scene and returns
+// to a directly controlled light mode, so retaining Scene here would make the
+// picker claim that (for example) Night light is still active until a poll.
+func applyBrightnessState(s *device.State, dimming int) {
+	s.Online = true
+	s.On = true
+	s.Brightness = dimming
+	s.Scene = 0
+	s.SceneSpeed = 0
 }
 
 func (b *base) setColorTemp(kelvin, minimum int) error {
@@ -220,6 +232,7 @@ func (b *base) setColorTemp(kelvin, minimum int) error {
 		s.On = true
 		s.ColorTemp = k
 		s.Scene = 0
+		s.SceneSpeed = 0
 	})
 	return nil
 }
@@ -236,6 +249,13 @@ func (b *base) setScene(supported []device.Scene, id int) error {
 			s.Online = true
 			s.On = true
 			s.Scene = id
+			// ColorTemp denotes direct-white mode in Setu. Some WiZ firmware also
+			// reports a scene's constituent temp, but sceneId is the active mode and
+			// must win so the state never claims that both modes are selected.
+			s.ColorTemp = 0
+			if !scene.Dynamic {
+				s.SceneSpeed = 0
+			}
 		})
 		return nil
 	}
@@ -280,33 +300,44 @@ func (b *base) poll() (device.State, error) {
 	}
 	b.updateState(func(s *device.State) {
 		s.Online = true
-		if res != nil {
-			if res.State != nil {
-				s.On = *res.State
-			}
-			if res.Dimming != nil {
-				s.Brightness = *res.Dimming
-			}
-			if res.R != nil && res.G != nil && res.B != nil {
-				s.Color = device.Color{R: clampByte(*res.R), G: clampByte(*res.G), B: clampByte(*res.B)}
-			}
-			// temp / sceneId are reset each poll so the UI can tell which mode is
-			// active (0 = not in that mode). The bulb reports sceneId even when 0.
-			s.ColorTemp = 0
-			if res.Temp != nil {
-				s.ColorTemp = *res.Temp
-			}
-			s.Scene = 0
-			if res.SceneID != nil {
-				s.Scene = *res.SceneID
-			}
-			s.SceneSpeed = 0
-			if res.Speed != nil {
-				s.SceneSpeed = *res.Speed
-			}
-		}
+		applyPilotResult(s, res)
 	})
 	return b.State(), nil
+}
+
+// applyPilotResult projects WiZ's wire state into Setu's active-mode model.
+// A scene reply may contain both sceneId and the temperature used to render
+// that scene. Those are not two independently selected modes: a non-zero
+// sceneId wins, while temp is exposed only when direct-white mode is active.
+func applyPilotResult(s *device.State, res *pilotResult) {
+	if res == nil {
+		return
+	}
+	if res.State != nil {
+		s.On = *res.State
+	}
+	if res.Dimming != nil {
+		s.Brightness = *res.Dimming
+	}
+	if res.R != nil && res.G != nil && res.B != nil {
+		s.Color = device.Color{R: clampByte(*res.R), G: clampByte(*res.G), B: clampByte(*res.B)}
+	}
+
+	s.Scene = 0
+	if res.SceneID != nil {
+		s.Scene = *res.SceneID
+	}
+	s.ColorTemp = 0
+	s.SceneSpeed = 0
+	if s.Scene != 0 {
+		if res.Speed != nil {
+			s.SceneSpeed = *res.Speed
+		}
+		return
+	}
+	if res.Temp != nil {
+		s.ColorTemp = *res.Temp
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +383,7 @@ func (b *ColorBulb) SetColor(c device.Color) error {
 		s.Color = c
 		s.ColorTemp = 0
 		s.Scene = 0
+		s.SceneSpeed = 0
 	})
 	return nil
 }

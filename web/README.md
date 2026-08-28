@@ -74,10 +74,10 @@ contexts.
 From `web/`:
 
 ```sh
-npm run dev
-npm test
-npm run check
-npm run build
+bun run dev
+bun run test
+bun run check
+bun run build
 ```
 
 Vite dev proxies `/api` and `/ws` to `localhost:8080`. `dist/.gitkeep` lets Go

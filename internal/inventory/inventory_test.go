@@ -143,13 +143,18 @@ func TestUpdateAndRemove(t *testing.T) {
 	if _, err := inv.Add(spec("desk", "98:77:d5:a2:34:f2"), ""); err != nil {
 		t.Fatal(err)
 	}
+	before, _ := mgr.Device("desk")
 
 	if _, err := inv.Update("desk", Labels{Name: ptr("Reading lamp"), Model: ptr("A60")}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	dev, ok := mgr.Device("desk")
-	if !ok || dev.Name() != "Reading lamp" {
-		t.Fatalf("live device after rename = %+v", dev)
+	after, ok := mgr.Device("desk")
+	if !ok || after != before {
+		t.Fatal("rename rebuilt the live protocol driver")
+	}
+	view, ok := mgr.View("desk")
+	if !ok || view.Name != "Reading lamp" || view.Model != "A60" {
+		t.Fatalf("live view after rename = %+v", view)
 	}
 	if _, err := inv.Update("missing", Labels{Name: ptr("x")}); !IsNotFound(err) {
 		t.Errorf("Update of an unknown device = %v, want not-found", err)
@@ -163,6 +168,10 @@ func TestUpdateAndRemove(t *testing.T) {
 	}
 	if updated.Name != "Reading lamp" || updated.Model != "A67" {
 		t.Fatalf("partial update = %+v; want the name kept", updated)
+	}
+	view, _ = mgr.View("desk")
+	if view.Name != "Reading lamp" || view.Model != "A67" {
+		t.Fatalf("view after partial update = %+v", view)
 	}
 
 	if err := inv.Remove("desk"); err != nil {

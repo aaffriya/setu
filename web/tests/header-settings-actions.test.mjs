@@ -288,9 +288,51 @@ test('late command responses cannot replace a newer command state', () => {
   assert.match(store, /err instanceof ApiError && err\.device\?\.id === id/)
 })
 
+test('favourite replay respects per-scene brightness behavior and stops after a failed mode command', () => {
+  const applyFavorite = store.slice(
+    store.indexOf('export async function applyFavorite'),
+    store.indexOf('// --- card expand/collapse'),
+  )
+  assert.doesNotMatch(applyFavorite, /void command\(/)
+  assert.match(applyFavorite, /await command\(deviceId, 'set_scene', sceneID\)/)
+  assert.match(applyFavorite, /!sceneLocksBrightness\(device, sceneID\)/)
+  assert.match(applyFavorite, /if \(!applied\) return/)
+  assert.match(applyFavorite, /await command\(deviceId, 'set_brightness', fav\.brightness\)/)
+})
+
+test('manual scene replay serializes commands for each device', () => {
+  const runScene = store.slice(
+    store.indexOf('export function runScene'),
+    store.indexOf('// --- rooms'),
+  )
+  assert.doesNotMatch(runScene, /void command\(/)
+  assert.match(runScene, /if \(!\(await command\(c\.deviceId, c\.action, c\.value\)\)\) break/)
+})
+
+test('manual scenes retain a dimmable fan lamp while its motor is off', () => {
+  assert.match(store, /const independentDimmableLamp = caps\.has\('speed'\) && caps\.has\('brightness'\)/)
+  assert.match(store, /action: 'set_brightness', value: s\.brightness/)
+  assert.match(store, /!activeScene\?\.brightness_locked/)
+  assert.match(store, /independentDimmableLamp && s\.brightness === 0/)
+})
+
 test('a fan light dimming does not optimistically start the fan', () => {
   assert.match(store, /function applyOptimistic\(\s*device: Device,/)
   assert.match(store, /!device\.capabilities\.includes\('speed'\)\) next\.on = true/)
   // Speed still implies power: the hardware really does start to serve a step.
   assert.match(store, /case 'set_speed':[\s\S]*?next\.on = true/)
+})
+
+test('optimistic scene and direct colour modes stay mutually exclusive', () => {
+  // set_color already drops both color_temp and scene (mutually-exclusive wire
+  // modes). set_scene must drop color_temp the same way, or a bulb leaving
+  // white-temp mode for a scene keeps the card glow tinted for the old Kelvin
+  // value until the next poll corrects it.
+  const setColorCase = store.slice(store.indexOf("case 'set_color':"), store.indexOf("case 'set_color_temp':"))
+  assert.match(setColorCase, /next\.color_temp = 0/)
+  assert.match(setColorCase, /next\.scene = 0/)
+
+  const setSceneCase = store.slice(store.indexOf("case 'set_scene':"), store.indexOf("case 'set_scene_speed':"))
+  assert.match(setSceneCase, /next\.scene = value as number/)
+  assert.match(setSceneCase, /next\.color_temp = 0/)
 })

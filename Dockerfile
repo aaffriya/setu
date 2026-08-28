@@ -7,13 +7,13 @@
 # --- Stage 1: build the Svelte frontend → /web/dist ---
 # Output is just static JS/CSS (arch-independent), so always build on the
 # native BUILDPLATFORM — never under QEMU emulation for the target arch.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0-alpine AS web
 WORKDIR /web
 # Copy manifests first for dependency-layer caching.
-COPY web/package.json web/package-lock.json* ./
-RUN npm ci || npm install
+COPY web/package.json web/bun.lock ./
+RUN bun install --frozen-lockfile
 COPY web/ ./
-RUN npm run build
+RUN bun run build
 
 # --- Stage 2: build the static Go binary (embeds web/dist) ---
 # Build stage native runner par chalta hai, Go cross-compile karta hai.

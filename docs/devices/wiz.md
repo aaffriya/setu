@@ -39,8 +39,15 @@ Relevant `setPilot` parameters:
 | `sceneId` | `1`–`32` | built-in scene |
 | `speed` | `10`–`200` | dynamic scene speed |
 
-RGB, direct white temperature, and scene are mutually exclusive modes. Replies
-vary by active mode and an off bulb may omit colour or brightness fields.
+RGB, direct white temperature, and scene are mutually exclusive modes. A scene
+reply can still include the temperature used to render that scene; a non-zero
+`sceneId` is the active-mode marker and takes precedence over that constituent
+temperature. Replies otherwise vary by active mode and an off bulb may omit
+colour or brightness fields.
+
+A standalone `dimming` write exits a built-in scene on the verified bulbs. To
+keep a selected scene active, do not follow its `sceneId` write with a separate
+brightness command.
 
 ## 3. Discovery and model selection
 

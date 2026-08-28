@@ -6,6 +6,7 @@ and adaptive poll coordination.
 ## Manager
 
 - `Add`, `Remove`, `Replace`, `Close`: runtime membership and resource cleanup.
+- `UpdateLabels`: presentation-only edits without rebuilding a live driver.
 - `Device`, `Devices`: live instances.
 - `Command`, `Poll`: one operation lock per device; different devices remain
   concurrent.

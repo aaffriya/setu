@@ -10,7 +10,7 @@ LDFLAGS := -s -w
 all: build ## Build frontend + host binary (default)
 
 web: ## Build the Svelte frontend into web/dist
-	cd $(WEB) && npm install && npm run build
+	cd $(WEB) && bun install --frozen-lockfile && bun run build
 	@touch $(WEB)/dist/.gitkeep   # Vite empties dist on build; keep the tracked marker
 
 build: web ## Build the host binary (embeds web/dist) into bin/

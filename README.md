@@ -27,7 +27,7 @@ Open `http://<host>` and enter the same token.
 
 ### Source
 
-Requires Go 1.23 and Node 22.
+Requires Go 1.23 and Bun 1.4.
 
 ```sh
 make build

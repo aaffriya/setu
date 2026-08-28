@@ -66,5 +66,5 @@ Read the nearest package README before editing that package.
 ## Validation
 
 - Go: `gofmt -l .`, `go vet ./...`, `go test ./...`, `go build ./...`.
-- Web: from `web/`, run `npm test`, `npm run check`, and `npm run build`.
+- Web: from `web/`, run `bun run test`, `bun run check`, and `bun run build`.
 - Preserve unrelated worktree changes. Commit only when asked.

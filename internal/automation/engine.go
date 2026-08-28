@@ -629,8 +629,8 @@ func actionsAtOffset(actions []Action, offset int) []Action {
 
 func (e *Engine) conditionsMet(conditions []Condition) bool {
 	for _, condition := range conditions {
-		dev, ok := e.mgr.Device(condition.DeviceID)
-		if !ok || dev.State().On != condition.On {
+		view, ok := e.mgr.View(condition.DeviceID)
+		if !ok || view.State.On != condition.On {
 			return false
 		}
 	}
@@ -830,8 +830,8 @@ func (e *Engine) runNested(ctx context.Context, id, parentID string, depth int, 
 
 func (e *Engine) readStates() map[string]device.State {
 	states := make(map[string]device.State)
-	for _, dev := range e.mgr.Devices() {
-		states[dev.ID()] = dev.State()
+	for _, view := range e.mgr.Snapshot() {
+		states[view.ID] = view.State
 	}
 	return states
 }

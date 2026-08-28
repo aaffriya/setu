@@ -92,6 +92,48 @@ func TestColorBulbTemperatureRange(t *testing.T) {
 	}
 }
 
+func TestBrightnessStateLeavesTheActiveScene(t *testing.T) {
+	state := device.State{
+		Online:     true,
+		On:         true,
+		Brightness: 10,
+		Scene:      14,
+		SceneSpeed: 100,
+	}
+
+	applyBrightnessState(&state, 55)
+
+	if state.Brightness != 55 || !state.On || !state.Online {
+		t.Fatalf("brightness state = %+v; want an online, lit bulb at 55%%", state)
+	}
+	if state.Scene != 0 || state.SceneSpeed != 0 {
+		t.Fatalf("brightness state = %+v; dimming-only WiZ writes must leave the active scene", state)
+	}
+}
+
+func TestPilotResultReportsOneActiveLightMode(t *testing.T) {
+	sceneID, sceneTemp, sceneSpeed := 14, 2700, 100
+	state := device.State{ColorTemp: 4000}
+	applyPilotResult(&state, &pilotResult{
+		SceneID: &sceneID,
+		Temp:    &sceneTemp,
+		Speed:   &sceneSpeed,
+	})
+	if state.Scene != 14 || state.ColorTemp != 0 || state.SceneSpeed != 100 {
+		t.Fatalf("scene result projected as %+v; sceneId must win over its constituent temperature", state)
+	}
+
+	directID, directTemp, staleSpeed := 0, 4200, 80
+	applyPilotResult(&state, &pilotResult{
+		SceneID: &directID,
+		Temp:    &directTemp,
+		Speed:   &staleSpeed,
+	})
+	if state.Scene != 0 || state.ColorTemp != 4200 || state.SceneSpeed != 0 {
+		t.Fatalf("direct-white result projected as %+v; want only the temperature mode", state)
+	}
+}
+
 func TestTunableWhiteScenes(t *testing.T) {
 	b := &TunableWhiteBulb{base: base{id: "white"}}
 	got := b.Scenes()
@@ -101,6 +143,9 @@ func TestTunableWhiteScenes(t *testing.T) {
 	for _, scene := range got {
 		if scene.Dynamic {
 			t.Errorf("white scene %d unexpectedly marked dynamic", scene.ID)
+		}
+		if !scene.BrightnessLocked {
+			t.Errorf("white scene %d must keep its built-in brightness", scene.ID)
 		}
 	}
 	if err := b.SetScene(1); err == nil {
